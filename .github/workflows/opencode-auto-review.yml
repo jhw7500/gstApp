@@ -10,7 +10,7 @@ jobs:
       contents: read
       issues: write
       pull-requests: write
-    uses: jhw7500/automation/.github/workflows/opencode-auto-review.yml@b40074e89fbe039e5e605b8d65a1f758298830d9
+    uses: jhw7500/automation/.github/workflows/opencode-auto-review.yml@5dbcf2bf375888675814e1c20b7bc1abe6f8a781
     with:
       pr_number: ${{ github.event.pull_request.number }}
     secrets:
