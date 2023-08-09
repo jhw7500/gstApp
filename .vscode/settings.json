@@ -1,0 +1,19 @@
+{
+    "files.associations": {
+        "gstmeta.h": "c",
+        "rtsp-server.h": "c",
+        "array": "c",
+        "hash_map": "c",
+        "string_view": "c",
+        "initializer_list": "c",
+        "ranges": "c",
+        "utility": "c",
+        "gstappsink.h": "c",
+        "stdio.h": "c",
+        "gst.h": "c",
+        "gstbuffer.h": "c",
+        "gstclock.h": "c",
+        "typeinfo": "c",
+        "gstappsrc.h": "c"
+    }
+}
