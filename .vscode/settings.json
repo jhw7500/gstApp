@@ -14,6 +14,13 @@
         "gstbuffer.h": "c",
         "gstclock.h": "c",
         "typeinfo": "c",
-        "gstappsrc.h": "c"
+        "gstappsrc.h": "c",
+        "algorithm": "c",
+        "gstcheck.h": "c",
+        "string": "c",
+        "rtsp-session-pool.h": "c",
+        "rtsp-session.h": "c",
+        "random": "c",
+        "limits": "c"
     }
 }

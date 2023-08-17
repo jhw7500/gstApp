@@ -3,7 +3,9 @@
 OUTPUT = bin
 
 #SOURCE += basic-tutorial-15
+#SOURCE=rtspApp
 SOURCE+= timeApp
+#SOURCE+= srcApp
 #SOURCE+= appApp
 #SOURCE+= ghostApp
 #SOURCE+= binApp
@@ -31,7 +33,7 @@ SOURCE+= timeApp
 #CFLAGS += -I/opt/desktop/build-desktop/tmp/sysroots-components/cortexa53-crypto-mx8mp/gstreamer1.0-plugins-base/usr/include/gstreamer-1.0
 #IFLAGS += -I$(ROOTFS)/usr/include
 #IDIR += $(SYSROOT)/usr/include #-I$(ROOTFS)/usr/include
-LIBS += gstreamer-1.0 gstreamer-rtsp-server-1.0 glib-2.0 gstreamer-plugins-base-1.0 gstreamer-app-1.0
+LIBS += gstreamer-1.0 gstreamer-rtsp-server-1.0 glib-2.0 gstreamer-plugins-base-1.0 gstreamer-app-1.0 check
 #LIBS += gstreamer-audio-1.0
 #LIBS += gstreamer-pbutils-1.0
 LDFLAGS+="-Wl,--copy-dt-needed-entries"
