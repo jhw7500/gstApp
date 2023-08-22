@@ -12,7 +12,7 @@
 
 #define FILE0_ENABLEx
 #define FILE1_ENABLEx
-#define RTSP0_ENABLE
+#define RTSP0_ENABLEx
 #define RTSP1_ENABLEx
 #define RTSP_TESTx
 
@@ -1246,6 +1246,8 @@ int main(int argc, char *argv[]) {
     GstElement *parse3 = gst_element_factory_make("h264parse", "parse3");
     GstElement *mux = gst_element_factory_make("mp4mux", "mux");
 
+    GstElement *jpegenc = gst_element_factory_make("jpegenc", "jpegenc");
+    GstElement *multifilesink = gst_element_factory_make("multifilesink", "multifilesink");
     // 요소가 생성되지 않은 경우 에러 처리
     if (!pipeline || !convert || !src || !capsfilter || !capsfilter0 || !encoder0 || !encoder1 || !encoder2 || !encoder3 || !queue0 || !queue1 || !queue2 || !queue3 
     || !appsink0 || !appsink1 || !appsink2 || !appsink3 || !tee || !crop0 || !crop1 || !crop2 || !crop3 || !tee1 || !tee2 || !parse0 || !parse1 
@@ -1258,13 +1260,22 @@ int main(int argc, char *argv[]) {
 
     // 파이프라인에 요소 추가
     gst_bin_add_many(GST_BIN(pipeline), src, capsfilter, convert, tee, parse0, mux, NULL);
-
+#if 0
     // 요소 연결
     if (!gst_element_link_many(src, capsfilter, convert, tee, NULL)) {
         g_printerr("main link err.\n");
         gst_object_unref(pipeline);
         return -1;
     }
+#endif
+    gst_bin_add_many(GST_BIN(pipeline), crop0, jpegenc, multifilesink, NULL);
+    if (!gst_element_link_many(src, capsfilter, crop0, jpegenc, multifilesink, NULL)) {
+        g_printerr("main link err.\n");
+        gst_object_unref(pipeline);
+        return -1;
+    }
+    g_object_set(crop0, "top", 0, "bottom", 0, "left", _WIDTH, "right", 0, NULL);
+    g_object_set(multifilesink, "location", "jhw%04d.jpg", NULL);
 
 #ifdef FILE0_ENABLE
     gst_bin_add_many(GST_BIN(pipeline), crop0, queue0, videorate0, encoder0, appsink0, NULL);
@@ -1434,6 +1445,7 @@ int main(int argc, char *argv[]) {
 #endif
 
     // 캡처 포맷 설정 (video3 장치의 적절한 캡처 포맷에 맞게 변경)
+    g_object_set(src, "num-buffers", 5, NULL);
     g_object_set(src, "device", "/dev/video3", NULL);
     GstCaps *caps = gst_caps_new_simple("video/x-raw",
                                         "format", G_TYPE_STRING, "NV12",

@@ -15,7 +15,18 @@
 #define FILE1_ENABLE
 #define RTSP0_ENABLE
 #define RTSP1_ENABLE
+#define CAPTURE0_ENABLE
+#define CAPTURE1_ENABLE
+
+#define FILE2_ENABLE
+#define FILE3_ENABLE
+#define RTSP2_ENABLE
+#define RTSP3_ENABLE
+#define CAPTURE2_ENABLE
+#define CAPTURE3_ENABLE
+
 #define RTSP_TESTx
+#define JHW_TEST
 
 #define HIGH_BITRATE    4096
 #define LOW_BITRATE     1024
@@ -40,7 +51,7 @@ void mylog( int opt, const char* _szfmt, ... );
 #define DEFAULT_FPS     2147483647
 #define FILE_BITRATE    4096
 #define RTSP_BITRATE    1024
-#define MAX_PIPENUM     4
+#define MAX_PIPENUM     6
 
 
 GstElement *pipeline;
@@ -56,7 +67,9 @@ typedef enum
   FILE_L =  0,
   FILE_R =  1,
   RTSP_L =  2,
-  RTSP_R =  3
+  RTSP_R =  3,
+  CAPTURE_L = 4,
+  CAPTURE_R = 5
 } PipeNum;
 
 typedef struct _CustomData{
@@ -71,6 +84,8 @@ typedef struct _CustomData{
     GstElement *queue;
     GstCaps *caps;
     GstBuffer *buf;
+    guint16 captureCnt;
+    guint16 captureMax;
     //GMainLoop *rtspLoop;
     //GThread *rtspThread;
     //pthread_t m_threadRtsp;
@@ -370,9 +385,19 @@ void sink_added(GstElement *sink, guint arg0, gpointer data)
 }
 static gboolean testFunc(gpointer data)
 {
-    g_print("%s\n", __FUNCTION__);
-    GstElement *pp = (GstElement *)data;
-    gst_element_set_state(pp, GST_STATE_PAUSED);
+    CustomData *info = (CustomData *)data;
+    GDateTime *datetime = g_date_time_new_now_local();
+    //GstElement *pp = (GstElement *)data;
+    //gst_element_set_state(pp, GST_STATE_PAUSED);
+    gchar *date_str = g_date_time_format(datetime, "%Y%m%d_%H%M%S");
+    //g_print("%s\n", __FUNCTION__);
+
+    info->file_name = g_strdup_printf("output_%s-ch%d", date_str, info->ch-4);
+    info->captureCnt = 0;
+    __LOG(LOG_NOTICE, "[GST][%s:%d] %s (file_name : %s)", _FILE_, __LINE__, __FUNCTION__, info->file_name);
+    g_date_time_unref(datetime);
+    g_free(date_str);
+    return TRUE;
 }
 
 static gboolean changeBitrate(gpointer data)
@@ -515,7 +540,7 @@ static gboolean change_file_name(gpointer data)
 #else
     date_str = g_date_time_format(datetime, "%Y%m%d_%H%M%S");
     info->file_name = g_strdup_printf("output_%s-ch%d.mp4", date_str, info->ch);
-    __LOG(LOG_NOTICE, "[GST][%s:%d] file_name : %s", _FILE_, __LINE__, info->file_name);
+    //__LOG(LOG_NOTICE, "[GST][%s:%d] file_name : %s", _FILE_, __LINE__, info->file_name);
 #endif  //FILENAME_SEC_ZERO
     __LOG(LOG_NOTICE, "[GST][%s:%d] %s (file_name : %s)", _FILE_, __LINE__, __FUNCTION__, info->file_name);
     g_date_time_unref(datetime);
@@ -525,6 +550,172 @@ static gboolean change_file_name(gpointer data)
 
     return TRUE;
 }
+// appsink의 "new-sample" 시그널 처리 함수
+static GstFlowReturn new_sample_handler(GstElement *sink, gpointer userData) {
+    GstSample *sample;
+    GstBuffer *buffer;
+    CustomData *info = (CustomData *)userData;
+    guint8 mode;
+    GstMapInfo map;
+    gchar *path = NULL;
+    FILE *file;
+    //GstClockTime timestamp;
+
+    // sample을 가져오기
+    //g_signal_emit_by_name(appsink, "pull-sample", &sample);
+    sample = gst_app_sink_pull_sample(GST_APP_SINK(sink));
+    if (!sample) {
+        //__LOG(LOG_CRIT, "[GST][%s:%d] sample cannot get from sink", _FILE_, __LINE__);
+        return GST_FLOW_ERROR;
+    }
+    buffer = gst_sample_get_buffer(sample);
+    gst_sample_unref(sample);
+    if (!buffer) {
+        __LOG(LOG_CRIT, "[GST][%s:%d] buffer cannot get from sample", _FILE_, __LINE__);
+        //gst_sample_unref(sample);
+        return GST_FLOW_ERROR;
+    }
+
+    if (!gst_buffer_map(buffer, &map, GST_MAP_READ)){
+        g_printerr("Failed to map buffer\n");
+        return GST_FLOW_ERROR;
+    }
+
+    if(info->ch < 2)
+        mode = 0;
+    else if(info->ch < 4)
+        mode = 1;
+    else
+        mode = 2;
+
+    switch(mode)
+    {
+        case 0:
+            {
+#ifdef JHW_TEST
+                path = g_strdup_printf("%s", info->file_name);
+#else
+                path = g_strdup_printf("%s/%s", FILE_PATH, info->file_name);
+#endif
+                //g_print("path : %s\n", path);
+                file = fopen(path, "ab");
+                if (file) {
+                    fwrite(map.data, 1, map.size, file);
+                    fclose(file);
+                } else {
+                    __LOG(LOG_ERR, "[GST][%s:%d] %s file open error", _FILE_, __LINE__, info->file_name);
+                } 
+            }
+            break;
+        case 1:
+            {
+                // Create a new buffer and copy data
+                info->buf = gst_buffer_new_and_alloc(map.size);
+                gst_buffer_fill(info->buf, 0, map.data, map.size);
+
+                // Unmap the original buffer
+                //gst_buffer_unmap(buffer, &map);
+                //info->buf = newBuffer;
+                    
+                // Push the new buffer to the appsrc
+                //g_thread_new("data-processing-thread", (GThreadFunc)process_data_thread, info);
+                gst_app_src_push_buffer(GST_APP_SRC(info->appsrc), info->buf);
+            }
+            break;
+        case 2:
+            {
+                if(info->captureCnt >= info->captureMax)
+                {
+                    //__LOG(LOG_DEBUG, "[GST][%s:%d] captureMax", _FILE_, __LINE__);
+                    gst_buffer_unmap(buffer, &map);
+                    //gst_sample_unref(sample);
+                    return GST_FLOW_OK;
+                }
+                //__LOG(LOG_DEBUG, "[GST][%s:%d] captureCnt %d captureMax %d", _FILE_, __LINE__, info->captureCnt, info->captureMax);
+
+#ifdef JHW_TEST
+                path = g_strdup_printf("%s_%d.jpg", info->file_name, info->captureCnt++);
+#else
+                path = g_strdup_printf("%s/%s_%d.jpg", FILE_PATH, info->file_name, info->captureCnt++);
+#endif
+                //g_print("path : %s\n", path);
+                file = fopen(path, "ab");
+                if (file) {
+                    fwrite(map.data, 1, map.size, file);
+                    fclose(file);
+                } else {
+                    __LOG(LOG_ERR, "[GST][%s:%d] %s file open error", _FILE_, __LINE__, info->file_name);
+                }
+            }
+            break;
+    }
+
+    gst_buffer_unmap(buffer, &map);
+    //gst_sample_unref(sample);
+    if(path!=NULL) g_free(path);
+
+    return GST_FLOW_OK;
+}
+
+static GstFlowReturn new_sample_handler_capture(GstElement *sink, gpointer data) {
+    GstSample *sample;
+    GstBuffer *buffer;
+    CustomData *info = (CustomData *)data;
+    //GstClockTime timestamp;
+
+    // sample을 가져오기
+    //g_signal_emit_by_name(appsink, "pull-sample", &sample);
+    sample = gst_app_sink_pull_sample(GST_APP_SINK(sink));
+    if (!sample) {
+        //__LOG(LOG_CRIT, "[GST][%s:%d] sample cannot get from sink", _FILE_, __LINE__);
+        return GST_FLOW_ERROR;
+    }
+
+#if 1
+    if(info->captureCnt >= info->captureMax)
+    {
+        //__LOG(LOG_DEBUG, "[GST][%s:%d] captureMax", _FILE_, __LINE__);
+        //gst_buffer_unmap(buffer, &map);
+        //gst_sample_unref(sample);
+        return GST_FLOW_OK;
+    }
+#endif
+    __LOG(LOG_DEBUG, "[GST][%s:%d] captureCnt %d captureMax %d", _FILE_, __LINE__, info->captureCnt, info->captureMax);
+
+    // 버퍼 가져오기
+    buffer = gst_sample_get_buffer(sample);
+    if (!buffer) {
+        __LOG(LOG_CRIT, "[GST][%s:%d] buffer cannot get from sample", _FILE_, __LINE__);
+        gst_sample_unref(sample);
+        return GST_FLOW_ERROR;
+    }
+
+    // 파일로 저장
+    GstMapInfo map;
+    gchar *path;
+    gst_buffer_map(buffer, &map, GST_MAP_READ);
+    //g_print("file_name:%s\n", info->file_name);
+
+#ifdef JHW_TEST
+    path = g_strdup_printf("%s_%d.jpg", info->file_name, info->captureCnt++);
+#else
+    path = g_strdup_printf("%s/%s_%d.jpg", FILE_PATH, info->file_name, info->captureCnt++);
+#endif
+    //g_print("path : %s\n", path);
+    FILE *file = fopen(path, "ab");
+    if (file) {
+        fwrite(map.data, 1, map.size, file);
+        fclose(file);
+    } else {
+        __LOG(LOG_ERR, "[GST][%s:%d] %s file open error", _FILE_, __LINE__, info->file_name);
+    }
+    gst_buffer_unmap(buffer, &map);
+    gst_sample_unref(sample);
+    g_free(path);
+
+    return GST_FLOW_OK;
+}
+
 // appsink의 "new-sample" 시그널 처리 함수
 static GstFlowReturn new_sample_handler_file(GstElement *sink, gpointer data) {
     GstSample *sample;
@@ -600,9 +791,14 @@ static GstFlowReturn new_sample_handler_file(GstElement *sink, gpointer data) {
 #endif
     // 파일로 저장
     GstMapInfo map;
+    gchar *path;
     gst_buffer_map(buffer, &map, GST_MAP_READ);
     //g_print("file_name:%s\n", info->file_name);
-    gchar *path = g_strdup_printf("%s/%s", FILE_PATH, info->file_name);
+#ifdef JHW_TEST
+    path = g_strdup_printf("%s", info->file_name);
+#else
+    path = g_strdup_printf("%s/%s", FILE_PATH, info->file_name);
+#endif
     //g_print("path : %s\n", path);
     FILE *file = fopen(path, "ab");
     if (file) {
@@ -702,6 +898,7 @@ static void process_data_thread(gpointer userData) {
     // Release the mutex after processing
     //g_static_mutex_unlock(&gmutex);
 }
+
 
 static GstFlowReturn new_sample_handler_rtsp(GstElement *sink, gpointer userData) {
     GstSample *sample = NULL;
@@ -985,19 +1182,36 @@ static GstFlowReturn new_preroll_handler(GstElement *sink, gpointer data) {
         //info->appsrc_name = g_strdup_printf("%s", APPSRC3_NAME);
         __LOG(LOG_NOTICE, "[GST][%s:%d] sink_name:%s channel:%d", _FILE_, __LINE__, sink_name, info->ch);
     }
+    else if(g_str_equal(sink_name, "sink4") == TRUE) //|| g_str_equal(sink_name, "sink2") == TRUE)
+    {
+        info->ch = 4;
+        //info->appsrc_name = g_strdup_printf("%s", APPSRC2_NAME);
+        __LOG(LOG_NOTICE, "[GST][%s:%d] sink_name:%s channel:%d", _FILE_, __LINE__, sink_name, info->ch);
+    }
+    else if(g_str_equal(sink_name, "sink5") == TRUE) //|| g_str_equal(sink_name, "sink2") == TRUE)
+    {
+        info->ch = 5;
+        //info->appsrc_name = g_strdup_printf("%s", APPSRC2_NAME);
+        __LOG(LOG_NOTICE, "[GST][%s:%d] sink_name:%s channel:%d", _FILE_, __LINE__, sink_name, info->ch);
+    }
     else
     {
         __LOG(LOG_CRIT, "[GST][%s:%d] sink name %s is not matching", _FILE_, __LINE__, sink_name);
         return GST_FLOW_ERROR;
     }
     g_free (sink_name);
-    change_file_name(info);
+
+    if(info->ch < 2)
+    {
+        change_file_name(info);
 #ifdef FILENAME_SEC_ZERO
-    g_timeout_add(100, (GSourceFunc)change_file_name, info);
-    //g_timeout_add_seconds(FILE_SAVE_DURATION, (GSourceFunc)change_file_name, info);
+        g_timeout_add(100, (GSourceFunc)change_file_name, info);
+        //g_timeout_add_seconds(FILE_SAVE_DURATION, (GSourceFunc)change_file_name, info);
 #else
-    g_timeout_add_seconds(FILE_SAVE_DURATION, (GSourceFunc)change_file_name, info);
+        g_timeout_add_seconds(FILE_SAVE_DURATION, (GSourceFunc)change_file_name, info);
 #endif
+    }
+
     return GST_FLOW_OK;
 }
 
@@ -1452,6 +1666,8 @@ int main(int argc, char *argv[]) {
     customData[FILE_R].ch = FILE_R;
     customData[RTSP_L].ch = RTSP_L;
     customData[RTSP_R].ch = RTSP_R;
+    customData[CAPTURE_L].ch = CAPTURE_L;
+    customData[CAPTURE_R].ch = CAPTURE_R;
     //g_allocator_new
 
     rtspServer = gst_rtsp_server_new ();
@@ -1557,7 +1773,7 @@ int main(int argc, char *argv[]) {
     customData[FILE_L].enc = encoder0;
     customData[FILE_L].vr = videorate0;
 #endif
-    
+
 #ifdef RTSP_TEST
     GstRTSPServer *server = gst_rtsp_server_new();
     gst_rtsp_server_attach(server, NULL);
@@ -1603,7 +1819,7 @@ int main(int argc, char *argv[]) {
     g_object_set(queue1, "leaky", 2, NULL);
     g_object_set(encoder1, "bitrate", 4096, NULL);
     g_object_set(appsink1, "emit-signals", TRUE, "sync", FALSE, NULL);
-    g_signal_connect(appsink1, "new-sample", G_CALLBACK(new_sample_handler_file), &customData[FILE_R]);
+    g_signal_connect(appsink1, "new-sample", G_CALLBACK(new_sample_handler), &customData[FILE_R]);
     g_signal_connect(appsink1, "new-preroll", G_CALLBACK(new_preroll_handler), &customData[FILE_R]);
     customData[FILE_R].enc = encoder1;
     customData[FILE_R].vr = videorate1;
@@ -1656,8 +1872,8 @@ int main(int argc, char *argv[]) {
     //g_object_set(appsink2, "max-bitrate", 2048, NULL);
     g_signal_connect(appsink2, "eos", G_CALLBACK(eos_callback), NULL);
 
-    g_signal_connect(appsink2, "new-sample", G_CALLBACK(new_sample_handler_rtsp), &customData[RTSP_L]);
-    //g_signal_connect(appsink2, "new-preroll", G_CALLBACK(new_preroll_handler), &info[0]);
+    g_signal_connect(appsink2, "new-sample", G_CALLBACK(new_sample_handler), &customData[RTSP_L]);
+    g_signal_connect(appsink2, "new-preroll", G_CALLBACK(new_preroll_handler), &customData[RTSP_L]);
     //g_signal_connect(appsink2, "pad-added", G_CALLBACK(pad_added_handler), capsfilter);
     //g_signal_connect(appsink2, "pad-removed", G_CALLBACK(pad_removed_handler), NULL);
     customData[RTSP_L].enc = encoder2;
@@ -1698,8 +1914,8 @@ int main(int argc, char *argv[]) {
     g_object_set(appsink3, "emit-signals", TRUE, "sync", FALSE, NULL);
     g_object_set(appsink3, "max-buffers", 60, NULL);
     g_object_set(appsink3, "drop", FALSE, NULL);
-    g_signal_connect(appsink3, "new-sample", G_CALLBACK(new_sample_handler_rtsp), &customData[RTSP_R]);
-    //g_signal_connect(appsink3, "new-preroll", G_CALLBACK(new_preroll_handler), &info[1]);
+    g_signal_connect(appsink3, "new-sample", G_CALLBACK(new_sample_handler), &customData[RTSP_R]);
+    g_signal_connect(appsink3, "new-preroll", G_CALLBACK(new_preroll_handler), &customData[RTSP_R]);
     customData[RTSP_R].enc = encoder3;
     customData[RTSP_R].vr = videorate3;
     setRtspPipe(&customData[RTSP_R]);
@@ -1716,6 +1932,51 @@ int main(int argc, char *argv[]) {
     //rtspPipeStart(&info[1]);
     //pthread_create(&m_threadRtsp3, NULL, &rtspThreadFunc, &info[1]);
     //rtspThreadFunc(&info[1]);
+#endif
+
+#ifdef CAPTURE0_ENABLE
+    GstElement *jpegenc4 = gst_element_factory_make("jpegenc", "jpegenc4");
+    GstElement *appsink4 = gst_element_factory_make("appsink", "sink4");
+    GstElement *crop4 = gst_element_factory_make("videocrop", "crop4");
+    GstElement *queue4 = gst_element_factory_make("queue", "queue4");
+    gst_bin_add_many(GST_BIN(pipeline), crop4, queue4, jpegenc4, appsink4, NULL);
+    if (!gst_element_link_many(tee, crop4, queue4, jpegenc4, appsink4, NULL)) {
+        g_printerr("4 link err.\n");
+        gst_object_unref(pipeline);
+        return -1;
+    }
+    g_object_set(queue4, "max-size-buffers", 60, NULL);
+    g_object_set(queue4, "leaky", 2, NULL);
+    g_object_set(crop4, "top", 0, "bottom", 0, "left", _WIDTH, "right", 0, NULL);
+    g_object_set(appsink4, "emit-signals", TRUE, "sync", FALSE, NULL);
+    g_signal_connect(appsink4, "new-sample", G_CALLBACK(new_sample_handler), &customData[CAPTURE_L]);
+    g_signal_connect(appsink4, "new-preroll", G_CALLBACK(new_preroll_handler), &customData[CAPTURE_L]);
+    customData[CAPTURE_L].captureMax = 3;
+    customData[CAPTURE_L].captureCnt = 3;
+
+    g_timeout_add_seconds(30, (GSourceFunc)testFunc, &customData[CAPTURE_L]);
+#endif
+
+#ifdef CAPTURE1_ENABLE
+    GstElement *jpegenc5 = gst_element_factory_make("jpegenc", "jpegenc5");
+    GstElement *appsink5 = gst_element_factory_make("appsink", "sink5");
+    GstElement *crop5 = gst_element_factory_make("videocrop", "crop5");
+    GstElement *queue5 = gst_element_factory_make("queue", "queue5");
+    gst_bin_add_many(GST_BIN(pipeline), crop5, queue5, jpegenc5, appsink5, NULL);
+    if (!gst_element_link_many(tee, crop5, queue5, jpegenc5, appsink5, NULL)) {
+        g_printerr("5 link err.\n");
+        gst_object_unref(pipeline);
+        return -1;
+    }
+    g_object_set(queue5, "max-size-buffers", 60, NULL);
+    g_object_set(queue5, "leaky", 2, NULL);
+    g_object_set(crop5, "top", 0, "bottom", 0, "left", _WIDTH, "right", 0, NULL);
+    g_object_set(appsink5, "emit-signals", TRUE, "sync", FALSE, NULL);
+    g_signal_connect(appsink5, "new-sample", G_CALLBACK(new_sample_handler), &customData[CAPTURE_R]);
+    g_signal_connect(appsink5, "new-preroll", G_CALLBACK(new_preroll_handler), &customData[CAPTURE_R]);
+    customData[CAPTURE_R].captureMax = 3;
+    customData[CAPTURE_R].captureCnt = 3;
+    g_timeout_add_seconds(30, (GSourceFunc)testFunc, &customData[CAPTURE_R]);
 #endif
 
     //g_object_set(encoder0, "set-keyframe", TRUE, NULL);
@@ -1799,7 +2060,7 @@ int main(int argc, char *argv[]) {
     //g_timeout_add_seconds(15, (GSourceFunc)changeBitrate, &info[2]);
     //g_timeout_add_seconds(30, (GSourceFunc)changeFPS, &info[2]);
 
-    //g_timeout_add_seconds(10, (GSourceFunc)testFunc, NULL);
+    //g_timeout_add_seconds(10, (GSourceFunc)testFunc, &customData[CAPTURE_L]);
 
     mainLoop = g_main_loop_new(NULL, FALSE);
 	if(!mainLoop) {
