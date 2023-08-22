@@ -597,7 +597,7 @@ int main(int argc, char *argv[]) {
     gst_rtsp_server_attach(server, NULL);
 
     g_print("RTSP 서버 시작: rtsp://0.0.0.0:8554/test\n");
-
+    
     // 메인 루프 실행
     GMainLoop *loop = g_main_loop_new(NULL, FALSE);
     g_main_loop_run(loop);

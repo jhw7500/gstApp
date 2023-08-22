@@ -14,7 +14,7 @@
 #define FILE0_ENABLE
 #define FILE1_ENABLEx
 #define RTSP0_ENABLE
-#define RTSP1_ENABLEx
+#define RTSP1_ENABLE
 #define RTSP_TESTx
 
 #define HIGH_BITRATE    4096
@@ -67,7 +67,7 @@ typedef struct _CustomData{
     gboolean get_1st_frame;
     gboolean push_1st_iframe;
 } CustomData;
-CustomData info[2];
+//CustomData info[2];
 
 typedef struct _CamPipe
 {
@@ -696,9 +696,7 @@ GstFlowReturn rtsp_stream_new_sample(GstElement *sink, gpointer userData)
 	GstCaps					*caps;
 
 	gint					handle_index = (-1);
-	gint					size;
 	gchar					stream_name[32];
-	gpointer				data;
 	gboolean				key_frame_flag, bret;
 
 	//DBG_RTSP_STREAM(2, "sink name : %s\n", gst_element_get_name(sink));
@@ -746,8 +744,8 @@ GstFlowReturn rtsp_stream_new_sample(GstElement *sink, gpointer userData)
 			return GST_FLOW_ERROR;
 		}
 
-		data = map.data;
-		size = map.size;
+		gpointer data = map.data;
+		gint size = map.size;
 
         //gst_app_src_push_buffer(GST_APP_SRC(info->appsrc), gst_buffer_copy(buffer));        
 		//gst_buffer_unmap(buffer, &map);
@@ -1229,15 +1227,16 @@ int main(int argc, char *argv[]) {
     gst_init(&argc, &argv);
     attachInterruptHandlers();
 
-    //CustomData info[2];
-    info[0].file_name = NULL;
-    info[0].appsrc = gst_element_factory_make("appsrc", "APPSRC2_NAME");
-    info[0].appsrc_name = g_strdup_printf("%s", APPSRC2_NAME);
-    info[0].ch = 0;
-    info[1].file_name = NULL;
-    info[1].appsrc = gst_element_factory_make("appsrc", "APPSRC3_NAME");
-    info[1].appsrc_name = g_strdup_printf("%s", APPSRC3_NAME);
-    info[1].ch = 1;
+    CustomData customData[2];
+
+    customData[0].file_name = NULL;
+    customData[0].appsrc = gst_element_factory_make("appsrc", "APPSRC2_NAME");
+    customData[0].appsrc_name = g_strdup_printf("%s", APPSRC2_NAME);
+    customData[0].ch = 0;
+    customData[1].file_name = NULL;
+    customData[1].appsrc = gst_element_factory_make("appsrc", "APPSRC3_NAME");
+    customData[1].appsrc_name = g_strdup_printf("%s", APPSRC3_NAME);
+    customData[1].ch = 1;
     //g_allocator_new
 
     rtspServer = gst_rtsp_server_new ();
@@ -1331,8 +1330,8 @@ int main(int argc, char *argv[]) {
     //g_object_set(videorate0, "drop-only", FALSE, NULL);
     g_object_set(encoder0, "bitrate", 4096, NULL);
     g_object_set(appsink0, "emit-signals", TRUE, "sync", FALSE, NULL);
-    g_signal_connect(appsink0, "new-sample", G_CALLBACK(new_sample_handler_file), &info[0]);
-    g_signal_connect(appsink0, "new-preroll", G_CALLBACK(new_preroll_handler), &info[0]);
+    g_signal_connect(appsink0, "new-sample", G_CALLBACK(new_sample_handler_file), &customData[0]);
+    g_signal_connect(appsink0, "new-preroll", G_CALLBACK(new_preroll_handler), &customData[0]);
 
 #endif
     
@@ -1411,9 +1410,59 @@ int main(int argc, char *argv[]) {
     //g_object_set(appsink2, "max-bitrate", 2048, NULL);
     g_signal_connect(appsink2, "eos", G_CALLBACK(eos_callback), NULL);
 
-    g_signal_connect(appsink2, "new-sample", G_CALLBACK(rtsp_stream_new_sample), &info[0]);
+    g_signal_connect(appsink2, "new-sample", G_CALLBACK(rtsp_stream_new_sample), &customData[0]);
     //g_signal_connect(appsink2, "new-preroll", G_CALLBACK(new_preroll_handler), &info[0]);
-    setRtspPipe(&info[0]);
+    setRtspPipe(&customData[0]);
+#endif
+
+#ifdef RTSP1_ENABLE
+    gst_bin_add_many(GST_BIN(pipeline), crop3, queue3, videorate3, encoder3, parse3, appsink3, parse3, queue3, NULL);
+    if (!gst_element_link_many(tee, queue3, crop3, videorate3, encoder3, appsink3, NULL)) 
+    {
+        g_printerr("3 link err.\n");
+        gst_object_unref(pipeline);
+        return -1;
+    }
+    g_object_set(crop3, "top", 0, "bottom", 0, "left", _WIDTH, "right", 0, NULL);
+    g_object_set(videorate3, "max-rate", RTSP_FPS, NULL);
+    g_object_set(videorate3, "drop-only", FALSE, NULL);
+    g_object_set(encoder3, "bitrate", 1024, NULL);
+    //g_object_set(encoder2, "gop-size", 30, NULL);
+    //g_object_set(appsink3, "emit-signals", TRUE, "sync", FALSE, NULL);
+    //g_object_set(appsink2, "max-lateness", 5000000000, NULL);
+
+
+#if 1
+	//g_object_set(queue2, "max-size-bytes", 0, NULL);
+	//g_object_set(queue2, "max-size-time", 1000000000, NULL);
+	g_object_set(queue3, "max-size-buffers", 10, NULL);
+	g_object_set(queue3, "leaky", 2, NULL);
+	//g_object_set(appsink2, "max-buffers", 1, NULL);
+    //g_object_set(queue2, "flush-on-eos", TRUE, NULL);
+    //g_signal_connect(queue2, "underrun", G_CALLBACK(underrun_callback), NULL);
+    //g_signal_connect(queue2, "overrun", G_CALLBACK(overrun_callback), NULL);
+    //g_signal_connect(queue2, "running", G_CALLBACK(running_callback), NULL);
+    //g_signal_connect(queue2, "pushing", G_CALLBACK(pushing_callback), NULL);
+
+#endif
+
+    
+    g_object_set(appsink3, "max-buffers", 10, NULL);
+    g_object_set(appsink3, "drop", FALSE, NULL);
+    //g_object_set(appsink2, "enable-last-sample", TRUE, NULL);
+    //g_object_set(appsink2, "max-lateness", 1000, NULL);
+    //g_object_set(appsink2, "throttle-time", 100, NULL);
+    //g_object_set(appsink2, "processing-deadline", 200, NULL);
+    //g_object_set(appsink2, "render-delay", 1000000000, NULL);
+    //g_object_set(appsink2, "wait-on-eos", FALSE, NULL);
+    //g_object_set(appsink2, "qos", TRUE, NULL);
+    g_object_set(appsink3, "emit-signals", TRUE, "sync", FALSE, NULL);
+    //g_object_set(appsink2, "max-bitrate", 2048, NULL);
+    g_signal_connect(appsink3, "eos", G_CALLBACK(eos_callback), NULL);
+
+    g_signal_connect(appsink3, "new-sample", G_CALLBACK(rtsp_stream_new_sample), &customData[1]);
+    //g_signal_connect(appsink2, "new-preroll", G_CALLBACK(new_preroll_handler), &info[0]);
+    setRtspPipe(&customData[1]);
 #endif
 
     // 캡처 포맷 설정 (video3 장치의 적절한 캡처 포맷에 맞게 변경)
