@@ -50,7 +50,7 @@ typedef struct {
 } MyContext;
 
 static CustomData data;
-static GMainLoop *loop;
+static GgstLoop *loop;
 pthread_t m_threadRtsp;
 
 static void print_tag(const GstTagList * list, const gchar * tag, gpointer unused)
@@ -577,7 +577,7 @@ void attachInterruptHandlers()
 
 typedef struct _Data {
     GstRTSPServer *server;
-    GMainLoop *loop;
+    GgstLoop *loop;
 }Data;
 
 void cleanSessions(GstRTSPServer *server)
@@ -590,7 +590,7 @@ void cleanSessions(GstRTSPServer *server)
 }
 /* this timeout is periodically run to clean up the expired sessions from the
  * pool. This needs to be run explicitly currently but might be done
- * automatically as part of the mainloop. */
+ * automatically as part of the gstLoop. */
 gboolean timeout(Data *data)
 {
   gboolean result = FALSE;
@@ -635,7 +635,7 @@ GstElement *get_bin_from_rtsp_server(GstRTSPServer *server, const gchar *mount_p
 #endif
 int main(int argc, char *argv[]) {
     attachInterruptHandlers();
-    //GMainLoop *loop;
+    //GgstLoop *loop;
     //GstRTSPServer *server;
     GstRTSPMountPoints *mounts;
     //CustomMediaFactory *factory;

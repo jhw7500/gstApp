@@ -52,7 +52,7 @@ typedef struct {
 } MyContext;
 
 static CustomData data;
-static GMainLoop *loop;
+static GgstLoop *loop;
 pthread_t m_threadRtsp;
 pthread_t m_threadRtsp2;
 GstElement *rtspsrc_left;
@@ -527,7 +527,7 @@ GstElement *get_bin_from_rtsp_server(GstRTSPServer *server, const gchar *mount_p
 
 void* threadRtsp()
 {
-  GMainLoop *loop;
+  GgstLoop *loop;
   GstRTSPServer *server;
   GstRTSPMountPoints *mounts;
   GstRTSPMediaFactory *factory;
@@ -582,7 +582,7 @@ void* threadRtsp()
 
 void* threadRtsp2()
 {
-  GMainLoop *loop;
+  GgstLoop *loop;
   GstRTSPServer *server;
   GstRTSPMountPoints *mounts;
   GstRTSPMediaFactory *factory;
@@ -861,7 +861,7 @@ int main (int argc, char *argv[])
 
 #if 0
     GstElement *pipeline, *source, *demux;
-    GMainLoop *loop;
+    GgstLoop *loop;
     GstBus *bus;
     guint bus_watch_id;
 

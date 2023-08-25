@@ -78,7 +78,7 @@ int main(int argc, char *argv[]) {
     if (msg) {
         gst_message_unref(msg);
     }
-    GMainLoop *loop = g_main_loop_new(NULL, FALSE);
+    GgstLoop *loop = g_main_loop_new(NULL, FALSE);
     g_main_loop_run(loop);
 
     // 파이프라인 정지 및 해제

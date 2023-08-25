@@ -39,9 +39,9 @@ void mylog( int opt, const char* _szfmt, ... );
 #define RTSP_FPS 15
 
 GstElement *pipeline;
-GMainLoop *mainLoop;
-//GMainLoop *rtspLoop2;
-//GMainLoop *rtspLoop3;
+GgstLoop *gstLoop;
+//GgstLoop *rtspLoop2;
+//GgstLoop *rtspLoop3;
 //GThread *rtspThread2;
 //GThread *rtspThread3;
 //pthread_t m_threadRtsp2;
@@ -61,7 +61,7 @@ typedef struct _CustomData{
     GstElement *appsrc;
     GstCaps *caps;
     GstElement *queue;
-    //GMainLoop *rtspLoop;
+    //GgstLoop *rtspLoop;
     //GThread *rtspThread;
     //pthread_t m_threadRtsp;
     gboolean get_1st_frame;
@@ -133,7 +133,7 @@ static void destroy(void)
     __LOG(LOG_EMERG, "[GST][%s:%d] destroy!!", _FILE_, __LINE__);
     gst_element_set_state(pipeline, GST_STATE_NULL);
     gst_object_unref(pipeline); 
-    g_main_loop_quit(mainLoop);
+    g_main_loop_quit(gstLoop);
     //g_main_loop_quit(rtspLoop2);
     //g_main_loop_quit(rtspLoop3);
     //g_thread_join(rtspThread2);
@@ -141,7 +141,7 @@ static void destroy(void)
     //g_thread_unref(rtspThread2);
     //g_thread_unref(rtspThread3);
     g_object_unref(rtspServer);
-    g_main_loop_unref(mainLoop);
+    g_main_loop_unref(gstLoop);
     //g_main_loop_quit(info[0].rtspLoop);
     //g_main_loop_quit(info[1].rtspLoop);
     //g_thread_join(info[0].rtspThread);
@@ -1096,7 +1096,7 @@ static gboolean timeout(GstRTSPServer *server)
 
 gint setRtspPipe(gpointer user_data)
 {
-  //GMainLoop *loop;
+  //GgstLoop *loop;
   //GstRTSPServer *server;
   //GstRTSPMountPoints *mounts;
   GstRTSPMediaFactory *factory;
@@ -1106,7 +1106,7 @@ gint setRtspPipe(gpointer user_data)
   //g_print("info.ch:%d info.filename:%d\n", info->ch, info->file_name);
   __LOG(LOG_NOTICE, "[GST][%s:%d] %s start", _FILE_, __LINE__, __FUNCTION__);
 
-  //GMainLoop *loop = g_main_loop_new (NULL, FALSE);
+  //GgstLoop *loop = g_main_loop_new (NULL, FALSE);
   //info->rtspLoop = g_main_loop_new (NULL, FALSE);
 
   /* create a server instance */
@@ -1492,16 +1492,16 @@ int main(int argc, char *argv[]) {
     gst_object_unref(bus);
 
 
-    mainLoop = g_main_loop_new(NULL, FALSE);
-	if(!mainLoop) {
+    gstLoop = g_main_loop_new(NULL, FALSE);
+	if(!gstLoop) {
         __LOG(LOG_CRIT, "[GST][%s:%d] rtsp loop create error", _FILE_, __LINE__);
     }
     __LOG(LOG_NOTICE, "[GST][%s:%d] Main loop start", _FILE_, __LINE__);
-    g_main_loop_run(mainLoop);
+    g_main_loop_run(gstLoop);
 
     gst_element_set_state(pipeline, GST_STATE_NULL);
     gst_object_unref(pipeline); 
-    g_main_loop_unref(mainLoop);
+    g_main_loop_unref(gstLoop);
     g_object_unref(rtspServer);
 
     return 0;

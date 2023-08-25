@@ -35,9 +35,9 @@ void mylog( int opt, const char* _szfmt, ... );
 #define RTSP_FPS 15
 
 GstElement *pipeline;
-GMainLoop *mainLoop;
-//GMainLoop *rtspLoop2;
-//GMainLoop *rtspLoop3;
+GgstLoop *gstLoop;
+//GgstLoop *rtspLoop2;
+//GgstLoop *rtspLoop3;
 //GThread *rtspThread2;
 //GThread *rtspThread3;
 //pthread_t m_threadRtsp2;
@@ -57,7 +57,7 @@ typedef struct _CustomData{
     GstElement *appsrc;
     GstElement *appsink;
     GstCaps *caps;
-    //GMainLoop *rtspLoop;
+    //GgstLoop *rtspLoop;
     //GThread *rtspThread;
     //pthread_t m_threadRtsp;
 } CustomData;
@@ -127,7 +127,7 @@ static void destroy(void)
     __LOG(LOG_EMERG, "[GST][%s:%d] destroy!!", _FILE_, __LINE__);
     gst_element_set_state(pipeline, GST_STATE_NULL);
     gst_object_unref(pipeline); 
-    g_main_loop_quit(mainLoop);
+    g_main_loop_quit(gstLoop);
     //g_main_loop_quit(rtspLoop2);
     //g_main_loop_quit(rtspLoop3);
     //g_thread_join(rtspThread2);
@@ -135,7 +135,7 @@ static void destroy(void)
     //g_thread_unref(rtspThread2);
     //g_thread_unref(rtspThread3);
     g_object_unref(rtspServer);
-    g_main_loop_unref(mainLoop);
+    g_main_loop_unref(gstLoop);
     //g_main_loop_quit(info[0].rtspLoop);
     //g_main_loop_quit(info[1].rtspLoop);
     //g_thread_join(info[0].rtspThread);
@@ -909,7 +909,7 @@ static gboolean timeout(GstRTSPServer *server)
 
 gint setRtspPipe(gpointer user_data)
 {
-  //GMainLoop *loop;
+  //GgstLoop *loop;
   //GstRTSPServer *server;
   //GstRTSPMountPoints *mounts;
   GstRTSPMediaFactory *factory;
@@ -920,7 +920,7 @@ gint setRtspPipe(gpointer user_data)
   //g_print("info.ch:%d info.filename:%d\n", info->ch, info->file_name);
   __LOG(LOG_NOTICE, "[GST][%s:%d] %s start", _FILE_, __LINE__, __FUNCTION__);
 
-  //GMainLoop *loop = g_main_loop_new (NULL, FALSE);
+  //GgstLoop *loop = g_main_loop_new (NULL, FALSE);
   //info->rtspLoop = g_main_loop_new (NULL, FALSE);
 
   /* create a server instance */
@@ -971,7 +971,7 @@ gint setRtspPipe(gpointer user_data)
   /* start serving */
   //g_print ("stream ready at rtsp://127.0.0.1:8554/ch0\n");
   __LOG(LOG_NOTICE, "[GST][%s:%d]stream ready at rtsp://127.0.0.1:8554%s", _FILE_, __LINE__, point);
-  //GMainLoop *loop = g_main_loop_new (NULL, FALSE);
+  //GgstLoop *loop = g_main_loop_new (NULL, FALSE);
   //g_main_loop_run (loop);
 
   //__LOG(LOG_CRIT, "[GST][%s:%d] thread exit", _FILE_, __LINE__);
@@ -990,7 +990,7 @@ failed:
 
 gint rtspPipeStart1(gpointer user_data)
 {
-  //GMainLoop *loop;
+  //GgstLoop *loop;
   GstRTSPServer *server;
   GstRTSPMountPoints *mounts;
   GstRTSPMediaFactory *factory;
@@ -1001,7 +1001,7 @@ gint rtspPipeStart1(gpointer user_data)
   //g_print("info.ch:%d info.filename:%d\n", info->ch, info->file_name);
   __LOG(LOG_NOTICE, "[GST][%s:%d] %s start", _FILE_, __LINE__, __FUNCTION__);
 
-  //GMainLoop *loop = g_main_loop_new (NULL, FALSE);
+  //GgstLoop *loop = g_main_loop_new (NULL, FALSE);
   //info->rtspLoop = g_main_loop_new (NULL, FALSE);
 
   /* create a server instance */
@@ -1050,7 +1050,7 @@ gint rtspPipeStart1(gpointer user_data)
   /* start serving */
   //g_print ("stream ready at rtsp://127.0.0.1:8554/ch0\n");
   __LOG(LOG_NOTICE, "[GST][%s:%d]stream ready at rtsp://127.0.0.1:8554%s", _FILE_, __LINE__, point);
-  //GMainLoop *loop = g_main_loop_new (NULL, FALSE);
+  //GgstLoop *loop = g_main_loop_new (NULL, FALSE);
   //g_main_loop_run (loop);
 
   __LOG(LOG_CRIT, "[GST][%s:%d] thread exit", _FILE_, __LINE__);
@@ -1069,7 +1069,7 @@ failed:
 
 void* rtspThreadFunc(gpointer user_data)
 {
-  //GMainLoop *loop;
+  //GgstLoop *loop;
   GstRTSPServer *server;
   GstRTSPMountPoints *mounts;
   GstRTSPMediaFactory *factory;
@@ -1080,7 +1080,7 @@ void* rtspThreadFunc(gpointer user_data)
   //g_print("info.ch:%d info.filename:%d\n", info->ch, info->file_name);
   __LOG(LOG_NOTICE, "[GST][%s:%d] %s start", _FILE_, __LINE__, __FUNCTION__);
 
-  //GMainLoop *loop = g_main_loop_new (NULL, FALSE);
+  //GgstLoop *loop = g_main_loop_new (NULL, FALSE);
   //info->rtspLoop = g_main_loop_new (NULL, FALSE);
 
   /* create a server instance */
@@ -1129,7 +1129,7 @@ void* rtspThreadFunc(gpointer user_data)
   /* start serving */
   //g_print ("stream ready at rtsp://127.0.0.1:8554/ch0\n");
   __LOG(LOG_NOTICE, "[GST][%s:%d]stream ready at rtsp://127.0.0.1:8554%s", _FILE_, __LINE__, point);
-  GMainLoop *loop = g_main_loop_new (NULL, FALSE);
+  GgstLoop *loop = g_main_loop_new (NULL, FALSE);
   g_main_loop_run (loop);
 
   __LOG(LOG_CRIT, "[GST][%s:%d] thread exit", _FILE_, __LINE__);
@@ -1491,25 +1491,25 @@ int main(int argc, char *argv[]) {
     //g_timeout_add_seconds(15, (GSourceFunc)changeBitrate, encoder0);
     //g_timeout_add_seconds(15, (GSourceFunc)changeFPS, capsfilter);
 
-    mainLoop = g_main_loop_new(NULL, FALSE);
-	if(!mainLoop) {
+    gstLoop = g_main_loop_new(NULL, FALSE);
+	if(!gstLoop) {
         __LOG(LOG_CRIT, "[GST][%s:%d] rtsp loop create error", _FILE_, __LINE__);
     }
     __LOG(LOG_NOTICE, "[GST][%s:%d] Main loop start", _FILE_, __LINE__);
-    g_main_loop_run(mainLoop);
+    g_main_loop_run(gstLoop);
     // 재생 시간 기다리기 (10초)
     //gst_element_get_state(pipeline, NULL, NULL, GST_CLOCK_TIME_NONE);
 
     // 파이프라인 정지 및 해제
     //gst_element_set_state(pipeline, GST_STATE_NULL);
     //gst_object_unref(pipeline);
-    //g_main_loop_unref(mainLoop);
+    //g_main_loop_unref(gstLoop);
 
     //pthread_join(m_threadRtsp2, NULL);
     //pthread_join(m_threadRtsp3, NULL);
     gst_element_set_state(pipeline, GST_STATE_NULL);
     gst_object_unref(pipeline); 
-    g_main_loop_unref(mainLoop);
+    g_main_loop_unref(gstLoop);
     g_object_unref(rtspServer);
 
     return 0;
