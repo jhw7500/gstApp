@@ -4,7 +4,11 @@ OUTPUT = bin
 
 #SOURCE += basic-tutorial-15
 #SOURCE=rtspApp
-SOURCE+= timeApp
+#SOURCE+= timeApp
+#SOURCE+= muxApp
+SOURCE+= audioApp
+#SOURCE+= dynamicApp
+#SOURCE+= splitApp
 #SOURCE+= srcApp
 #SOURCE+= appApp
 #SOURCE+= ghostApp

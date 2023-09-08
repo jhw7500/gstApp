@@ -8,14 +8,20 @@
 
 #define FILENAME_SEC_ZEROx
 
-#define FILE_L_ENABLE
-#define FILE_R_ENABLE
-#define RTSP_L_ENABLE
-#define RTSP_R_ENABLE
-#define CAPTURE_L_ENABLE
-#define CAPTURE_R_ENABLE
+#define FILE_L_ENABLEx
+#define FILE_R_ENABLEx
+#define RTSP_L_ENABLEx
+#define RTSP_R_ENABLEx
+#define CAPTURE_L_ENABLEx
+#define CAPTURE_R_ENABLEx
+#define AUDIO_TESTx
+
+#define RTSP_AUTH_ENABLEx
 
 #define JHW_TEST
+
+#define MP4_TEST_L
+#define MP4_TEST_Rx
 
 #define HIGH_BITRATE    4096
 #define LOW_BITRATE     1024
@@ -25,14 +31,17 @@
 #define QUEUE_NAME    "queue"
 #define QUEUE_RTSP_NAME    "queueRtsp"
 
-#define FILE_PATH   "/mnt/sd_cam"
+#ifdef JHW_TEST
+#define FILE_PATH   ""
+#else
+#define FILE_PATH   "/mnt/sd_cam/"
+#endif
 
 void mylog( int opt, const char* _szfmt, ... );
 #define __LOG(opt, fmt, args...) do { mylog(opt, (char*)fmt, ##args); } while(0)
 #define _FILE_  strrchr(__FILE__,'/')? strrchr(__FILE__,'/')+1:__FILE__
 #define PROGRAM_NAME	"timeApp"
 #define RTSP_PORT       "8554"
-#define FILE_SAVE_DURATION 60
 #define _WIDTH   1920
 #define _HEIGHT  1080
 #define MAIN_FPS 30
@@ -42,17 +51,21 @@ void mylog( int opt, const char* _szfmt, ... );
 #define FILE_BITRATE    4096
 #define RTSP_BITRATE    1024
 #define MAX_PIPENUM     6
-#define MAX_CAM     2
+#define MAX_CAM     1
+#define FILE_SAVE_DURATION 30
 
+static gboolean change_file_datetime(gpointer data) ;
 
-//GstElement *pipeline[2];
+GstElement *pipeline[2];
 GMainLoop  *gstLoop;
 GstRTSPServer *rtspServer;
 GstRTSPMountPoints *rtspMounts;
 GThread *ipcThread;
 
 volatile sig_atomic_t is_interrupted = 0;
-
+volatile sig_atomic_t sigflag = 0;
+gchar *fileDateTime;
+gchar* ohtName;
 unsigned char log_level = 7;
 unsigned char dbg_level = 7;
 
@@ -80,15 +93,28 @@ typedef enum
   CAPTURING =  3
 } VideoMode;
 
+typedef struct AudioPipe{
+    GstElement *src;
+    GstElement *convert;
+    GstElement *resample;
+    GstElement *encoder;
+    GstElement *parse;
+    GstElement *queue;
+} AudioPipe;
+
 typedef struct _CustomData{
     gchar* file_name;
+    gchar* date;
+    gchar* time;
     //gchar* appsrc_name;
     guint8 index;
     guint8 ch;
     guint8 min;
     GstElement *appsrc;
+    GstElement *appsink;
     GstElement *enc;
     GstElement *vr;
+    GstElement *mux;
     //GstElement *queue;
     //GstCaps *caps;
     GstBuffer *buf;
@@ -96,22 +122,30 @@ typedef struct _CustomData{
     guint16 captureMax;
     VideoMode mode;
     gboolean is_live;
+    GstElement *bins;
+    GstPad *bin_video_pads;
+    GstPad *bin_audio_pads;
     //GgstLoop *rtspLoop;
     //GThread *rtspThread;
     //pthread_t m_threadRtsp;
 } CustomData;
 //CustomData info[4];
 
-typedef struct _PipeSub
+typedef struct _VideoPipe
 {
     GstElement *crop;
     GstElement *sink;
     GstElement *encoder;
     GstElement *videorate;
     GstElement *queue;
+    GstElement *queue2;
     GstElement *parse;
-    CustomData *customData;
-} PipeSub;
+    GstElement *mux;
+    GstElement *convert;
+    AudioPipe audioPipe;
+    GstElement *bins;
+    //CustomData *customData;
+} VideoPipe;
 
 typedef struct _MainPipe
 {
@@ -124,7 +158,10 @@ typedef struct _MainPipe
     GstBus *bus;
     guint bus_watch_id;
     gboolean is_live;
-    PipeSub sub[MAX_PIPENUM];
+    VideoPipe videoPipe[MAX_PIPENUM];
+    //AudioPipe audioPipe;
+    guint8 index;
+    guint8 ch;
 } PipeMain;
 
 void mylog( int opt, const char* _szfmt, ... )
@@ -170,6 +207,7 @@ static void destroy(void)
     guint8 i;
     __LOG(LOG_EMERG, "[GST][%s:%d] destroy!!", _FILE_, __LINE__);
     is_interrupted = 1;
+    sigflag = 0;
 #if 0
     for(i=0;i<MAX_CAM;i++)
     {
@@ -228,11 +266,13 @@ static void print_tag(const GstTagList * list, const gchar * tag, gpointer unuse
 static gboolean my_bus_callback(GstBus *bus, GstMessage *message, gpointer data)
 {
     PipeMain *info = (PipeMain *)data;
+    static guint8 cam_cnt = 0;
 
     if(GST_MESSAGE_TYPE(message) == GST_MESSAGE_QOS)
         return TRUE;
         
-    printf("Got %s message\n", GST_MESSAGE_TYPE_NAME(message));
+    //printf("Got %s message\n", GST_MESSAGE_TYPE_NAME(message));
+    __LOG(LOG_DEBUG, "[GST][%s:%d] Got %s message", _FILE_, __LINE__, GST_MESSAGE_TYPE_NAME(message));
 
     switch(GST_MESSAGE_TYPE(message)) 
     {
@@ -240,8 +280,10 @@ static gboolean my_bus_callback(GstBus *bus, GstMessage *message, gpointer data)
         {
             GstState old_state, new_state, pending_state;
             gst_message_parse_state_changed(message, &old_state, &new_state, &pending_state);
-            printf("[GST][%s:%d] Pipeline state changed from %s to %s\n", __FILE__, __LINE__, \
+            //__LOG(LOG_NOTICE, "[GST][%s:%d] Pipeline state changed from %s to %s", __FILE__, __LINE__, \
 				gst_element_state_get_name(old_state), gst_element_state_get_name(new_state));
+            g_print ("Pipeline state changed from %s to %s\n", gst_element_state_get_name(old_state), gst_element_state_get_name(new_state));
+
             break;
         }
 
@@ -250,17 +292,36 @@ static gboolean my_bus_callback(GstBus *bus, GstMessage *message, gpointer data)
             GError *err;
             gchar *debug;
             gst_message_parse_error(message, &err, &debug);
+            __LOG(LOG_ERR, "[GST][%s:%d] error message : %s\n", __FILE__, __LINE__, err->message);
+            __LOG(LOG_ERR, "[GST][%s:%d] error debug : %s\n", __FILE__, __LINE__, (debug)? debug : "none");
             printf("Error : %s\n", err->message);
             printf("Debug : %s\n", (debug)? debug : "none");
             g_error_free(err);
             g_free(debug);
-            destroy();
+            //destroy();
+            gst_element_send_event(pipeline[info->index], gst_event_new_eos());
             break;
         }
 
         case GST_MESSAGE_EOS:
         {
-            destroy();
+            //printf("GST_MESSAGE_EOS (index:%d sigflag:%d)\n", info->index, sigflag);
+            __LOG(LOG_NOTICE, "[GST][%s:%d] GST_MESSAGE_EOS (index:%d sigflag:%d)", _FILE_, __LINE__, info->index, sigflag);
+            if(sigflag)
+            {
+                cam_cnt++;
+                if(cam_cnt >= MAX_CAM) destroy();
+            }
+            else
+            {
+                gst_element_set_state(pipeline[info->index], GST_STATE_READY);
+                //gst_element_get_state(pipeline[info->index], NULL, NULL, GST_CLOCK_TIME_NONE);
+                //gst_element_seek(pipeline[info->index], 1.0, GST_FORMAT_TIME, GST_SEEK_FLAG_FLUSH, GST_SEEK_TYPE_SET, 0, GST_SEEK_TYPE_SET, -1);
+                //gst_element_set_state(pipeline[info->index], GST_STATE_NULL);
+                gst_element_set_state(pipeline[info->index], GST_STATE_PLAYING);
+                //change_file_datetime(NULL);
+            }
+
             break;
         }
 
@@ -336,7 +397,7 @@ static gboolean my_bus_callback(GstBus *bus, GstMessage *message, gpointer data)
 
         case GST_MESSAGE_TAG: 
         {
-#if 0
+#if 1
             GstTagList *tags = NULL;
             gst_message_parse_tag (message, &tags);
             g_print ("Got tags from element %s\n", GST_OBJECT_NAME (message->src));
@@ -479,44 +540,6 @@ static gboolean changeFPS(gpointer data)
     return TRUE;
 }
 
-
-static gboolean change_file_name(gpointer data) 
-{
-    CustomData *info = (CustomData *)data;
-    GDateTime *datetime = g_date_time_new_now_local();
-    gchar *date_str;
-#ifdef FILENAME_SEC_ZERO
-    gint tmp = g_date_time_get_minute(datetime);
-
-    if(tmp == info->min)
-        return TRUE;
-
-    info->min = tmp;
-    //gchar *date_str = g_date_time_format(datetime, "%Y%m%d_%H%M%S");
-    
-    if(info->file_name == NULL) 
-    {
-        date_str = g_date_time_format(datetime, "%Y%m%d_%H%M%S");
-        info->file_name = g_strdup_printf("output_%s-ch%d.mp4", date_str, info->ch);
-        //__LOG(LOG_NOTICE, "[GST][%s:%d] file_name : %s", _FILE_, __LINE__, info->file_name);
-        __LOG(LOG_NOTICE, "[GST][%s:%d] date : %s file_name : %s", _FILE_, __LINE__, date_str, info->file_name);
-    }
-    else
-    {
-        date_str = g_date_time_format(datetime, "%Y%m%d_%H%M00");
-        info->file_name = g_strdup_printf("output_%s-ch%d.mp4", date_str, info->ch);
-    }
-#else
-    date_str = g_date_time_format(datetime, "%Y%m%d_%H%M%S");
-    info->file_name = g_strdup_printf("output_%s-ch%d.mp4", date_str, info->ch);
-    //__LOG(LOG_NOTICE, "[GST][%s:%d] file_name : %s", _FILE_, __LINE__, info->file_name);
-#endif  //FILENAME_SEC_ZERO
-    __LOG(LOG_NOTICE, "[GST][%s:%d] %s (file_name : %s)", _FILE_, __LINE__, __FUNCTION__, info->file_name);
-    g_date_time_unref(datetime);
-    g_free(date_str);
-
-    return TRUE;
-}
 // appsink의 "new-sample" 시그널 처리 함수
 static GstFlowReturn new_sample_handler(GstElement *sink, gpointer userData) {
     GstSample *sample;
@@ -554,18 +577,17 @@ static GstFlowReturn new_sample_handler(GstElement *sink, gpointer userData) {
 
         case RECORDING:
             {
-#ifdef JHW_TEST
-                path = g_strdup_printf("%s", info->file_name);
-#else
-                path = g_strdup_printf("%s/%s", FILE_PATH, info->file_name);
-#endif
+                path = g_strdup_printf("%s%s.mp4", FILE_PATH, info->file_name);
+                //path = g_strdup_printf("%s%s_%s-ch%d.mp4", FILE_PATH, ohtName, fileDateTime, info->ch);
+                //path = g_strdup_printf("%s%s_%s_%s-%d.mp4", FILE_PATH, info->ohtName, info->date, info->time, info->ch);
+
                 //g_print("path : %s\n", path);
                 file = fopen(path, "ab");
                 if (file) {
                     fwrite(map.data, 1, map.size, file);
                     fclose(file);
                 } else {
-                    __LOG(LOG_ERR, "[GST][%s:%d] %s file open error", _FILE_, __LINE__, info->file_name);
+                    __LOG(LOG_ERR, "[GST][%s:%d] %s file open error", _FILE_, __LINE__, path);
                 } 
             }
             break;
@@ -595,18 +617,17 @@ static GstFlowReturn new_sample_handler(GstElement *sink, gpointer userData) {
                 }
                 __LOG(LOG_DEBUG, "[GST][%s:%d] captureCnt %d captureMax %d", _FILE_, __LINE__, info->captureCnt, info->captureMax);
 
-#ifdef JHW_TEST
-                path = g_strdup_printf("%s_%d.jpg", info->file_name, info->captureCnt++);
-#else
-                path = g_strdup_printf("%s/%s_%d.jpg", FILE_PATH, info->file_name, info->captureCnt++);
-#endif
+                path = g_strdup_printf("%s%s-%d.jpg", FILE_PATH, info->file_name, info->captureCnt++);
+                //path = g_strdup_printf("%s%s_%s_%s-%d-%d.jpg", FILE_PATH, info->ohtName, info->date, info->time, info->ch, info->captureCnt++);
+                //path = g_strdup_printf("%s%s_%s-ch%d-%d.jpg", FILE_PATH, ohtName, fileDateTime, info->ch, info->captureCnt++);
+
                 //g_print("path : %s\n", path);
                 file = fopen(path, "ab");
                 if (file) {
                     fwrite(map.data, 1, map.size, file);
                     fclose(file);
                 } else {
-                    __LOG(LOG_ERR, "[GST][%s:%d] %s file open error", _FILE_, __LINE__, info->file_name);
+                    __LOG(LOG_ERR, "[GST][%s:%d] %s file open error", _FILE_, __LINE__, path);
                 }
             }
             break;
@@ -623,11 +644,87 @@ static GstFlowReturn new_sample_handler(GstElement *sink, gpointer userData) {
     return GST_FLOW_OK;
 }
 
+static gboolean on_samples_selected(GstElement *element, GstSample *sample, gpointer user_data) {
+
+    __LOG(LOG_NOTICE, "[GST][%s:%d] %s", _FILE_, __LINE__, __FUNCTION__);
+
+    return GST_FLOW_OK;
+}
+
+static gboolean change_file_datetime(gpointer data) 
+{
+    //CustomData *info = (CustomData *)data;
+    GDateTime *datetime = g_date_time_new_now_local();
+
+    fileDateTime = g_date_time_format(datetime, "%Y%m%d_%H%M%S");
+    __LOG(LOG_NOTICE, "[GST][%s:%d] %s (fileDateTime : %s)", _FILE_, __LINE__, __FUNCTION__, fileDateTime);
+    g_date_time_unref(datetime);
+
+    return TRUE;
+}
+
+static gboolean change_file_name(gpointer data) 
+{
+    CustomData *info = (CustomData *)data;
+    GDateTime *datetime = g_date_time_new_now_local();
+    gchar *date_str;
+#ifdef FILENAME_SEC_ZERO
+    gint tmp = g_date_time_get_minute(datetime);
+
+    if(tmp == info->min)
+        return TRUE;
+
+    info->min = tmp;
+    //gchar *date_str = g_date_time_format(datetime, "%Y%m%d_%H%M%S");
+    
+    if(info->file_name == NULL) 
+    {
+        date_str = g_date_time_format(datetime, "%Y%m%d_%H%M%S");
+        info->file_name = g_strdup_printf("output_%s-ch%d.mp4", date_str, info->ch);
+        //__LOG(LOG_NOTICE, "[GST][%s:%d] file_name : %s", _FILE_, __LINE__, info->file_name);
+        __LOG(LOG_NOTICE, "[GST][%s:%d] date : %s file_name : %s", _FILE_, __LINE__, date_str, info->file_name);
+    }
+    else
+    {
+        date_str = g_date_time_format(datetime, "%Y%m%d_%H%M00");
+        info->file_name = g_strdup_printf("output_%s-ch%d.mp4", date_str, info->ch);
+    }
+#else
+    //gst_element_send_event(info->mux, gst_event_new_eos());
+    date_str = g_date_time_format(datetime, "%Y%m%d_%H%M%S");
+    info->file_name = g_strdup_printf("%s_%s-ch%d", ohtName, date_str, info->ch);
+    //__LOG(LOG_NOTICE, "[GST][%s:%d] file_name : %s", _FILE_, __LINE__, info->file_name);
+#endif  //FILENAME_SEC_ZERO
+    __LOG(LOG_NOTICE, "[GST][%s:%d] %s (file_name : %s)", _FILE_, __LINE__, __FUNCTION__, info->file_name);
+    g_date_time_unref(datetime);
+    g_free(date_str);
+
+    return TRUE;
+}
+
+static gboolean sendEOS(gpointer data) 
+{
+    CustomData *info = (CustomData *)data;
+    //PipeMain *info = (PipeMain *)data;
+    __LOG(LOG_NOTICE, "[GST][%s:%d] %s (index : %d, ch : %d)", _FILE_, __LINE__, __FUNCTION__, info->index, info->ch);
+
+    //gst_element_send_event(pipeline[info->index], gst_event_new_eos());
+    gst_pad_send_event(info->bin_video_pads, gst_event_new_eos());
+    gst_pad_send_event(info->bin_audio_pads, gst_event_new_eos());
+    //gst_pad_send_event(info->sink_pads, gst_event_new_eos());
+    //gst_pad_send_event(info->mux_src_pads, gst_event_new_eos());
+
+    //gst_element_set_state(pipeline[info->index], GST_STATE_READY);
+    //gst_element_set_state(pipeline[info->index], GST_STATE_PLAYING);
+
+    return TRUE;
+}
+
 static GstFlowReturn new_preroll_handler(GstElement *sink, gpointer data) {
     // Preroll frame 처리 작업 추가 가능
     CustomData *info = (CustomData *)data;
     gchar *sink_name;
-
+    info->appsink = sink;
     //g_print("Preroll frame\n");
     //__LOG(LOG_NOTICE, "[GST][%s:%d] %s (file_name : %s)", _FILE_, __LINE__, __FUNCTION__, info->file_name);
     sink_name = gst_object_get_name(GST_OBJECT(sink));
@@ -692,15 +789,25 @@ static GstFlowReturn new_preroll_handler(GstElement *sink, gpointer data) {
     __LOG(LOG_NOTICE, "[GST][%s:%d] sink_name:%s channel:%d", _FILE_, __LINE__, sink_name, info->ch);
     g_free (sink_name);
 
+
     if(info->mode == RECORDING)
     {
+        //change_file_datetime(NULL);
+#if 1
         change_file_name(info);
 #ifdef FILENAME_SEC_ZERO
         g_timeout_add(100, (GSourceFunc)change_file_name, info);
         //g_timeout_add_seconds(FILE_SAVE_DURATION, (GSourceFunc)change_file_name, info);
 #else
+#if !defined(MP4_TEST_L) && !defined(MP_TEST_R)
         g_timeout_add_seconds(FILE_SAVE_DURATION, (GSourceFunc)change_file_name, info);
 #endif
+#endif
+
+#endif
+
+        //g_timeout_add_seconds(FILE_SAVE_DURATION, (GSourceFunc)sendEOS, info);
+        //g_timeout_add_seconds(FILE_SAVE_DURATION, (GSourceFunc)change_file_name, info);
     }
 
     return GST_FLOW_OK;
@@ -746,8 +853,10 @@ void sigHandler(int sig) {
     else if(sig == SIGKILL) __LOG(LOG_NOTICE, "[GST][%s:%d] SIGKILL", _FILE_, __LINE__);
     else if(sig == SIGTERM) __LOG(LOG_NOTICE, "[GST][%s:%d] SIGTERM", _FILE_, __LINE__);
     ipc_clear();
-    destroy();
-    //for(i=0; i<MAX_CAM; i++) gst_element_send_event(pipeline[i], gst_event_new_eos());
+    //destroy();
+    sigflag = 1;
+    for(i=0; i<MAX_CAM; i++) gst_element_send_event(pipeline[i], gst_event_new_eos());
+    
 
 	return;
 }
@@ -799,7 +908,7 @@ static gboolean timeout(GstRTSPServer *server)
 {
   GstRTSPSessionPool *pool;
 
-   __LOG(LOG_DEBUG, "[GST][%s:%d] rtsp session pool", _FILE_, __LINE__);
+   //__LOG(LOG_DEBUG, "[GST][%s:%d] rtsp session pool", _FILE_, __LINE__);
 
   pool = gst_rtsp_server_get_session_pool (server);
   gst_rtsp_session_pool_cleanup (pool);
@@ -866,6 +975,56 @@ static void pad_removed_handler (GstElement * src, GstPad * new_pad, gpointer da
     return;
 }
 
+static void client_closed(GstRTSPClient* client, gpointer user_data)
+{
+	CustomData *info = (CustomData*)user_data;
+	const gchar *client_ip = gst_rtsp_connection_get_ip(gst_rtsp_client_get_connection(client));
+
+    __LOG(LOG_NOTICE, "[RTSP][%s:%d] Disconnect - IP : %s", _FILE_, __LINE__, client_ip);
+
+    g_free(client_ip);
+	//if(stream->disconnect)
+		//stream->disconnect(ip_address); 
+}
+
+static gboolean handle_client_connected(GstRTSPServer *server, GstRTSPClient *client, gpointer user_data) 
+{
+    // This function is called when a new client is connected to the RTSP server.
+    // You can handle the client connection here.
+    const gchar *client_ip = gst_rtsp_connection_get_ip(gst_rtsp_client_get_connection(client));
+    //GstRTSPUrl *url = gst_rtsp_connection_get_url(gst_rtsp_client_get_connection(client));
+    //GstRTSPMountPoints *mount = gst_rtsp_client_get_mount_points(client);
+    //GstRTSPContext  *path = gst_rtsp_client_get_rtsp_context(client);
+    //GstRTSPMountPoints *mounts = gst_rtsp_server_get_mount_points(server);
+
+    __LOG(LOG_NOTICE, "[RTSP][%s:%d] Connect - IP : %s", _FILE_, __LINE__, client_ip);
+    //__LOG(LOG_NOTICE, "[RTSP][%s:%d] Connect - IP : %s", _FILE_, __LINE__, url->host);
+    //__LOG(LOG_NOTICE, "[RTSP][%s:%d] Connect - IP : %s", _FILE_, __LINE__, url->abspath);
+    //__LOG(LOG_NOTICE, "[RTSP][%s:%d] Connect - IP : %d", _FILE_, __LINE__, url->port);
+
+    g_signal_connect(client, "closed", (GCallback)(client_closed), user_data);
+
+    g_free(client_ip);
+    // Initialize session for the new client
+    
+    return TRUE;
+}
+
+static gchararray format_location(GstElement *sink, guint arg0, gpointer data)
+{
+    CustomData *info = (CustomData *)data;
+    GDateTime *datetime = g_date_time_new_now_local();
+    gchar *date_str = g_date_time_format(datetime, "%Y%m%d_%H%M%S");
+    gchararray file_name = g_strdup_printf("%s_%s-ch%d.mp4", ohtName, date_str, info->ch);
+
+    __LOG(LOG_NOTICE, "[GST][%s:%d] file_name : %s", _FILE_, __LINE__, file_name);
+
+    g_date_time_unref(datetime);
+    g_free(date_str);
+
+    return file_name;
+}
+
 gint setRtspPipe(gpointer user_data)
 {
   //GgstLoop *loop;
@@ -878,7 +1037,7 @@ gint setRtspPipe(gpointer user_data)
   info->appsrc = gst_element_factory_make("appsrc", srcName);
 
   //gst_init (&argc, &argv);
-  //g_print("info.ch:%d info.filename:%d\n", info->ch, info->file_name);
+  //g_print("info.ch:%d info.filename:%d\n", info->ch, info->file_name); 
   __LOG(LOG_NOTICE, "[RTSP][%s:%d] %s start", _FILE_, __LINE__, __FUNCTION__);
 
   //GgstLoop *loop = g_main_loop_new (NULL, FALSE);
@@ -915,6 +1074,7 @@ gint setRtspPipe(gpointer user_data)
   /* notify when our media is ready, This is called whenever someone asks for
    * the media and a new pipeline with our appsrc is created */
   g_signal_connect (factory, "media-configure", (GCallback) media_configure, info);
+  //g_signal_connect (factory, "client-connected", (GCallback) handle_client_connected, info);
   //g_signal_connect (factory, "media-constructed", (GCallback) media_constructed, info);
   //g_signal_connect(factory, "pad-added", G_CALLBACK(pad_added_handler), NULL);
   //g_signal_connect(factory, "pad-removed", G_CALLBACK(pad_removed_handler), NULL);
@@ -1014,33 +1174,41 @@ failed:
   }
 }
 
-static void client_closed(GstRTSPClient* client, gpointer user_data)
+static gboolean eos_callback(GstAppSink *appsink, gpointer user_data) 
 {
-	CustomData *info = (CustomData*)user_data;
-	const gchar *ip_address = gst_rtsp_connection_get_ip(gst_rtsp_client_get_connection(client));
+    CustomData *info = (CustomData *)user_data;
 
-    __LOG(LOG_NOTICE, "[RTSP][%s:%d] Disconnect - IP : %s", _FILE_, __LINE__, ip_address);
-	//if(stream->disconnect)
-		//stream->disconnect(ip_address); 
-}
+    __LOG(LOG_NOTICE, "[RTSP][%s:%d] %s (ch:%d)", _FILE_, __LINE__, __FUNCTION__, info->ch);
+    //gst_element_set_state(info->mux, GST_STATE_PAUSED);
+#if 0
+    gst_element_get_state(info->mux, NULL, NULL, GST_CLOCK_TIME_NONE);
+    GstStateChangeReturn result = gst_element_get_state(info->mux, NULL, NULL, GST_CLOCK_TIME_NONE);
 
-static gboolean handle_client_connected(GstRTSPServer *server, GstRTSPClient *client, gpointer user_data) {
-    // This function is called when a new client is connected to the RTSP server.
-    // You can handle the client connection here.
-    const gchar *ip_address = gst_rtsp_connection_get_ip(gst_rtsp_client_get_connection(client));
-
-    __LOG(LOG_NOTICE, "[RTSP][%s:%d] Connect - IP : %s", _FILE_, __LINE__, ip_address);
-
-    g_signal_connect(client, "closed", (GCallback)(client_closed), user_data);
+    // Check the result
+    if (result == GST_STATE_CHANGE_FAILURE) {
+        g_printerr("Failed to change state to PAUSED.\n");
+        // Handle the failure case if needed
+    } else if (result == GST_STATE_CHANGE_ASYNC) {
+        g_print("State change is still asynchronous.\n");
+        // Handle the asynchronous case if needed
+    } else if (result == GST_STATE_CHANGE_SUCCESS) {
+        g_print("State change to PAUSED completed.\n");
+        // Continue with the rest of the code
+    }
     
-    // Initialize session for the new client
-    
+#endif
+    GstState state;
+    gst_element_get_state(pipeline[info->ch/2], &state, NULL, GST_CLOCK_TIME_NONE);
+    g_message("to : %s", gst_element_state_get_name(state));
+    //gst_element_set_state(appsink, GST_STATE_NULL);
+    //gst_element_set_state(appsink, GST_STATE_PLAYING);
+    //gst_element_set_state(pipeline[info->ch/2], GST_STATE_NULL);
+    //gst_element_set_state(pipeline[info->ch/2], GST_STATE_NULL);
+    //change_file_name(user_data);
+    //gst_element_set_state(pipeline[info->ch/2], GST_STATE_PLAYING);
+    __LOG(LOG_NOTICE, "[RTSP][%s:%d] %s end", _FILE_, __LINE__, __FUNCTION__);
+    //change_file_datetime(NULL);
     return TRUE;
-}
-
-static gboolean eos_callback(GstAppSink *appsink, gpointer user_data) {
-    g_print("%s\n", __FUNCTION__);
-    return FALSE;
 }
 
 static gboolean underrun_callback(GstAppSink *appsink, gpointer user_data) {
@@ -1064,7 +1232,8 @@ static gboolean pushing_callback(GstAppSink *appsink, gpointer user_data) {
 }
 
 void cleanup() {
-    g_message("Cleaning up GStreamer...");
+    //g_message("Cleaning up GStreamer...");
+    __LOG(LOG_CRIT, "[GST][%s:%d] Cleaning up GStreamer", _FILE_, __LINE__);
     gst_deinit();  // GStreamer 해제
 }
 
@@ -1083,7 +1252,7 @@ int rtsp_server_start()
 
     g_timeout_add_seconds (3, (GSourceFunc) timeout, rtspServer);
 
-#if 0
+#ifdef RTSP_AUTH_ENABLE
     /* make a new authentication manager */
     GstRTSPAuth *auth = gst_rtsp_auth_new ();
 
@@ -1250,16 +1419,19 @@ int main(int argc, char *argv[]) {
     guint8 i = 0, k = 0, idx = 0, tdx = 0;
     GstCaps *caps;
     GstStateChangeReturn ret;
+    ohtName = g_strdup_printf("%s", "output");
 
+#if defined(RTSP_L_ENABLE) || defined(RTSP_R_ENABLE)
     rtsp_server_start();
-
+#endif
 
     // 파이프라인 생성
 
     do
     {
-        __LOG(LOG_NOTICE, "[GST][%s:%d] pipeline%d", _FILE_, __LINE__, i);
-        main[i].pipeline = gst_pipeline_new(g_strdup_printf("pipeline%d", i));
+        __LOG(LOG_NOTICE, "[GST][%s:%d] Main pipeline(%d) create", _FILE_, __LINE__, i);
+        pipeline[i] = gst_pipeline_new(g_strdup_printf("pipeline%d", i));
+#if 1
         // 요소 생성
         main[i].src = gst_element_factory_make("v4l2src", "src");
         //GstElement *src = gst_element_factory_make("videotestsrc", "src");
@@ -1267,7 +1439,7 @@ int main(int argc, char *argv[]) {
         main[i].capsfilter = gst_element_factory_make("capsfilter", "caps");
         main[i].tee = gst_element_factory_make("tee", "tee");
 
-        if (!main[i].pipeline || !main[i].src || !main[i].capsfilter || !main[i].tee)
+        if (!pipeline[i] || !main[i].src || !main[i].capsfilter || !main[i].tee)
         {
             __LOG(LOG_CRIT, "[GST][%s:%d] Main pipe create error", _FILE_, __LINE__);
         }
@@ -1275,38 +1447,312 @@ int main(int argc, char *argv[]) {
         // 요소가 생성되지 않은 경우 에러 처리
 
         // 파이프라인에 요소 추가
-        gst_bin_add_many(GST_BIN(main[i].pipeline), main[i].src, main[i].capsfilter, main[i].convert, main[i].tee, NULL);
+        gst_bin_add_many(GST_BIN(pipeline[i]), main[i].src, main[i].capsfilter, main[i].convert, main[i].tee, NULL);
 
+        __LOG(LOG_NOTICE, "[GST][%s:%d] Main pipe link start", _FILE_, __LINE__);
         // 요소 연결
         if (!gst_element_link_many(main[i].src, main[i].capsfilter, main[i].convert, main[i].tee, NULL)) {
             __LOG(LOG_CRIT, "[GST][%s:%d] pipe[%d] link error", _FILE_, __LINE__, i);
-            gst_object_unref(main[i].pipeline);
+            gst_object_unref(pipeline[i]);
             return -1;
         }
+#endif
 
-        //g_signal_connect(src, "pad-added", G_CALLBACK(pad_added_handler), NULL);
-        //g_signal_connect(src, "pad-removed", G_CALLBACK(pad_removed_handler), NULL);
-
-#ifdef FILE_L_ENABLE
+#ifdef AUDIO_TEST
         do
         {
-            idx = FILE0_L;
-            tdx = idx+i*MAX_PIPENUM;
-            main[i].sub[idx].videorate = gst_element_factory_make("videorate", g_strdup_printf("videorate%d", tdx));
-            main[i].sub[idx].crop = gst_element_factory_make("videocrop", g_strdup_printf("videocrop%d", tdx));
-            main[i].sub[idx].encoder = gst_element_factory_make("vpuenc_h264", g_strdup_printf("vpuenc_h264%d", tdx));
-            main[i].sub[idx].queue = gst_element_factory_make("queue", g_strdup_printf("queue%d", tdx));
-            main[i].sub[idx].sink = gst_element_factory_make("appsink", g_strdup_printf("appsink%d", tdx));
-
-            if (!main[i].sub[idx].videorate || !main[i].sub[idx].crop || !main[i].sub[idx].encoder || !main[i].sub[idx].queue || !main[i].sub[idx].sink)
+            GstElement *audioSrc = gst_element_factory_make("audiotestsrc", "audio-source");
+            GstElement *audioConvert = gst_element_factory_make("audioconvert", "audio-convert");
+            GstElement *audioResample = gst_element_factory_make("audioresample", "audio-resample");
+            GstElement *audioEncode = gst_element_factory_make("lamemp3enc", "audio-encode");
+            GstElement *audioParse = gst_element_factory_make("mpegaudioparse", "audio-parse");
+            GstElement *mux = gst_element_factory_make("mp4mux", "audio-mux");
+            GstElement *filesink = gst_element_factory_make("filesink", "audio-sink");
+            
+            if (!audioSrc || !audioConvert || !audioResample || !audioEncode || !audioParse || !mux || !filesink )
+            {
+                __LOG(LOG_CRIT, "[GST][%s:%d] pipe[%d] link error", _FILE_, __LINE__, idx);
+                //gst_object_unref(pipeline[i]);
+                break;
+            }
+            g_object_set(filesink, "location", "test.mp3", NULL);
+            gst_bin_add_many(GST_BIN(pipeline[i]), audioSrc, audioConvert, audioResample, audioEncode, audioParse, mux, filesink, NULL);
+            if (!gst_element_link_many(audioSrc, audioConvert, audioResample, audioEncode, filesink, NULL))
             {
                 __LOG(LOG_CRIT, "[GST][%s:%d] pipe[%d] link error", _FILE_, __LINE__, idx);
                 //gst_object_unref(pipeline[i]);
                 break;
             }
 
-            gst_bin_add_many(GST_BIN(main[i].pipeline), main[i].sub[idx].crop, main[i].sub[idx].queue, main[i].sub[idx].videorate, main[i].sub[idx].encoder, main[i].sub[idx].sink, NULL);
-            if (!gst_element_link_many(main[i].tee, main[i].sub[idx].crop, main[i].sub[idx].queue, main[i].sub[idx].videorate, main[i].sub[idx].encoder, main[i].sub[idx].sink, NULL)) 
+        } while (0);
+        
+#endif
+        //g_signal_connect(src, "pad-added", G_CALLBACK(pad_added_handler), NULL);
+        //g_signal_connect(src, "pad-removed", G_CALLBACK(pad_removed_handler), NULL);
+
+#ifdef MP4_TEST_L
+        do
+        {
+            idx = FILE0_L;
+            tdx = idx+i*MAX_PIPENUM;
+            __LOG(LOG_NOTICE, "[GST][%s:%d] videoPipe pipe(%d) create start", _FILE_, __LINE__, tdx);
+
+            main[i].videoPipe[idx].videorate = gst_element_factory_make("videorate", g_strdup_printf("videorate%d", tdx));
+            main[i].videoPipe[idx].crop = gst_element_factory_make("videocrop", g_strdup_printf("videocrop%d", tdx));
+            main[i].videoPipe[idx].encoder = gst_element_factory_make("vpuenc_h264", g_strdup_printf("vpuenc_h264%d", tdx));
+            main[i].videoPipe[idx].queue = gst_element_factory_make("queue", g_strdup_printf("queue%d", tdx));
+            main[i].videoPipe[idx].queue2 = gst_element_factory_make("queue2", g_strdup_printf("queue2_%d", tdx));
+            main[i].videoPipe[idx].parse = gst_element_factory_make("h264parse", g_strdup_printf("parse%d", tdx));
+            main[i].videoPipe[idx].mux = gst_element_factory_make("mp4mux", g_strdup_printf("mux%d", tdx));
+            main[i].videoPipe[idx].sink = gst_element_factory_make("appsink", g_strdup_printf("appsink%d", tdx));
+            //main[i].videoPipe[idx].sink = gst_element_factory_make("filesink", g_strdup_printf("appsink%d", tdx));
+            //main[i].videoPipe[idx].sink = gst_element_factory_make("splitmuxsink", g_strdup_printf("appsink%d", tdx));
+
+            if (!main[i].videoPipe[idx].videorate || !main[i].videoPipe[idx].crop || !main[i].videoPipe[idx].encoder || !main[i].videoPipe[idx].queue \
+                || !main[i].videoPipe[idx].mux || !main[i].videoPipe[idx].parse || !main[i].videoPipe[idx].sink)
+            {
+                __LOG(LOG_CRIT, "[GST][%s:%d] video pipe[%d] make error", _FILE_, __LINE__, idx);
+                //gst_object_unref(pipeline[i]);
+                break;
+            }
+            printf("10\n");
+            gst_bin_add_many(GST_BIN(pipeline[i]), main[i].videoPipe[idx].crop, main[i].videoPipe[idx].queue, main[i].videoPipe[idx].videorate, \
+                    main[i].videoPipe[idx].encoder, main[i].videoPipe[idx].parse, NULL);
+            if (!gst_element_link_many(main[i].tee, main[i].videoPipe[idx].crop, main[i].videoPipe[idx].queue, main[i].videoPipe[idx].videorate, \
+                    main[i].videoPipe[idx].encoder, main[i].videoPipe[idx].parse, NULL)) 
+            {
+                __LOG(LOG_CRIT, "[GST][%s:%d] video pipe[%d] link error", _FILE_, __LINE__, idx);
+                //gst_object_unref(pipeline[i]);
+                break;
+            }
+
+            g_object_set(main[i].videoPipe[idx].mux, "faststart", TRUE, NULL);
+            g_object_set(main[i].videoPipe[idx].mux, "emit-signals", TRUE, NULL);
+            g_object_set(main[i].videoPipe[idx].mux, "trak-timescale", 30, NULL);
+            g_signal_connect(main[i].videoPipe[idx].mux, "samples-selected", G_CALLBACK(on_samples_selected), NULL);
+
+            if(idx%2 == 0)
+                g_object_set(main[i].videoPipe[idx].crop, "top", 0, "bottom", 0, "left", _WIDTH, "right", 0, NULL);
+            else
+                g_object_set(main[i].videoPipe[idx].crop, "top", 0, "bottom", 0, "left", 0, "right", _WIDTH, NULL);
+
+            g_object_set(main[i].videoPipe[idx].videorate, "max-rate", FILE_FPS, NULL);
+            g_object_set(main[i].videoPipe[idx].videorate, "drop-only", FALSE, NULL);
+            g_object_set(main[i].videoPipe[idx].queue, "max-size-bytes", 0, "max-size-time", 0, "max-size-buffers", 60, "leaky", 1, NULL);
+            //g_object_set(main[i].videoPipe[idx].queue, "leaky", 2, NULL);
+            //g_object_set(main[i].videoPipe[idx].queue2, "max-size-buffers", 60, NULL);
+            //g_object_set(main[i].videoPipe[idx].queue2, "bitrate", FILE_BITRATE, NULL);
+            //g_object_set(main[i].videoPipe[idx].queue2, "avg-in-rate", FILE_BITRATE, NULL);
+            g_object_set(main[i].videoPipe[idx].encoder, "bitrate", FILE_BITRATE, NULL);
+            //g_object_set(main[i].videoPipe[idx].sink, "location", g_strdup_printf("test%d.mp4", i), NULL);
+            g_object_set(main[i].videoPipe[idx].sink, "emit-signals", TRUE, "sync", FALSE, NULL);
+            g_signal_connect(main[i].videoPipe[idx].sink, "new-sample", G_CALLBACK(new_sample_handler), &customData[tdx]);
+            g_signal_connect(main[i].videoPipe[idx].sink, "new-preroll", G_CALLBACK(new_preroll_handler), &customData[tdx]);
+            g_signal_connect(main[i].videoPipe[idx].sink, "eos", G_CALLBACK(eos_callback), &customData[tdx]);
+            //g_object_set(main[i].videoPipe[idx].sink, "max-size-time", (FILE_SAVE_DURATION*GST_SECOND), NULL);
+            //g_object_set(main[i].videoPipe[idx].sink, "location", g_strdup_printf("test%d.mp4", i), NULL);
+            //g_signal_connect(main[i].videoPipe[idx].sink, "new-preroll", G_CALLBACK(format_location), &customData[tdx]);
+
+            customData[tdx].index = tdx;
+            customData[tdx].enc = main[i].videoPipe[idx].encoder;
+            customData[tdx].vr = main[i].videoPipe[idx].videorate;
+            customData[tdx].ch = (idx)%2 + i*2;
+            customData[tdx].mode = RECORDING;
+            customData[tdx].file_name = NULL;
+            printf("11\n");
+            main[i].videoPipe[idx].audioPipe.src = gst_element_factory_make("audiotestsrc", "audio-source");
+            main[i].videoPipe[idx].audioPipe.convert = gst_element_factory_make("audioconvert", "audio-convert");
+            main[i].videoPipe[idx].audioPipe.resample = gst_element_factory_make("audioresample", "audio-resample");
+            main[i].videoPipe[idx].audioPipe.encoder = gst_element_factory_make("lamemp3enc", "audio-encode");
+            main[i].videoPipe[idx].audioPipe.parse = gst_element_factory_make("mpegaudioparse", "audio-parse");
+            main[i].videoPipe[idx].audioPipe.queue = gst_element_factory_make("queue2", "audio-queue");
+            if (!main[i].videoPipe[idx].audioPipe.src || !main[i].videoPipe[idx].audioPipe.convert || !main[i].videoPipe[idx].audioPipe.resample \
+                    || !main[i].videoPipe[idx].audioPipe.encoder || !main[i].videoPipe[idx].audioPipe.parse || !main[i].videoPipe[idx].audioPipe.queue)
+            {
+                __LOG(LOG_CRIT, "[GST][%s:%d] audio pipe[%d] create error", _FILE_, __LINE__, idx);
+                //gst_object_unref(pipeline[i]);
+                break;
+            }
+            printf("12\n");
+            gst_bin_add_many(GST_BIN(pipeline[i]), main[i].videoPipe[idx].audioPipe.src, main[i].videoPipe[idx].audioPipe.convert, main[i].videoPipe[idx].audioPipe.resample, \
+                        main[i].videoPipe[idx].audioPipe.encoder, main[i].videoPipe[idx].audioPipe.parse, NULL);
+            if (!gst_element_link_many(main[i].videoPipe[idx].audioPipe.src, main[i].videoPipe[idx].audioPipe.convert, main[i].videoPipe[idx].audioPipe.resample, \
+                        main[i].videoPipe[idx].audioPipe.encoder, NULL))
+            {
+                __LOG(LOG_CRIT, "[GST][%s:%d] audio pipe[%d] link error", _FILE_, __LINE__, idx);
+                //gst_object_unref(pipeline[i]);
+                break;
+            }
+            printf("13\n");
+            customData[tdx].mux = main[i].videoPipe[idx].mux;
+            customData[tdx].mux = main[i].videoPipe[idx].sink;
+            printf("1\n");
+            main[i].videoPipe[idx].bins = gst_bin_new ("bin0");
+            gst_bin_add_many(GST_BIN(main[i].videoPipe[idx].bins), main[i].videoPipe[idx].mux, main[i].videoPipe[idx].sink, NULL);
+#if 1
+            if (!gst_element_link_many(main[i].videoPipe[idx].mux, main[i].videoPipe[idx].sink, NULL))
+            {
+                __LOG(LOG_CRIT, "[GST][%s:%d] bin[%d] link error", _FILE_, __LINE__, idx);
+                //gst_object_unref(pipeline[i]);
+                break;
+            }
+#else
+            if(gst_pad_link(gst_element_get_static_pad(main[i].videoPipe[idx].mux, "src"), gst_element_get_static_pad(main[i].videoPipe[idx].sink, "sink")) != GST_PAD_LINK_OK)
+            {
+                __LOG(LOG_CRIT, "[GST][%s:%d] sink pad link error", _FILE_, __LINE__);
+                break;
+            }
+#endif
+
+            gst_bin_add(GST_BIN(pipeline[i]), main[i].videoPipe[idx].bins);
+            printf("2\n");
+            gst_element_add_pad(main[i].videoPipe[idx].bins, gst_ghost_pad_new("sink_video", gst_element_get_request_pad(main[i].videoPipe[idx].mux, "video_%u")));
+            printf("3\n");
+            customData[tdx].bin_video_pads = gst_element_get_static_pad(main[i].videoPipe[idx].bins, "sink_video");
+            printf("4\n");
+            if(gst_pad_link(gst_element_get_static_pad(main[i].videoPipe[idx].parse, "src"), customData[tdx].bin_video_pads) != GST_PAD_LINK_OK)
+            {
+                //g_printerr("Tee could not be linked(crop_pad, queue_crop_pad)\n");
+                __LOG(LOG_CRIT, "[GST][%s:%d] video pad link error", _FILE_, __LINE__);
+                break;
+            }
+            printf("5\n");
+            gst_element_add_pad(main[i].videoPipe[idx].bins, gst_ghost_pad_new("sink_audio", gst_element_get_request_pad(main[i].videoPipe[idx].mux, "audio_%u")));
+            printf("6\n");
+            customData[tdx].bin_audio_pads = gst_element_get_static_pad(main[i].videoPipe[idx].bins, "sink_audio");
+            printf("7\n");
+            if(gst_pad_link(gst_element_get_static_pad(main[i].videoPipe[idx].audioPipe.encoder, "src"), customData[tdx].bin_audio_pads) != GST_PAD_LINK_OK)
+            {
+                //g_printerr("Tee could not be linked(crop_pad, queue_crop_pad)\n");
+                __LOG(LOG_CRIT, "[GST][%s:%d] audio pad link error", _FILE_, __LINE__);
+                break;
+            }
+            printf("8\n");
+
+
+            g_timeout_add_seconds(FILE_SAVE_DURATION, (GSourceFunc)sendEOS, &customData[tdx]);
+
+        } while(0);
+#endif
+
+#ifdef MP4_TEST_R
+        do
+        {
+            idx = FILE0_R;
+            tdx = idx+i*MAX_PIPENUM;
+
+            main[i].videoPipe[idx].videorate = gst_element_factory_make("videorate", g_strdup_printf("videorate%d", tdx));
+            main[i].videoPipe[idx].crop = gst_element_factory_make("videocrop", g_strdup_printf("videocrop%d", tdx));
+            main[i].videoPipe[idx].encoder = gst_element_factory_make("vpuenc_h264", g_strdup_printf("vpuenc_h264%d", tdx));
+            main[i].videoPipe[idx].queue = gst_element_factory_make("queue", g_strdup_printf("queue%d", tdx));
+            main[i].videoPipe[idx].queue2 = gst_element_factory_make("queue2", g_strdup_printf("queue2_%d", tdx));
+            main[i].videoPipe[idx].parse = gst_element_factory_make("h264parse", g_strdup_printf("parse%d", tdx));
+            main[i].videoPipe[idx].mux = gst_element_factory_make("mp4mux", g_strdup_printf("mux%d", tdx));
+            main[i].videoPipe[idx].sink = gst_element_factory_make("appsink", g_strdup_printf("appsink%d", tdx));
+            //main[i].videoPipe[idx].sink = gst_element_factory_make("filesink", g_strdup_printf("appsink%d", tdx));
+            //main[i].videoPipe[idx].sink = gst_element_factory_make("splitmuxsink", g_strdup_printf("appsink%d", tdx));
+
+            if (!main[i].videoPipe[idx].videorate || !main[i].videoPipe[idx].crop || !main[i].videoPipe[idx].encoder || !main[i].videoPipe[idx].queue \
+                || !main[i].videoPipe[idx].mux || !main[i].videoPipe[idx].parse || !main[i].videoPipe[idx].sink)
+            {
+                __LOG(LOG_CRIT, "[GST][%s:%d] video pipe[%d] make error", _FILE_, __LINE__, idx);
+                //gst_object_unref(pipeline[i]);
+                break;
+            }
+            gst_bin_add_many(GST_BIN(pipeline[i]), main[i].videoPipe[idx].crop, main[i].videoPipe[idx].queue, main[i].videoPipe[idx].videorate, \
+                    main[i].videoPipe[idx].encoder, main[i].videoPipe[idx].parse, main[i].videoPipe[idx].mux, main[i].videoPipe[idx].sink, NULL);
+            if (!gst_element_link_many(main[i].tee, main[i].videoPipe[idx].crop, main[i].videoPipe[idx].queue, main[i].videoPipe[idx].videorate, \
+                    main[i].videoPipe[idx].encoder, main[i].videoPipe[idx].parse, main[i].videoPipe[idx].mux, main[i].videoPipe[idx].sink, NULL)) 
+            {
+                __LOG(LOG_CRIT, "[GST][%s:%d] video pipe[%d] link error", _FILE_, __LINE__, idx);
+                //gst_object_unref(pipeline[i]);
+                break;
+            }
+
+            g_object_set(main[i].videoPipe[idx].mux, "faststart", TRUE, NULL);
+
+            if(idx%2 == 0)
+                g_object_set(main[i].videoPipe[idx].crop, "top", 0, "bottom", 0, "left", _WIDTH, "right", 0, NULL);
+            else
+                g_object_set(main[i].videoPipe[idx].crop, "top", 0, "bottom", 0, "left", 0, "right", _WIDTH, NULL);
+
+            g_object_set(main[i].videoPipe[idx].videorate, "max-rate", FILE_FPS, NULL);
+            g_object_set(main[i].videoPipe[idx].videorate, "drop-only", FALSE, NULL);
+            g_object_set(main[i].videoPipe[idx].queue, "max-size-bytes", 0, "max-size-time", 0, "max-size-buffers", 60, "leaky", 1, NULL);
+            g_object_set(main[i].videoPipe[idx].queue, "max-size-buffers", 60, NULL);
+            //g_object_set(main[i].videoPipe[idx].queue, "leaky", 2, NULL);
+            //g_object_set(main[i].videoPipe[idx].queue2, "max-size-buffers", 60, NULL);
+            //g_object_set(main[i].videoPipe[idx].queue2, "bitrate", FILE_BITRATE, NULL);
+            //g_object_set(main[i].videoPipe[idx].queue2, "avg-in-rate", FILE_BITRATE, NULL);
+            g_object_set(main[i].videoPipe[idx].encoder, "bitrate", FILE_BITRATE, NULL);
+            //g_object_set(main[i].videoPipe[idx].sink, "location", g_strdup_printf("test%d.mp4", i), NULL);
+            g_object_set(main[i].videoPipe[idx].sink, "emit-signals", TRUE, "sync", FALSE, NULL);
+            g_signal_connect(main[i].videoPipe[idx].sink, "new-sample", G_CALLBACK(new_sample_handler), &customData[tdx]);
+            g_signal_connect(main[i].videoPipe[idx].sink, "new-preroll", G_CALLBACK(new_preroll_handler), &customData[tdx]);
+            g_signal_connect(main[i].videoPipe[idx].sink, "eos", G_CALLBACK(eos_callback), &customData[tdx]);
+            //g_object_set(main[i].videoPipe[idx].sink, "max-size-time", (FILE_SAVE_DURATION*GST_SECOND), NULL);
+            //g_object_set(main[i].videoPipe[idx].sink, "location", g_strdup_printf("test%d.mp4", i), NULL);
+            //g_signal_connect(main[i].videoPipe[idx].sink, "new-preroll", G_CALLBACK(format_location), &customData[tdx]);
+
+            customData[tdx].index = tdx;
+            customData[tdx].enc = main[i].videoPipe[idx].encoder;
+            customData[tdx].vr = main[i].videoPipe[idx].videorate;
+            customData[tdx].ch = (idx)%2 + i*2;
+            customData[tdx].mode = RECORDING;
+            customData[tdx].file_name = NULL;
+
+            main[i].videoPipe[idx].audioPipe.src = gst_element_factory_make("audiotestsrc", "audio-source");
+            main[i].videoPipe[idx].audioPipe.convert = gst_element_factory_make("audioconvert", "audio-convert");
+            main[i].videoPipe[idx].audioPipe.resample = gst_element_factory_make("audioresample", "audio-resample");
+            main[i].videoPipe[idx].audioPipe.encoder = gst_element_factory_make("lamemp3enc", "audio-encode");
+            main[i].videoPipe[idx].audioPipe.parse = gst_element_factory_make("mpegaudioparse", "audio-parse");
+            main[i].videoPipe[idx].audioPipe.queue = gst_element_factory_make("queue2", "audio-queue");
+            if (!main[i].videoPipe[idx].audioPipe.src || !main[i].videoPipe[idx].audioPipe.convert || !main[i].videoPipe[idx].audioPipe.resample \
+                    || !main[i].videoPipe[idx].audioPipe.encoder || !main[i].videoPipe[idx].audioPipe.parse || !main[i].videoPipe[idx].audioPipe.queue)
+            {
+                __LOG(LOG_CRIT, "[GST][%s:%d] audio pipe[%d] create error", _FILE_, __LINE__, idx);
+                //gst_object_unref(pipeline[i]);
+                break;
+            }
+
+            gst_bin_add_many(GST_BIN(pipeline[i]), main[i].videoPipe[idx].audioPipe.src, main[i].videoPipe[idx].audioPipe.convert, main[i].videoPipe[idx].audioPipe.resample, \
+                        main[i].videoPipe[idx].audioPipe.encoder, main[i].videoPipe[idx].audioPipe.parse, NULL);
+            if (!gst_element_link_many(main[i].videoPipe[idx].audioPipe.src, main[i].videoPipe[idx].audioPipe.convert, main[i].videoPipe[idx].audioPipe.resample, \
+                        main[i].videoPipe[idx].audioPipe.encoder, main[i].videoPipe[idx].mux, NULL))
+            {
+                __LOG(LOG_CRIT, "[GST][%s:%d] audio pipe[%d] link error", _FILE_, __LINE__, idx);
+                //gst_object_unref(pipeline[i]);
+                break;
+            }
+
+            customData[tdx].mux = main[i].videoPipe[idx].mux;
+            customData[tdx].mux = main[i].videoPipe[idx].sink;
+            //g_timeout_add_seconds(FILE_SAVE_DURATION, (GSourceFunc)sendEOS, &customData[tdx]);
+
+        } while(0);
+#endif
+
+
+#ifdef FILE_L_ENABLE
+        do
+        {
+            idx = FILE0_L;
+            tdx = idx+i*MAX_PIPENUM;
+            main[i].videoPipe[idx].videorate = gst_element_factory_make("videorate", g_strdup_printf("videorate%d", tdx));
+            main[i].videoPipe[idx].crop = gst_element_factory_make("videocrop", g_strdup_printf("videocrop%d", tdx));
+            main[i].videoPipe[idx].encoder = gst_element_factory_make("vpuenc_h264", g_strdup_printf("vpuenc_h264%d", tdx));
+            main[i].videoPipe[idx].queue = gst_element_factory_make("queue", g_strdup_printf("queue%d", tdx));
+            main[i].videoPipe[idx].sink = gst_element_factory_make("appsink", g_strdup_printf("appsink%d", tdx));
+
+            if (!main[i].videoPipe[idx].videorate || !main[i].videoPipe[idx].crop || !main[i].videoPipe[idx].encoder || !main[i].videoPipe[idx].queue || !main[i].videoPipe[idx].sink)
+            {
+                __LOG(LOG_CRIT, "[GST][%s:%d] pipe[%d] link error", _FILE_, __LINE__, idx);
+                //gst_object_unref(pipeline[i]);
+                break;
+            }
+
+            gst_bin_add_many(GST_BIN(pipeline[i]), main[i].videoPipe[idx].crop, main[i].videoPipe[idx].queue, main[i].videoPipe[idx].videorate, main[i].videoPipe[idx].encoder, main[i].videoPipe[idx].sink, NULL);
+            if (!gst_element_link_many(main[i].tee, main[i].videoPipe[idx].crop, main[i].videoPipe[idx].queue, main[i].videoPipe[idx].videorate, main[i].videoPipe[idx].encoder, main[i].videoPipe[idx].sink, NULL)) 
             {
                 __LOG(LOG_CRIT, "[GST][%s:%d] pipe[%d] link error", _FILE_, __LINE__, idx);
                 //gst_object_unref(pipeline[i]);
@@ -1314,24 +1760,24 @@ int main(int argc, char *argv[]) {
             }
 
             if(idx%2 == 0)
-                g_object_set(main[i].sub[idx].crop, "top", 0, "bottom", 0, "left", _WIDTH, "right", 0, NULL);
+                g_object_set(main[i].videoPipe[idx].crop, "top", 0, "bottom", 0, "left", _WIDTH, "right", 0, NULL);
             else
-                g_object_set(main[i].sub[idx].crop, "top", 0, "bottom", 0, "left", 0, "right", _WIDTH, NULL);
+                g_object_set(main[i].videoPipe[idx].crop, "top", 0, "bottom", 0, "left", 0, "right", _WIDTH, NULL);
 
-            g_object_set(main[i].sub[idx].videorate, "max-rate", FILE_FPS, NULL);
-            g_object_set(main[i].sub[idx].videorate, "drop-only", TRUE, NULL);
-            //g_object_set(main[i].sub[idx].queue, "max-size-bytes", 0, "max-size-time", 0, "max-size-buffers", 60, "leaky", 1, NULL);
-            g_object_set(main[i].sub[idx].queue, "max-size-buffers", 60, NULL);
-            g_object_set(main[i].sub[idx].queue, "leaky", 2, NULL);
-            g_object_set(main[i].sub[idx].encoder, "bitrate", 4096, NULL);
-            g_object_set(main[i].sub[idx].sink, "emit-signals", TRUE, "sync", FALSE, NULL);
-            //g_signal_connect(main[i].sub[FILE_L].sink, "new-sample", G_CALLBACK(new_sample_handler_file), &main[i].sub[FILE_L].customData);
-            //g_signal_connect(main[i].sub[FILE_L].sink, "new-preroll", G_CALLBACK(new_preroll_handler), &main[i].sub[FILE_L].customData);
-            g_signal_connect(main[i].sub[idx].sink, "new-sample", G_CALLBACK(new_sample_handler), &customData[tdx]);
-            g_signal_connect(main[i].sub[idx].sink, "new-preroll", G_CALLBACK(new_preroll_handler), &customData[tdx]);
+            g_object_set(main[i].videoPipe[idx].videorate, "max-rate", FILE_FPS, NULL);
+            g_object_set(main[i].videoPipe[idx].videorate, "drop-only", FALSE, NULL);
+            //g_object_set(main[i].videoPipe[idx].queue, "max-size-bytes", 0, "max-size-time", 0, "max-size-buffers", 60, "leaky", 1, NULL);
+            g_object_set(main[i].videoPipe[idx].queue, "max-size-buffers", 60, NULL);
+            g_object_set(main[i].videoPipe[idx].queue, "leaky", 2, NULL);
+            g_object_set(main[i].videoPipe[idx].encoder, "bitrate", FILE_BITRATE, NULL);
+            g_object_set(main[i].videoPipe[idx].sink, "emit-signals", TRUE, "sync", FALSE, NULL);
+            //g_signal_connect(main[i].videoPipe[FILE_L].sink, "new-sample", G_CALLBACK(new_sample_handler_file), &main[i].videoPipe[FILE_L].customData);
+            //g_signal_connect(main[i].videoPipe[FILE_L].sink, "new-preroll", G_CALLBACK(new_preroll_handler), &main[i].videoPipe[FILE_L].customData);
+            g_signal_connect(main[i].videoPipe[idx].sink, "new-sample", G_CALLBACK(new_sample_handler), &customData[tdx]);
+            g_signal_connect(main[i].videoPipe[idx].sink, "new-preroll", G_CALLBACK(new_preroll_handler), &customData[tdx]);
             customData[tdx].index = tdx;
-            customData[tdx].enc = main[i].sub[idx].encoder;
-            customData[tdx].vr = main[i].sub[idx].videorate;
+            customData[tdx].enc = main[i].videoPipe[idx].encoder;
+            customData[tdx].vr = main[i].videoPipe[idx].videorate;
             customData[tdx].ch = (idx)%2 + i*2;
             customData[tdx].mode = RECORDING;
             customData[tdx].file_name = NULL;
@@ -1343,24 +1789,24 @@ int main(int argc, char *argv[]) {
         {
             idx = FILE0_R;
             tdx = idx+i*MAX_PIPENUM;
-            main[i].sub[idx].videorate = gst_element_factory_make("videorate", g_strdup_printf("videorate%d", tdx));
-            main[i].sub[idx].crop = gst_element_factory_make("videocrop", g_strdup_printf("videocrop%d", tdx));
-            main[i].sub[idx].encoder = gst_element_factory_make("vpuenc_h264", g_strdup_printf("vpuenc_h264%d", tdx));
-            main[i].sub[idx].queue = gst_element_factory_make("queue", g_strdup_printf("queue%d", tdx));
-            main[i].sub[idx].sink = gst_element_factory_make("appsink", g_strdup_printf("appsink%d", tdx));
+            main[i].videoPipe[idx].videorate = gst_element_factory_make("videorate", g_strdup_printf("videorate%d", tdx));
+            main[i].videoPipe[idx].crop = gst_element_factory_make("videocrop", g_strdup_printf("videocrop%d", tdx));
+            main[i].videoPipe[idx].encoder = gst_element_factory_make("vpuenc_h264", g_strdup_printf("vpuenc_h264%d", tdx));
+            main[i].videoPipe[idx].queue = gst_element_factory_make("queue", g_strdup_printf("queue%d", tdx));
+            main[i].videoPipe[idx].sink = gst_element_factory_make("appsink", g_strdup_printf("appsink%d", tdx));
 
-            if (!main[i].sub[idx].videorate || !main[i].sub[idx].crop || !main[i].sub[idx].encoder \
-            || !main[i].sub[idx].queue || !main[i].sub[idx].sink)
+            if (!main[i].videoPipe[idx].videorate || !main[i].videoPipe[idx].crop || !main[i].videoPipe[idx].encoder \
+            || !main[i].videoPipe[idx].queue || !main[i].videoPipe[idx].sink)
             {
                 __LOG(LOG_CRIT, "[GST][%s:%d] pipe[%d] create error", _FILE_, __LINE__, idx);
                 //gst_object_unref(pipeline[i]);
                 break;
             }
 
-            gst_bin_add_many(GST_BIN(main[i].pipeline), main[i].sub[idx].crop, main[i].sub[idx].queue, \
-                main[i].sub[idx].videorate, main[i].sub[idx].encoder, main[i].sub[idx].sink, NULL);
-            if (!gst_element_link_many(main[i].tee, main[i].sub[idx].crop, main[i].sub[idx].queue, \
-                main[i].sub[idx].videorate, main[i].sub[idx].encoder, main[i].sub[idx].sink, NULL)) 
+            gst_bin_add_many(GST_BIN(pipeline[i]), main[i].videoPipe[idx].crop, main[i].videoPipe[idx].queue, \
+                main[i].videoPipe[idx].videorate, main[i].videoPipe[idx].encoder, main[i].videoPipe[idx].sink, NULL);
+            if (!gst_element_link_many(main[i].tee, main[i].videoPipe[idx].crop, main[i].videoPipe[idx].queue, \
+                main[i].videoPipe[idx].videorate, main[i].videoPipe[idx].encoder, main[i].videoPipe[idx].sink, NULL)) 
             {
                 __LOG(LOG_CRIT, "[GST][%s:%d] pipe[%d] link error", _FILE_, __LINE__, idx);
                 //gst_object_unref(pipeline[i]);
@@ -1368,24 +1814,24 @@ int main(int argc, char *argv[]) {
             }
 
             if(idx%2 == 0)
-                g_object_set(main[i].sub[idx].crop, "top", 0, "bottom", 0, "left", _WIDTH, "right", 0, NULL);
+                g_object_set(main[i].videoPipe[idx].crop, "top", 0, "bottom", 0, "left", _WIDTH, "right", 0, NULL);
             else
-                g_object_set(main[i].sub[idx].crop, "top", 0, "bottom", 0, "left", 0, "right", _WIDTH, NULL);
+                g_object_set(main[i].videoPipe[idx].crop, "top", 0, "bottom", 0, "left", 0, "right", _WIDTH, NULL);
 
-            g_object_set(main[i].sub[idx].videorate, "max-rate", FILE_FPS, NULL);
-            g_object_set(main[i].sub[idx].videorate, "drop-only", TRUE, NULL);
-            //g_object_set(main[i].sub[idx].queue, "max-size-bytes", 0, "max-size-time", 0, "max-size-buffers", 60, "leaky", 1, NULL);
-            g_object_set(main[i].sub[idx].queue, "max-size-buffers", 60, NULL);
-            g_object_set(main[i].sub[idx].queue, "leaky", 2, NULL);
-            g_object_set(main[i].sub[idx].encoder, "bitrate", 4096, NULL);
-            g_object_set(main[i].sub[idx].sink, "emit-signals", TRUE, "sync", FALSE, NULL);
-            //g_signal_connect(main[i].sub[FILE_L].sink, "new-sample", G_CALLBACK(new_sample_handler_file), &main[i].sub[FILE_L].customData);
-            //g_signal_connect(main[i].sub[FILE_L].sink, "new-preroll", G_CALLBACK(new_preroll_handler), &main[i].sub[FILE_L].customData);
-            g_signal_connect(main[i].sub[idx].sink, "new-sample", G_CALLBACK(new_sample_handler), &customData[tdx]);
-            g_signal_connect(main[i].sub[idx].sink, "new-preroll", G_CALLBACK(new_preroll_handler), &customData[tdx]);
+            g_object_set(main[i].videoPipe[idx].videorate, "max-rate", FILE_FPS, NULL);
+            g_object_set(main[i].videoPipe[idx].videorate, "drop-only", FALSE, NULL);
+            //g_object_set(main[i].videoPipe[idx].queue, "max-size-bytes", 0, "max-size-time", 0, "max-size-buffers", 60, "leaky", 1, NULL);
+            g_object_set(main[i].videoPipe[idx].queue, "max-size-buffers", 60, NULL);
+            g_object_set(main[i].videoPipe[idx].queue, "leaky", 2, NULL);
+            g_object_set(main[i].videoPipe[idx].encoder, "bitrate", FILE_BITRATE, NULL);
+            g_object_set(main[i].videoPipe[idx].sink, "emit-signals", TRUE, "sync", FALSE, NULL);
+            //g_signal_connect(main[i].videoPipe[FILE_L].sink, "new-sample", G_CALLBACK(new_sample_handler_file), &main[i].videoPipe[FILE_L].customData);
+            //g_signal_connect(main[i].videoPipe[FILE_L].sink, "new-preroll", G_CALLBACK(new_preroll_handler), &main[i].videoPipe[FILE_L].customData);
+            g_signal_connect(main[i].videoPipe[idx].sink, "new-sample", G_CALLBACK(new_sample_handler), &customData[tdx]);
+            g_signal_connect(main[i].videoPipe[idx].sink, "new-preroll", G_CALLBACK(new_preroll_handler), &customData[tdx]);
             customData[tdx].index = tdx;
-            customData[tdx].enc = main[i].sub[idx].encoder;
-            customData[tdx].vr = main[i].sub[idx].videorate;
+            customData[tdx].enc = main[i].videoPipe[idx].encoder;
+            customData[tdx].vr = main[i].videoPipe[idx].videorate;
             customData[tdx].ch = (idx)%2 + i*2;
             customData[tdx].mode = RECORDING;
             customData[tdx].file_name = NULL;
@@ -1397,21 +1843,21 @@ int main(int argc, char *argv[]) {
         {
             idx = RTSP0_L;
             tdx = idx+i*MAX_PIPENUM;
-            main[i].sub[idx].videorate = gst_element_factory_make("videorate", g_strdup_printf("videorate%d", tdx));
-            main[i].sub[idx].crop = gst_element_factory_make("videocrop", g_strdup_printf("videocrop%d", tdx));
-            main[i].sub[idx].encoder = gst_element_factory_make("vpuenc_h264", g_strdup_printf("vpuenc_h264%d", tdx));
-            main[i].sub[idx].queue = gst_element_factory_make("queue", g_strdup_printf("queue%d", tdx));
-            main[i].sub[idx].sink = gst_element_factory_make("appsink", g_strdup_printf("appsink%d", tdx));
+            main[i].videoPipe[idx].videorate = gst_element_factory_make("videorate", g_strdup_printf("videorate%d", tdx));
+            main[i].videoPipe[idx].crop = gst_element_factory_make("videocrop", g_strdup_printf("videocrop%d", tdx));
+            main[i].videoPipe[idx].encoder = gst_element_factory_make("vpuenc_h264", g_strdup_printf("vpuenc_h264%d", tdx));
+            main[i].videoPipe[idx].queue = gst_element_factory_make("queue", g_strdup_printf("queue%d", tdx));
+            main[i].videoPipe[idx].sink = gst_element_factory_make("appsink", g_strdup_printf("appsink%d", tdx));
 
-            if (!main[i].sub[idx].videorate || !main[i].sub[idx].crop || !main[i].sub[idx].encoder || !main[i].sub[idx].queue || !main[i].sub[idx].sink)
+            if (!main[i].videoPipe[idx].videorate || !main[i].videoPipe[idx].crop || !main[i].videoPipe[idx].encoder || !main[i].videoPipe[idx].queue || !main[i].videoPipe[idx].sink)
             {
                 __LOG(LOG_CRIT, "[GST][%s:%d] pipe[%d] create error", _FILE_, __LINE__, idx);
                 //gst_object_unref(pipeline[i]);
                 break;
             }
 
-            gst_bin_add_many(GST_BIN(main[i].pipeline), main[i].sub[idx].crop, main[i].sub[idx].queue, main[i].sub[idx].videorate, main[i].sub[idx].encoder, main[i].sub[idx].sink, NULL);
-            if (!gst_element_link_many(main[i].tee, main[i].sub[idx].queue, main[i].sub[idx].crop, main[i].sub[idx].videorate, main[i].sub[idx].encoder, main[i].sub[idx].sink, NULL)) 
+            gst_bin_add_many(GST_BIN(pipeline[i]), main[i].videoPipe[idx].crop, main[i].videoPipe[idx].queue, main[i].videoPipe[idx].videorate, main[i].videoPipe[idx].encoder, main[i].videoPipe[idx].sink, NULL);
+            if (!gst_element_link_many(main[i].tee, main[i].videoPipe[idx].queue, main[i].videoPipe[idx].crop, main[i].videoPipe[idx].videorate, main[i].videoPipe[idx].encoder, main[i].videoPipe[idx].sink, NULL)) 
             {
                 __LOG(LOG_CRIT, "[GST][%s:%d] pipe[%d] link error", _FILE_, __LINE__, idx);
                 //gst_object_unref(pipeline[i]);
@@ -1419,19 +1865,19 @@ int main(int argc, char *argv[]) {
             }
 
             if(idx%2 == 0)
-                g_object_set(main[i].sub[idx].crop, "top", 0, "bottom", 0, "left", _WIDTH, "right", 0, NULL);
+                g_object_set(main[i].videoPipe[idx].crop, "top", 0, "bottom", 0, "left", _WIDTH, "right", 0, NULL);
             else
-                g_object_set(main[i].sub[idx].crop, "top", 0, "bottom", 0, "left", 0, "right", _WIDTH, NULL);
-            g_object_set(main[i].sub[idx].videorate, "max-rate", RTSP_FPS, NULL);
-            g_object_set(main[i].sub[idx].videorate, "drop-only", TRUE, NULL);
-            g_object_set(main[i].sub[idx].encoder, "bitrate", RTSP_BITRATE, NULL);
+                g_object_set(main[i].videoPipe[idx].crop, "top", 0, "bottom", 0, "left", 0, "right", _WIDTH, NULL);
+            g_object_set(main[i].videoPipe[idx].videorate, "max-rate", RTSP_FPS, NULL);
+            g_object_set(main[i].videoPipe[idx].videorate, "drop-only", FALSE, NULL);
+            g_object_set(main[i].videoPipe[idx].encoder, "bitrate", RTSP_BITRATE, NULL);
             //g_object_set(encoder2, "gop-size", 30, NULL);
             //g_object_set(appsink2, "emit-signals", TRUE, "sync", FALSE, NULL);
             //g_object_set(appsink2, "max-lateness", 5000000000, NULL);
             //g_object_set(queue2, "max-size-bytes", 0, "max-size-time", 0, "max-size-buffers", 60, "leaky", 1, NULL);
-            g_object_set(main[i].sub[idx].queue, "max-size-time", GST_SECOND, NULL);
-            g_object_set(main[i].sub[idx].queue, "max-size-buffers", 60, NULL);
-            g_object_set(main[i].sub[idx].queue, "leaky", 1, NULL);
+            g_object_set(main[i].videoPipe[idx].queue, "max-size-time", GST_SECOND, NULL);
+            g_object_set(main[i].videoPipe[idx].queue, "max-size-buffers", 60, NULL);
+            g_object_set(main[i].videoPipe[idx].queue, "leaky", 1, NULL);
 #if 0
             g_object_set(queue2, "max-size-bytes", 0, NULL);
             g_object_set(queue2, "max-size-time", 0, NULL);
@@ -1443,11 +1889,10 @@ int main(int argc, char *argv[]) {
             //g_signal_connect(queue2, "overrun", G_CALLBACK(overrun_callback), NULL);
             //g_signal_connect(queue2, "running", G_CALLBACK(running_callback), NULL);
             //g_signal_connect(queue2, "pushing", G_CALLBACK(pushing_callback), NULL);
-
 #endif
 
-            g_object_set(main[i].sub[idx].sink, "max-buffers", 60, NULL);
-            g_object_set(main[i].sub[idx].sink, "drop", FALSE, NULL);
+            g_object_set(main[i].videoPipe[idx].sink, "max-buffers", 60, NULL);
+            g_object_set(main[i].videoPipe[idx].sink, "drop", FALSE, NULL);
             //g_object_set(appsink2, "enable-last-sample", TRUE, NULL);
             //g_object_set(appsink2, "max-lateness", 1000, NULL);
             //g_object_set(appsink2, "throttle-time", 100, NULL);
@@ -1455,17 +1900,17 @@ int main(int argc, char *argv[]) {
             //g_object_set(appsink2, "render-delay", 1000, NULL);
             //g_object_set(appsink2, "wait-on-eos", FALSE, NULL);
             //g_object_set(appsink2, "qos", TRUE, NULL);
-            g_object_set(main[i].sub[idx].sink, "emit-signals", TRUE, "sync", FALSE, NULL);
+            g_object_set(main[i].videoPipe[idx].sink, "emit-signals", TRUE, "sync", FALSE, NULL);
             //g_object_set(appsink2, "max-bitrate", 2048, NULL);
-            g_signal_connect(main[i].sub[idx].sink, "eos", G_CALLBACK(eos_callback), NULL);
+            g_signal_connect(main[i].videoPipe[idx].sink, "eos", G_CALLBACK(eos_callback), NULL);
 
-            g_signal_connect(main[i].sub[idx].sink, "new-sample", G_CALLBACK(new_sample_handler), &customData[tdx]);
-            g_signal_connect(main[i].sub[idx].sink, "new-preroll", G_CALLBACK(new_preroll_handler), &customData[tdx]);
+            g_signal_connect(main[i].videoPipe[idx].sink, "new-sample", G_CALLBACK(new_sample_handler), &customData[tdx]);
+            g_signal_connect(main[i].videoPipe[idx].sink, "new-preroll", G_CALLBACK(new_preroll_handler), &customData[tdx]);
             //g_signal_connect(appsink2, "pad-added", G_CALLBACK(pad_added_handler), capsfilter);
             //g_signal_connect(appsink2, "pad-removed", G_CALLBACK(pad_removed_handler), NULL);
             customData[tdx].index = tdx;
-            customData[tdx].enc = main[i].sub[idx].encoder;
-            customData[tdx].vr = main[i].sub[idx].videorate;
+            customData[tdx].enc = main[i].videoPipe[idx].encoder;
+            customData[tdx].vr = main[i].videoPipe[idx].videorate;
             customData[tdx].ch = (idx)%2 + i*2;
             customData[tdx].mode = STREAMING;
             setRtspPipe(&customData[tdx]);
@@ -1477,21 +1922,21 @@ int main(int argc, char *argv[]) {
         {
             idx = RTSP0_R;
             tdx = idx+i*MAX_PIPENUM;
-            main[i].sub[idx].videorate = gst_element_factory_make("videorate", g_strdup_printf("videorate%d", tdx));
-            main[i].sub[idx].crop = gst_element_factory_make("videocrop", g_strdup_printf("videocrop%d", tdx));
-            main[i].sub[idx].encoder = gst_element_factory_make("vpuenc_h264", g_strdup_printf("vpuenc_h264%d", tdx));
-            main[i].sub[idx].queue = gst_element_factory_make("queue", g_strdup_printf("queue%d", tdx));
-            main[i].sub[idx].sink = gst_element_factory_make("appsink", g_strdup_printf("appsink%d", tdx));
+            main[i].videoPipe[idx].videorate = gst_element_factory_make("videorate", g_strdup_printf("videorate%d", tdx));
+            main[i].videoPipe[idx].crop = gst_element_factory_make("videocrop", g_strdup_printf("videocrop%d", tdx));
+            main[i].videoPipe[idx].encoder = gst_element_factory_make("vpuenc_h264", g_strdup_printf("vpuenc_h264%d", tdx));
+            main[i].videoPipe[idx].queue = gst_element_factory_make("queue", g_strdup_printf("queue%d", tdx));
+            main[i].videoPipe[idx].sink = gst_element_factory_make("appsink", g_strdup_printf("appsink%d", tdx));
 
-            if (!main[i].sub[idx].videorate || !main[i].sub[idx].crop || !main[i].sub[idx].encoder || !main[i].sub[idx].queue || !main[i].sub[idx].sink)
+            if (!main[i].videoPipe[idx].videorate || !main[i].videoPipe[idx].crop || !main[i].videoPipe[idx].encoder || !main[i].videoPipe[idx].queue || !main[i].videoPipe[idx].sink)
             {
                 __LOG(LOG_CRIT, "[GST][%s:%d] pipe[%d] create error", _FILE_, __LINE__, idx);
                 //gst_object_unref(pipeline[i]);
                 break;
             }
 
-            gst_bin_add_many(GST_BIN(main[i].pipeline), main[i].sub[idx].crop, main[i].sub[idx].queue, main[i].sub[idx].videorate, main[i].sub[idx].encoder, main[i].sub[idx].sink, NULL);
-            if (!gst_element_link_many(main[i].tee, main[i].sub[idx].queue, main[i].sub[idx].crop, main[i].sub[idx].videorate, main[i].sub[idx].encoder, main[i].sub[idx].sink, NULL)) 
+            gst_bin_add_many(GST_BIN(pipeline[i]), main[i].videoPipe[idx].crop, main[i].videoPipe[idx].queue, main[i].videoPipe[idx].videorate, main[i].videoPipe[idx].encoder, main[i].videoPipe[idx].sink, NULL);
+            if (!gst_element_link_many(main[i].tee, main[i].videoPipe[idx].queue, main[i].videoPipe[idx].crop, main[i].videoPipe[idx].videorate, main[i].videoPipe[idx].encoder, main[i].videoPipe[idx].sink, NULL)) 
             {
                 __LOG(LOG_CRIT, "[GST][%s:%d] pipe[%d] link error", _FILE_, __LINE__, idx);
                 //gst_object_unref(pipeline[i]);
@@ -1499,34 +1944,34 @@ int main(int argc, char *argv[]) {
             }
 
             if(idx%2 == 0)
-                g_object_set(main[i].sub[idx].crop, "top", 0, "bottom", 0, "left", _WIDTH, "right", 0, NULL);
+                g_object_set(main[i].videoPipe[idx].crop, "top", 0, "bottom", 0, "left", _WIDTH, "right", 0, NULL);
             else
-                g_object_set(main[i].sub[idx].crop, "top", 0, "bottom", 0, "left", 0, "right", _WIDTH, NULL);
+                g_object_set(main[i].videoPipe[idx].crop, "top", 0, "bottom", 0, "left", 0, "right", _WIDTH, NULL);
 
-            g_object_set(main[i].sub[idx].videorate, "max-rate", RTSP_FPS, NULL);
-            g_object_set(main[i].sub[idx].videorate, "drop-only", TRUE, NULL);
-            g_object_set(main[i].sub[idx].encoder, "bitrate", RTSP_BITRATE, NULL);
+            g_object_set(main[i].videoPipe[idx].videorate, "max-rate", RTSP_FPS, NULL);
+            g_object_set(main[i].videoPipe[idx].videorate, "drop-only", FALSE, NULL);
+            g_object_set(main[i].videoPipe[idx].encoder, "bitrate", RTSP_BITRATE, NULL);
             //g_object_set(encoder2, "gop-size", 30, NULL);
             //g_object_set(appsink2, "emit-signals", TRUE, "sync", FALSE, NULL);
             //g_object_set(appsink2, "max-lateness", 5000000000, NULL);
             //g_object_set(queue2, "max-size-bytes", 0, "max-size-time", 0, "max-size-buffers", 60, "leaky", 1, NULL);
-            g_object_set(main[i].sub[idx].queue, "max-size-time", GST_SECOND, NULL);
-            g_object_set(main[i].sub[idx].queue, "max-size-buffers", 60, NULL);
-            g_object_set(main[i].sub[idx].queue, "leaky", 1, NULL);
+            g_object_set(main[i].videoPipe[idx].queue, "max-size-time", GST_SECOND, NULL);
+            g_object_set(main[i].videoPipe[idx].queue, "max-size-buffers", 60, NULL);
+            g_object_set(main[i].videoPipe[idx].queue, "leaky", 1, NULL);
 
-            g_object_set(main[i].sub[idx].sink, "max-buffers", 60, NULL);
-            g_object_set(main[i].sub[idx].sink, "drop", FALSE, NULL);
-            g_object_set(main[i].sub[idx].sink, "emit-signals", TRUE, "sync", FALSE, NULL);
+            g_object_set(main[i].videoPipe[idx].sink, "max-buffers", 60, NULL);
+            g_object_set(main[i].videoPipe[idx].sink, "drop", FALSE, NULL);
+            g_object_set(main[i].videoPipe[idx].sink, "emit-signals", TRUE, "sync", FALSE, NULL);
             //g_object_set(appsink2, "max-bitrate", 2048, NULL);
-            g_signal_connect(main[i].sub[idx].sink, "eos", G_CALLBACK(eos_callback), NULL);
+            g_signal_connect(main[i].videoPipe[idx].sink, "eos", G_CALLBACK(eos_callback), NULL);
 
-            g_signal_connect(main[i].sub[idx].sink, "new-sample", G_CALLBACK(new_sample_handler), &customData[tdx]);
-            g_signal_connect(main[i].sub[idx].sink, "new-preroll", G_CALLBACK(new_preroll_handler), &customData[tdx]);
+            g_signal_connect(main[i].videoPipe[idx].sink, "new-sample", G_CALLBACK(new_sample_handler), &customData[tdx]);
+            g_signal_connect(main[i].videoPipe[idx].sink, "new-preroll", G_CALLBACK(new_preroll_handler), &customData[tdx]);
             //g_signal_connect(appsink2, "pad-added", G_CALLBACK(pad_added_handler), capsfilter);
             //g_signal_connect(appsink2, "pad-removed", G_CALLBACK(pad_removed_handler), NULL);
             customData[tdx].index = tdx;
-            customData[tdx].enc = main[i].sub[idx].encoder;
-            customData[tdx].vr = main[i].sub[idx].videorate;
+            customData[tdx].enc = main[i].videoPipe[idx].encoder;
+            customData[tdx].vr = main[i].videoPipe[idx].videorate;
             customData[tdx].ch = (idx)%2 + i*2;
             customData[tdx].mode = STREAMING;
             setRtspPipe(&customData[tdx]);
@@ -1538,21 +1983,21 @@ int main(int argc, char *argv[]) {
         {
             idx = CAPTURE0_L;
             tdx = idx+i*MAX_PIPENUM;
-            //main[i].sub[CAPTURE_L].videorate = gst_element_factory_make("videorate", "videorate4");
-            main[i].sub[idx].crop = gst_element_factory_make("videocrop", g_strdup_printf("videocrop%d", tdx));
-            main[i].sub[idx].encoder = gst_element_factory_make("jpegenc", g_strdup_printf("jpegenc%d", tdx));
-            main[i].sub[idx].queue = gst_element_factory_make("queue", g_strdup_printf("queue%d", tdx));
-            main[i].sub[idx].sink = gst_element_factory_make("appsink", g_strdup_printf("appsink%d", tdx));
+            //main[i].videoPipe[CAPTURE_L].videorate = gst_element_factory_make("videorate", "videorate4");
+            main[i].videoPipe[idx].crop = gst_element_factory_make("videocrop", g_strdup_printf("videocrop%d", tdx));
+            main[i].videoPipe[idx].encoder = gst_element_factory_make("jpegenc", g_strdup_printf("jpegenc%d", tdx));
+            main[i].videoPipe[idx].queue = gst_element_factory_make("queue", g_strdup_printf("queue%d", tdx));
+            main[i].videoPipe[idx].sink = gst_element_factory_make("appsink", g_strdup_printf("appsink%d", tdx));
 
-            if (!main[i].sub[idx].crop || !main[i].sub[idx].encoder || !main[i].sub[idx].queue || !main[i].sub[idx].sink)
+            if (!main[i].videoPipe[idx].crop || !main[i].videoPipe[idx].encoder || !main[i].videoPipe[idx].queue || !main[i].videoPipe[idx].sink)
             {
                 __LOG(LOG_CRIT, "[GST][%s:%d] pipe[%d] create error", _FILE_, __LINE__, idx);
                 //gst_object_unref(pipeline[i]);
                 break;
             }
 
-            gst_bin_add_many(GST_BIN(main[i].pipeline), main[i].sub[idx].crop, main[i].sub[idx].queue, main[i].sub[idx].encoder, main[i].sub[idx].sink, NULL);
-            if (!gst_element_link_many(main[i].tee, main[i].sub[idx].crop, main[i].sub[idx].queue, main[i].sub[idx].encoder, main[i].sub[idx].sink, NULL)) 
+            gst_bin_add_many(GST_BIN(pipeline[i]), main[i].videoPipe[idx].crop, main[i].videoPipe[idx].queue, main[i].videoPipe[idx].encoder, main[i].videoPipe[idx].sink, NULL);
+            if (!gst_element_link_many(main[i].tee, main[i].videoPipe[idx].crop, main[i].videoPipe[idx].queue, main[i].videoPipe[idx].encoder, main[i].videoPipe[idx].sink, NULL)) 
             {
                 __LOG(LOG_CRIT, "[GST][%s:%d] pipe[%d] link error", _FILE_, __LINE__, idx);
                 //gst_object_unref(pipeline[i]);
@@ -1560,23 +2005,22 @@ int main(int argc, char *argv[]) {
             }
 
             if(idx%2 == 0)
-                g_object_set(main[i].sub[idx].crop, "top", 0, "bottom", 0, "left", _WIDTH, "right", 0, NULL);
+                g_object_set(main[i].videoPipe[idx].crop, "top", 0, "bottom", 0, "left", _WIDTH, "right", 0, NULL);
             else
-                g_object_set(main[i].sub[idx].crop, "top", 0, "bottom", 0, "left", 0, "right", _WIDTH, NULL);
+                g_object_set(main[i].videoPipe[idx].crop, "top", 0, "bottom", 0, "left", 0, "right", _WIDTH, NULL);
 
-            g_object_set(main[i].sub[idx].queue, "max-size-buffers", 60, NULL);
-            g_object_set(main[i].sub[idx].queue, "leaky", 2, NULL);
-            g_object_set(main[i].sub[idx].sink, "emit-signals", TRUE, "sync", FALSE, NULL);
-            g_signal_connect(main[i].sub[idx].sink, "new-sample", G_CALLBACK(new_sample_handler), &customData[tdx]);
-            g_signal_connect(main[i].sub[idx].sink, "new-preroll", G_CALLBACK(new_preroll_handler), &customData[tdx]);
+            g_object_set(main[i].videoPipe[idx].queue, "max-size-buffers", 60, NULL);
+            g_object_set(main[i].videoPipe[idx].queue, "leaky", 2, NULL);
+            g_object_set(main[i].videoPipe[idx].sink, "emit-signals", TRUE, "sync", FALSE, NULL);
+            g_signal_connect(main[i].videoPipe[idx].sink, "new-sample", G_CALLBACK(new_sample_handler), &customData[tdx]);
+            g_signal_connect(main[i].videoPipe[idx].sink, "new-preroll", G_CALLBACK(new_preroll_handler), &customData[tdx]);
             customData[tdx].index = tdx;
-            customData[tdx].enc = main[i].sub[idx].encoder;
-            customData[tdx].vr = main[i].sub[idx].videorate;
+            customData[tdx].enc = main[i].videoPipe[idx].encoder;
+            customData[tdx].vr = main[i].videoPipe[idx].videorate;
             customData[tdx].ch = (idx)%2 + i*2;
             customData[tdx].mode = CAPTURING;
             customData[tdx].captureMax = 3;
             customData[tdx].captureCnt = 3;
-
             //g_timeout_add_seconds(30, (GSourceFunc)captureStart, &customData[tdx]);
         } while(0);
 #endif
@@ -1586,21 +2030,21 @@ int main(int argc, char *argv[]) {
         {
             idx = CAPTURE0_R;
             tdx = idx+i*MAX_PIPENUM;
-            //main[i].sub[CAPTURE_L].videorate = gst_element_factory_make("videorate", "videorate4");
-            main[i].sub[idx].crop = gst_element_factory_make("videocrop", g_strdup_printf("videocrop%d", tdx));
-            main[i].sub[idx].encoder = gst_element_factory_make("jpegenc", g_strdup_printf("jpegenc%d", tdx));
-            main[i].sub[idx].queue = gst_element_factory_make("queue", g_strdup_printf("queue%d", tdx));
-            main[i].sub[idx].sink = gst_element_factory_make("appsink", g_strdup_printf("appsink%d", tdx));
+            //main[i].videoPipe[CAPTURE_L].videorate = gst_element_factory_make("videorate", "videorate4");
+            main[i].videoPipe[idx].crop = gst_element_factory_make("videocrop", g_strdup_printf("videocrop%d", tdx));
+            main[i].videoPipe[idx].encoder = gst_element_factory_make("jpegenc", g_strdup_printf("jpegenc%d", tdx));
+            main[i].videoPipe[idx].queue = gst_element_factory_make("queue", g_strdup_printf("queue%d", tdx));
+            main[i].videoPipe[idx].sink = gst_element_factory_make("appsink", g_strdup_printf("appsink%d", tdx));
 
-            if (!main[i].sub[idx].crop || !main[i].sub[idx].encoder || !main[i].sub[idx].queue || !main[i].sub[idx].sink)
+            if (!main[i].videoPipe[idx].crop || !main[i].videoPipe[idx].encoder || !main[i].videoPipe[idx].queue || !main[i].videoPipe[idx].sink)
             {
                 __LOG(LOG_CRIT, "[GST][%s:%d] pipe[%d] create error", _FILE_, __LINE__, idx);
                 //gst_object_unref(pipeline[i]);
                 break;
             }
 
-            gst_bin_add_many(GST_BIN(main[i].pipeline), main[i].sub[idx].crop, main[i].sub[idx].queue, main[i].sub[idx].encoder, main[i].sub[idx].sink, NULL);
-            if (!gst_element_link_many(main[i].tee, main[i].sub[idx].crop, main[i].sub[idx].queue, main[i].sub[idx].encoder, main[i].sub[idx].sink, NULL)) 
+            gst_bin_add_many(GST_BIN(pipeline[i]), main[i].videoPipe[idx].crop, main[i].videoPipe[idx].queue, main[i].videoPipe[idx].encoder, main[i].videoPipe[idx].sink, NULL);
+            if (!gst_element_link_many(main[i].tee, main[i].videoPipe[idx].crop, main[i].videoPipe[idx].queue, main[i].videoPipe[idx].encoder, main[i].videoPipe[idx].sink, NULL)) 
             {
                 __LOG(LOG_CRIT, "[GST][%s:%d] pipe[%d] link error", _FILE_, __LINE__, idx);
                 //gst_object_unref(pipeline[i]);
@@ -1608,23 +2052,22 @@ int main(int argc, char *argv[]) {
             }
 
             if(idx%2 == 0)
-                g_object_set(main[i].sub[idx].crop, "top", 0, "bottom", 0, "left", _WIDTH, "right", 0, NULL);
+                g_object_set(main[i].videoPipe[idx].crop, "top", 0, "bottom", 0, "left", _WIDTH, "right", 0, NULL);
             else
-                g_object_set(main[i].sub[idx].crop, "top", 0, "bottom", 0, "left", 0, "right", _WIDTH, NULL);
+                g_object_set(main[i].videoPipe[idx].crop, "top", 0, "bottom", 0, "left", 0, "right", _WIDTH, NULL);
 
-            g_object_set(main[i].sub[idx].queue, "max-size-buffers", 60, NULL);
-            g_object_set(main[i].sub[idx].queue, "leaky", 2, NULL);
-            g_object_set(main[i].sub[idx].sink, "emit-signals", TRUE, "sync", FALSE, NULL);
-            g_signal_connect(main[i].sub[idx].sink, "new-sample", G_CALLBACK(new_sample_handler), &customData[tdx]);
-            g_signal_connect(main[i].sub[idx].sink, "new-preroll", G_CALLBACK(new_preroll_handler), &customData[tdx]);
+            g_object_set(main[i].videoPipe[idx].queue, "max-size-buffers", 60, NULL);
+            g_object_set(main[i].videoPipe[idx].queue, "leaky", 2, NULL);
+            g_object_set(main[i].videoPipe[idx].sink, "emit-signals", TRUE, "sync", FALSE, NULL);
+            g_signal_connect(main[i].videoPipe[idx].sink, "new-sample", G_CALLBACK(new_sample_handler), &customData[tdx]);
+            g_signal_connect(main[i].videoPipe[idx].sink, "new-preroll", G_CALLBACK(new_preroll_handler), &customData[tdx]);
             customData[tdx].index = tdx;
-            customData[tdx].enc = main[i].sub[idx].encoder;
-            customData[tdx].vr = main[i].sub[idx].videorate;
+            customData[tdx].enc = main[i].videoPipe[idx].encoder;
+            customData[tdx].vr = main[i].videoPipe[idx].videorate;
             customData[tdx].ch = (idx)%2 + i*2;
             customData[tdx].mode = CAPTURING;
             customData[tdx].captureMax = 3;
             customData[tdx].captureCnt = 3;
-
             //g_timeout_add_seconds(30, (GSourceFunc)captureStart, &customData[tdx]);
         } while(0);
 #endif
@@ -1632,37 +2075,50 @@ int main(int argc, char *argv[]) {
         //pipeline2 = GST_ELEMENT(rtspServer);
 
         // 캡처 포맷 설정 (video3 장치의 적절한 캡처 포맷에 맞게 변경)
-
+#if 1
         g_object_set(main[i].src, "device", g_strdup_printf("/dev/video%d", i+3), NULL);
         __LOG(LOG_NOTICE, "[GST][%s:%d] src[%d] : /dev/video%d", _FILE_, __LINE__, i, i+3);
         //g_object_set(main[i].src, "device", "/dev/video3", NULL);
+
         caps = gst_caps_new_simple("video/x-raw",
                                             "format", G_TYPE_STRING, "NV12",
                                             "width", G_TYPE_INT, _WIDTH*2,
                                             "height", G_TYPE_INT, _HEIGHT,
                                             "framerate", GST_TYPE_FRACTION, MAIN_FPS, 1,
                                             NULL);
+
+
         g_object_set(main[i].capsfilter, "caps", caps, NULL);
         gst_caps_unref(caps);
-
+#endif
+        //change_file_datetime(NULL);
+        //g_timeout_add_seconds(FILE_SAVE_DURATION, (GSourceFunc)change_file_datetime, NULL);
+        //main[i].pipeline = pipeline[0];
+#if defined(MP4_TEST_L) || defined(MP_TEST_R)
+        //g_timeout_add_seconds(FILE_SAVE_DURATION, (GSourceFunc)sendEOS, &main[i]);
+#endif
         // 파이프라인 실행
-        ret = gst_element_set_state(main[i].pipeline, GST_STATE_PLAYING);
+        __LOG(LOG_NOTICE, "[GST][%s:%d] Main pipe(%d) play", _FILE_, __LINE__, i);
+        ret = gst_element_set_state(pipeline[i], GST_STATE_PLAYING);
         if (ret == GST_STATE_CHANGE_FAILURE) {
             __LOG(LOG_CRIT, "[GST][%s:%d] pipeline[%d] playing error", _FILE_, __LINE__, i);
-            gst_object_unref(main[i].pipeline);
+            gst_object_unref(pipeline[i]);
             return -1;
         } else if (ret == GST_STATE_CHANGE_NO_PREROLL) {
             customData->is_live = TRUE;
         }
 
-        main[i].bus = gst_element_get_bus(main[i].pipeline);
+        main[i].bus = gst_element_get_bus(pipeline[i]);
         if(!main[i].bus) {
             __LOG(LOG_CRIT, "[GST][%s:%d] bus[%d] get error from pipeline", _FILE_, __LINE__, i);
         }
+        //main[i].pipeline = pipeline[i];
+        main[i].index = i;
         main[i].bus_watch_id = gst_bus_add_watch(main[i].bus, my_bus_callback, &main[i]);
+
         gst_object_unref(main[i].bus);
 
-    }while(++i < MAX_CAM);
+    } while(++i < MAX_CAM);
 
 
 #if 0
@@ -1681,8 +2137,8 @@ int main(int argc, char *argv[]) {
     //rtspThreadFunc(&info[1]);
     //pthread_create(&m_threadRtsp2, NULL, &rtspThreadFunc, &info[0]);
     //pthread_create(&m_threadRtsp3, NULL, &rtspThreadFunc, &info[1]);
-    //g_timeout_add_seconds(15, (GSourceFunc)changeBitrate, &main[i].sub[FILE_L].customData);
-    //g_timeout_add_seconds(30, (GSourceFunc)changeFPS, &main[i].sub[FILE_L].customData);
+    //g_timeout_add_seconds(15, (GSourceFunc)changeBitrate, &main[i].videoPipe[FILE_L].customData);
+    //g_timeout_add_seconds(30, (GSourceFunc)changeFPS, &main[i].videoPipe[FILE_L].customData);
 
     //g_timeout_add_seconds(10, (GSourceFunc)captureStart, &customData[CAPTURE_L]);
 
@@ -1702,17 +2158,22 @@ int main(int argc, char *argv[]) {
         }
     }
     __LOG(LOG_CRIT, "[GST][%s:%d] Main loop end", _FILE_, __LINE__);
-    // 재생 시간 기다리기 (10초)
-    //gst_element_get_state(pipeline, NULL, NULL, GST_CLOCK_TIME_NONE);
+    
+    //gst_element_get_state(pipeline, NULL, NULL, GST_SECOND*GST_CLOCK_TIME_NONE);
 
+#if 1
     for(i=0; i<MAX_CAM; i++)
     {
-        gst_element_set_state(main[i].pipeline, GST_STATE_NULL);
-        gst_object_unref(main[i].pipeline) ; 
+        //gst_element_send_event(pipeline[i], gst_event_new_eos());
+        gst_element_set_state(pipeline[i], GST_STATE_NULL);
+        gst_object_unref(pipeline[i]);
     }
-    g_main_loop_unref(gstLoop);
-    g_object_unref(rtspServer);
     ipc_clear();
+#endif
+
+    g_object_unref(rtspServer);
+    g_main_loop_unref(gstLoop);
+    
     __LOG(LOG_CRIT, "[GST][%s:%d] exit", _FILE_, __LINE__);
     exit(EXIT_SUCCESS);
     
@@ -1868,11 +2329,8 @@ static GstFlowReturn new_sample_handler_capture(GstElement *sink, gpointer data)
     gst_buffer_map(buffer, &map, GST_MAP_READ);
     //g_print("file_name:%s\n", info->file_name);
 
-#ifdef JHW_TEST
-    path = g_strdup_printf("%s_%d.jpg", info->file_name, info->captureCnt++);
-#else
-    path = g_strdup_printf("%s/%s_%d.jpg", FILE_PATH, info->file_name, info->captureCnt++);
-#endif
+    path = g_strdup_printf("%s%s_%d.jpg", FILE_PATH, info->file_name, info->captureCnt++);
+
     //g_print("path : %s\n", path);
     FILE *file = fopen(path, "ab");
     if (file) {
@@ -1966,11 +2424,9 @@ static GstFlowReturn new_sample_handler_file(GstElement *sink, gpointer data) {
     gchar *path;
     gst_buffer_map(buffer, &map, GST_MAP_READ);
     //g_print("file_name:%s\n", info->file_name);
-#ifdef JHW_TEST
-    path = g_strdup_printf("%s", info->file_name);
-#else
-    path = g_strdup_printf("%s/%s", FILE_PATH, info->file_name);
-#endif
+
+    path = g_strdup_printf("%s%s", FILE_PATH, info->file_name);
+
     //g_print("path : %s\n", path);
     FILE *file = fopen(path, "ab");
     if (file) {
@@ -2349,20 +2805,6 @@ void sink_added(GstElement *sink, guint arg0, gpointer data)
     return;
 }
 
-static gchararray format_location(GstElement *sink, guint arg0, gpointer data)
-{
-    CustomData *info = (CustomData *)data;
-    GDateTime *datetime = g_date_time_new_now_local();
-    gchar *date_str = g_date_time_format(datetime, "%Y%m%d_%H%M%S");
-    gchararray file_name = g_strdup_printf("output_%s-ch%d.mp4", date_str, info->ch);
-
-    __LOG(LOG_NOTICE, "[GST][%s:%d] file_name : %s", _FILE_, __LINE__, file_name);
-
-    g_date_time_unref(datetime);
-    g_free(date_str);
-
-    return file_name;
-}
 
 void muxer_added(GstElement *sink, guint arg0, gpointer data)
 {

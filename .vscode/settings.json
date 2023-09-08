@@ -23,6 +23,9 @@
         "random": "c",
         "limits": "c",
         "cstdlib": "c",
-        "ipc.h": "c"
+        "ipc.h": "c",
+        "rtsp-media-factory.h": "c",
+        "gstrtsptransport.h": "c",
+        "functional": "c"
     }
 }
