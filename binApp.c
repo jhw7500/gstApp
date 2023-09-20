@@ -10,37 +10,7 @@
 GstElement *binLF;
 typedef struct _CustomData
 {
-    GstElement *pipeline;
-    GstElement *bin_left;
-    GstElement *bin_right;
-    GstElement *source;
-    GstElement *filesink_left;
-    GstElement *filesink_right;
-    GstElement *rtspsink_left;
-    GstElement *rtspsink_right;
-    GstElement *tee_crop;
-    GstElement *queue_left;
-    GstElement *queue_right;
-    GstElement *queue_file_left;
-    GstElement *queue_file_right;
-    GstElement *queue_rtsp_left;
-    GstElement *queue_rtsp_right;
-    GstElement *tee_left;
-    GstElement *tee_right;
-    GstElement *encoder_file_left;
-    GstElement *encoder_file_right;
-    GstElement *encoder_rtsp_left;
-    GstElement *encoder_rtsp_right;
-    GstElement *crop_left;
-    GstElement *crop_right;
-    GstElement *capsfilter;
-    GstElement *parse_file_left;
-    GstElement *parse_file_right;
-    GstElement* parse_rtsp_left;
-    GstElement* parse_rtsp_right;
-    GstElement *convert;
-    GstElement *rtspsrc_left;
-    GstCaps *caps;
+    gint ch;
 } CustomData;
 
 typedef struct {
@@ -229,7 +199,7 @@ void show_message_dialog(const gchar * const message)
 static void
 pad_added_handler (GstElement * src, GstPad * new_pad, CustomData * data)
 {
-  GstPad *sink_pad = gst_element_get_static_pad (data->convert, "sink");
+  GstPad *sink_pad;     //= gst_element_get_static_pad (data->convert, "sink");
   GstPadLinkReturn ret;
   GstCaps *new_pad_caps = NULL;
   GstStructure *new_pad_struct = NULL;
@@ -379,19 +349,19 @@ static gboolean link_elements_with_filter_full(GstElement *element1, GstElement 
 
 void sigintHandler(int unused) {
 	g_print("You ctrl-c-ed!");
-	gst_element_send_event(data.pipeline, gst_event_new_eos()); 
+	//gst_element_send_event(data.pipeline, gst_event_new_eos()); 
 	return;
 }
 
 void sigkillHandler(int unused) {
 	g_print("You killed!");
-	gst_element_send_event(data.pipeline, gst_event_new_eos()); 
+	//gst_element_send_event(data.pipeline, gst_event_new_eos()); 
 	return;
 }
 
 void sigtermHandler(int unused) {
 	g_print("You terminated!");
-	gst_element_send_event(data.pipeline, gst_event_new_eos()); 
+	//gst_element_send_event(data.pipeline, gst_event_new_eos()); 
 	return;
 }
 
@@ -636,58 +606,126 @@ gboolean timeout(GstElement *bin)
   return result;
 }
 
+static gchararray format_location(GstElement *sink, guint arg0, gpointer data)
+{
+    CustomData *info = (CustomData *)data;
+    GDateTime *datetime = g_date_time_new_now_local();
+    //gint sec = g_date_time_get_second(datetime);
+    gchar *date_str;
+    date_str = g_date_time_format(datetime, "%Y%m%d_%H%M%S");
+
+    //date_str = g_date_time_format(datetime, "%Y%m%d_%H%M%S");
+    g_printf("%s : ch%d", __FUNCTION__, info->ch);
+    gchararray file_name = g_strdup_printf("test_%s-ch%d.mp4", date_str, info->ch);
+
+    g_date_time_unref(datetime);
+    g_free(date_str);
+
+    return file_name;
+}
+
+typedef struct PipeObject{
+    GstElement *videoBin;
+    GstElement *audioBin;
+    GstElement *sinkBin;
+    GstElement *video_src;
+    GstElement *audio_src;
+    GstElement *vpuenc_h264;
+    GstElement *lamemp3enc;
+    GstElement *mpegaudioparse;
+    GstElement *h264parse;
+    GstElement *splitmuxsink;
+    GstElement *tee;
+} PipeObject;
 
 int main(int argc, char *argv[]) 
 {
     gst_init(&argc, &argv);
+    gint i = 0;
+    PipeObject obj[4];
+    CustomData customData[4];
 
-    GstElement *binMain, *sink;
-    GstElement *queue, *src, *enc, *conv, *parse;
-    GstPad *binMainPad, *binLFpad;
-    GMainLoop *loop;
-
-    binMain = gst_bin_new("binMain");
-    binLF = gst_bin_new("binLF");
-
-    src = gst_element_factory_make("videotestsrc", "source");
-    queue = gst_element_factory_make("queue", "queue");
-    enc = gst_element_factory_make("vpuenc_h264", "vpuenc_h264");
-    conv = gst_element_factory_make("imxvideoconvert_g2d", "conv");
-    conv = gst_element_factory_make("videoconvert", "conv");
-    parse = gst_element_factory_make("h264parse", "parse");
-    
-    g_object_set(enc, "bitrate", 4096, NULL);
-
-    gst_bin_add_many(GST_BIN(binMain), src, conv, enc, parse, queue, NULL);
-    //gst_bin_add_many(GST_BIN(binMain), src, queue, NULL);
-    //gst_element_link_many(src, conv, queue, NULL);
-    gst_element_link_many(src, conv, enc, parse, queue, NULL);
-    binMainPad = gst_element_get_static_pad(queue, "src");
-    gst_element_add_pad(binMain, gst_ghost_pad_new("src", binMainPad));
-    gst_object_unref(binMainPad);
-
-    sink = gst_element_factory_make("filesink", "sink");
-    g_object_set(sink, "location", "test.mp4", NULL);
-    gst_bin_add(GST_BIN(binLF), sink);
-    binLFpad = gst_element_get_static_pad(sink, "sink");
-    gst_element_add_pad(binLF, gst_ghost_pad_new("sink", binLFpad));
-    gst_object_unref(binLFpad);
 
     GstElement *pipeline = gst_pipeline_new(NULL);
-    gst_bin_add(GST_BIN(pipeline), GST_ELEMENT(binMain));
-    gst_bin_add(GST_BIN(pipeline), GST_ELEMENT(binLF));
-    //gst_bin_add(GST_BIN(binMain), binLF);
-    gst_element_link(binMain, binLF);
+    //GstElement *splitmuxsink = gst_element_factory_make("splitmuxsink", "splitmuxsink");
+    GstElement *sinkBin = gst_bin_new("sink_bin");
+    gst_bin_add(GST_BIN(pipeline), sinkBin);
 
+    for(i=0; i<4; i++)
+    {
+        customData[i].ch = i;
+        obj[i].videoBin = gst_bin_new(g_strdup_printf("video_bin%d", i));
+        obj[i].audioBin = gst_bin_new(g_strdup_printf("audio_bin%d", i));
+        obj[i].sinkBin = gst_bin_new(g_strdup_printf("sink_bin%d", i));
+        obj[i].video_src = gst_element_factory_make("videotestsrc", g_strdup_printf("video_src%d", i)); // 비디오 소스 (예제용)
+        obj[i].audio_src = gst_element_factory_make("audiotestsrc", g_strdup_printf("audio_src%d", i)); // 오디오 소스 (예제용)
+        obj[i].vpuenc_h264 = gst_element_factory_make("vpuenc_h264", g_strdup_printf("vpuenc_h264%d", i)); // 비디오 인코더
+        obj[i].lamemp3enc = gst_element_factory_make("lamemp3enc", g_strdup_printf("lamemp3enc%d", i)); // 오디오 인코더
+        obj[i].mpegaudioparse = gst_element_factory_make("mpegaudioparse", g_strdup_printf("mpegaudioparse%d", i)); // 오디오 인코더
+        obj[i].h264parse = gst_element_factory_make("h264parse", g_strdup_printf("h264parse%d", i)); // Splitmuxsink
+        obj[i].splitmuxsink = gst_element_factory_make("splitmuxsink", g_strdup_printf("splitmuxsink%d", i)); // Splitmuxsink
+        obj[i].tee = gst_element_factory_make("tee", g_strdup_printf("tee%d", i)); // Tee
+
+        g_object_set(obj[i].video_src, "is-live", TRUE, NULL);
+        g_object_set(obj[i].audio_src, "is-live", TRUE, NULL);
+        //g_object_set(obj[i].splitmuxsink, "location",  g_strdup_printf("test_ch%d_%02d.mp4", i), NULL);
+        g_object_set(obj[i].splitmuxsink, "max-size-time", 10*GST_SECOND, NULL);
+        g_signal_connect(obj[i].splitmuxsink, "format-location", G_CALLBACK(format_location), &customData[i]);
+
+        // bin1에 비디오 처리 요소들을 추가합니다.
+        gst_bin_add_many(GST_BIN(obj[i].videoBin), obj[i].video_src, obj[i].vpuenc_h264, obj[i].h264parse, NULL);
+
+        // bin2에 오디오 처리 요소들을 추가합니다.
+        gst_bin_add_many(GST_BIN(obj[i].audioBin), obj[i].audio_src, obj[i].lamemp3enc, obj[i].mpegaudioparse, obj[i].tee, NULL);
+
+        gst_bin_add_many(GST_BIN(sinkBin), obj[i].splitmuxsink, NULL);
+        // bin1과 bin2를 파이프라인에 추가합니다.
+        gst_bin_add(GST_BIN(pipeline), obj[i].videoBin);
+        gst_bin_add(GST_BIN(pipeline), obj[i].audioBin);
+        
+        // bin1과 bin2를 연결합니다.
+        if (!gst_element_link_many(obj[i].video_src, obj[i].vpuenc_h264, obj[i].h264parse, NULL)) {
+            g_error("Failed to link video elements");
+        }
+
+        if (!gst_element_link_many(obj[i].audio_src, obj[i].lamemp3enc, obj[i].mpegaudioparse, obj[i].tee, NULL)) {
+            g_error("Failed to link audio elements");
+        }
+
+        //if(!gst_element_link(bin1, bin3))
+            //g_error("error0");
+
+        if(!gst_element_add_pad(obj[i].videoBin, gst_ghost_pad_new(g_strdup_printf("src_video%d", i), gst_element_get_static_pad(obj[i].h264parse, "src"))))
+            g_error("error1");
+        if(!gst_element_add_pad(obj[i].audioBin, gst_ghost_pad_new(g_strdup_printf("src_audio%d", i), gst_element_get_request_pad(obj[i].tee, "src_%u"))))
+            g_error("error2");
+        if(!gst_element_add_pad(sinkBin, gst_ghost_pad_new(g_strdup_printf("sink_video%d", i), gst_element_get_request_pad(obj[i].splitmuxsink, "video_aux_%u"))))
+            g_error("error3");
+        if(!gst_element_add_pad(sinkBin, gst_ghost_pad_new(g_strdup_printf("sink_audio%d", i), gst_element_get_request_pad(obj[i].splitmuxsink, "audio_%u"))))
+            g_error("error4");
+
+        if (gst_pad_link(gst_element_get_static_pad(obj[i].videoBin, g_strdup_printf("src_video%d", i)), gst_element_get_static_pad(sinkBin, g_strdup_printf("sink_video%d", i))) != GST_PAD_LINK_OK)
+            g_error("error5");
+        if (gst_pad_link(gst_element_get_static_pad(obj[i].audioBin, g_strdup_printf("src_audio%d", i)), gst_element_get_static_pad(sinkBin, g_strdup_printf("sink_audio%d", i))) != GST_PAD_LINK_OK)
+            g_error("error6");
+    }
+
+#if 0
+    // splitmuxsink과 tee를 연결합니다.
+    GstPad *splitmuxsink_sink_pad = gst_element_get_request_pad(splitmuxsink, "audio_%u");
+    GstPad *tee_src_pad = gst_element_get_request_pad(tee, "src_%u"); // tee의 출력 패드는 여러 개일 수 있습니다.
+
+    if (gst_pad_link(tee_src_pad, splitmuxsink_sink_pad) != GST_PAD_LINK_OK) {
+        g_error("Failed to link splitmuxsink and tee");
+    }
+#endif
     gst_element_set_state(pipeline, GST_STATE_PLAYING);
-    //g_timeout_add_seconds(10, (GSourceFunc) timeout, &data);
-    g_timeout_add_seconds(10, (GSourceFunc)change_file_name, sink);
+
     //gst_element_set_state(binMain, GST_STATE_PLAYING);
     //gst_element_set_state(binLF, GST_STATE_PLAYING);
 
     loop = g_main_loop_new(NULL, FALSE);
     g_main_loop_run(loop);
-
 
     g_main_loop_unref(loop);
     //gst_element_set_state (binMain, GST_STATE_NULL);

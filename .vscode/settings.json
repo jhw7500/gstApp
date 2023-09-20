@@ -26,6 +26,7 @@
         "ipc.h": "c",
         "rtsp-media-factory.h": "c",
         "gstrtsptransport.h": "c",
-        "functional": "c"
+        "functional": "c",
+        "gstinfo.h": "c"
     }
 }

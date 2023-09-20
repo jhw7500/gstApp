@@ -164,6 +164,7 @@ int main(int argc, char *argv[]) {
     queue_audio = gst_element_factory_make("queue", "audio-queue");
     muxer = gst_element_factory_make("mp4mux", "mp4-muxer");
     splitmuxsink = gst_element_factory_make("splitmuxsink", "split-muxer");
+    GstElement *audio_parse = gst_element_factory_make("mpegaudioparse", "audio-parse");
 
     if (!pipeline || !videotestsrc || !videoconvert || !capsfilter || !x264enc ||
         !queue_video || !audiotestsrc || !audioconvert || !audioresample ||
@@ -192,21 +193,32 @@ int main(int argc, char *argv[]) {
 
 
     // Add elements to pipeline
-    gst_bin_add_many(GST_BIN(pipeline), videotestsrc, videoconvert, capsfilter, x264enc, parse, queue_video, splitmuxsink, NULL);
-    //gst_bin_add_many(audiotestsrc, audioconvert, audioresample, voaacenc, queue_audio, muxer, NULL);
+    gst_bin_add_many(GST_BIN(pipeline), videotestsrc, videoconvert, capsfilter, x264enc, parse, queue_video, NULL);
+    gst_bin_add_many(GST_BIN(pipeline), audiotestsrc, audioconvert, voaacenc, audio_parse, audioresample, splitmuxsink, NULL);
 
     g_object_set(G_OBJECT(splitmuxsink), "muxer", muxer, NULL);
     g_object_set(G_OBJECT(splitmuxsink), "location", "tost%05d.mp4", NULL);
     g_object_set(G_OBJECT(splitmuxsink), "max-size-time", 10000000000, NULL);
 
     // Link video elements
-    gst_element_link_many(videotestsrc, x264enc, parse, splitmuxsink, NULL);
-
+    gst_element_link_many(videotestsrc, x264enc, parse, NULL);
+    if(gst_pad_link(gst_element_get_static_pad(parse, "src"), gst_element_get_request_pad(splitmuxsink, "video")) != GST_PAD_LINK_OK)
+    {
+        g_message("video pad link err");
+        return -1;
+    }
+    
     // Request the muxer's video_0 pad
-    GstPad *muxer_pad, *sink_pad;
 
     // Link audio elements
-    //gst_element_link_many(audiotestsrc, audioconvert, audioresample, voaacenc, queue_audio, splitmuxsink, NULL);
+    //gst_element_link_many(audiotestsrc, voaacenc, audio_parse, splitmuxsink, NULL);
+    gst_element_link_many(audiotestsrc, voaacenc, audio_parse, NULL);
+
+    if(gst_pad_link(gst_element_get_static_pad(audio_parse, "src"), gst_element_get_request_pad(splitmuxsink, "audio_%u")) != GST_PAD_LINK_OK)
+    {
+        g_message("audio pad link err");
+        return -1;
+    }
 
     // Start the pipeline
     gst_element_set_state(pipeline, GST_STATE_PLAYING);

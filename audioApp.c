@@ -7,6 +7,7 @@
 //#include <gst/check/gstcheck.h>
 
 #define JHW_TEST
+#define FILENAME_SEC_ZERO
 
 void mylog( int opt, const char* _szfmt, ... );
 #define __LOG(opt, fmt, args...) do { mylog(opt, (char*)fmt, ##args); } while(0)
@@ -20,15 +21,18 @@ void mylog( int opt, const char* _szfmt, ... );
 #define FILE_PATH   "/mnt/sd_cam/"
 #endif
 
-GMainLoop *loop;
+GMainLoop *gstLoop;
 GstElement *pipeline;
+
+volatile sig_atomic_t is_interrupted = 0;
+volatile sig_atomic_t sigflag = 0;
 
 guint8 log_level = 7;
 guint8 dbg_level = 7;
-guint8 sigflag = 0;
 
 gchar *program_name;
 gchar *ohtName;
+gchar *fileDateTime = NULL;
 
 typedef struct _CustomData{
     gchar* file_name;
@@ -207,8 +211,7 @@ static gboolean my_bus_callback(GstBus *bus, GstMessage *message, gpointer data)
         {
             //printf("GST_MESSAGE_EOS (index:%d sigflag:%d)\n", info->index, sigflag);
             __LOG(LOG_NOTICE, "[GST][%s:%d] GST_MESSAGE_EOS", _FILE_, __LINE__);
-            if(sigflag) g_main_loop_quit(loop);
-            else
+            if(sigflag) is_interrupted = 1;
             {
                 gst_element_set_state(pipeline, GST_STATE_READY);
                 gst_element_set_state(pipeline, GST_STATE_PLAYING);
@@ -336,38 +339,45 @@ static gboolean my_bus_callback(GstBus *bus, GstMessage *message, gpointer data)
     return TRUE;
 }
 
+static gboolean change_file_datetime() 
+{
+    //CustomData *info = (CustomData *)data;
+    GDateTime *datetime = g_date_time_new_now_local();
+    static gint oldMin = -1;
+    gint newMin = g_date_time_get_minute(datetime);
+    //g_print("oldMin:%d newMin:%d\n", oldMin, newMin);
+    if(newMin == oldMin)
+        return FALSE;
+
+    oldMin = newMin;
+    //gchar *date_str = g_date_time_format(datetime, "%Y%m%d_%H%M%S");
+    
+    if(fileDateTime == NULL) 
+    {
+        fileDateTime = g_date_time_format(datetime, "%Y%m%d_%H%M%S");
+    }
+    else
+    {
+        fileDateTime = g_date_time_format(datetime, "%Y%m%d_%H%M00");
+    }
+
+    __LOG(LOG_NOTICE, "[GST][%s:%d] %s (fileDateTime : %s)", _FILE_, __LINE__, __FUNCTION__, fileDateTime);
+    g_date_time_unref(datetime);
+
+    return TRUE;
+}
+
 static gboolean change_file_name(gpointer data) 
 {
     CustomData *info = (CustomData *)data;
     GDateTime *datetime = g_date_time_new_now_local();
     gchar *date_str;
-#ifdef FILENAME_SEC_ZERO
-    gint tmp = g_date_time_get_minute(datetime);
 
-    if(tmp == info->min)
-        return TRUE;
-
-    info->min = tmp;
-    //gchar *date_str = g_date_time_format(datetime, "%Y%m%d_%H%M%S");
-    
-    if(info->file_name == NULL) 
-    {
-        date_str = g_date_time_format(datetime, "%Y%m%d_%H%M%S");
-        info->file_name = g_strdup_printf("%s_%s", ohtName, date_str);
-        //__LOG(LOG_NOTICE, "[GST][%s:%d] file_name : %s", _FILE_, __LINE__, info->file_name);
-        __LOG(LOG_NOTICE, "[GST][%s:%d] date : %s file_name : %s", _FILE_, __LINE__, date_str, info->file_name);
-    }
-    else
-    {
-        date_str = g_date_time_format(datetime, "%Y%m%d_%H%M00");
-        info->file_name = g_strdup_printf("%s_%s", ohtName, date_str);
-    }
-#else
     //gst_element_send_event(info->mux, gst_event_new_eos());
     date_str = g_date_time_format(datetime, "%Y%m%d_%H%M%S");
     info->file_name = g_strdup_printf("%s_%s", ohtName, date_str);
     //__LOG(LOG_NOTICE, "[GST][%s:%d] file_name : %s", _FILE_, __LINE__, info->file_name);
-#endif  //FILENAME_SEC_ZERO
+
     __LOG(LOG_NOTICE, "[GST][%s:%d] %s (file_name : %s)", _FILE_, __LINE__, __FUNCTION__, info->file_name);
     g_date_time_unref(datetime);
     g_free(date_str);
@@ -405,7 +415,11 @@ static GstFlowReturn new_sample_handler(GstElement *sink, gpointer userData) {
         return GST_FLOW_ERROR;
     }
 
-    path = g_strdup_printf("%s%s.mp3", FILE_PATH, info->file_name);
+#ifdef FILENAME_SEC_ZERO
+    path = g_strdup_printf("%s%s_%s.mp3", FILE_PATH, ohtName, fileDateTime);
+#else
+    path = g_strdup_printf("%s%s_%s.mp3", FILE_PATH, ohtName, info->file_name);
+#endif
 
     file = fopen(path, "ab");
     if (file) {
@@ -434,7 +448,7 @@ static GstFlowReturn new_preroll_handler(GstElement *sink, gpointer data) {
     __LOG(LOG_NOTICE, "[GST][%s:%d] sink_name:%s", _FILE_, __LINE__, sink_name);
     g_free (sink_name);
 
-    change_file_name(info);
+    //change_file_name(info);
 
     //g_timeout_add_seconds(FILE_SAVE_DURATION, (GSourceFunc)change_file_name, info);
 
@@ -470,6 +484,15 @@ static gboolean on_samples_selected(GstElement *element, GstSegment *arg0, guint
     return GST_FLOW_OK;
 }
 
+static void taskLoop(CustomData* data)
+{
+#ifdef FILENAME_SEC_ZERO
+    change_file_datetime(data);
+#endif
+    usleep(1000);
+
+    return;
+}
 
 int main(int argc, char *argv[]) {
     // Initialize GStreamer
@@ -478,12 +501,14 @@ int main(int argc, char *argv[]) {
     if(argc >= 1) {
         program_name = CHARNEXT(argv[0], '/');
         //g_printf("%s\n", program_name);
-        __LOG(LOG_NOTICE, "[GST][%s:%d] %s\n", __FILE__, __LINE__, program_name);
-        g_message("[GST][%s:%d] %s\n", __FILE__, __LINE__, program_name);
+        __LOG(LOG_NOTICE, "[GST][%s:%d] %s", __FILE__, __LINE__, program_name);
+        //g_message("[GST][%s:%d] %s", __FILE__, __LINE__, program_name);
     }
 
     AudioPipe audioPipe;
     CustomData customData;
+
+    customData.file_name = NULL;
 
     attachInterruptHandlers();
 
@@ -540,15 +565,24 @@ int main(int argc, char *argv[]) {
     guint bus_watch_id = gst_bus_add_watch(bus, my_bus_callback, NULL);
     gst_object_unref(bus);
 
-    g_timeout_add_seconds(FILE_SAVE_DURATION, (GSourceFunc)sendEOS, &customData);
-
-    loop = g_main_loop_new(NULL, FALSE);
+    //g_timeout_add_seconds(FILE_SAVE_DURATION, (GSourceFunc)sendEOS, &customData);
 
     g_print("Running...\n");
-    //g_timeout_add_seconds(segment_duration, (GSourceFunc)sendEOS, fileSink);
-    //g_timeout_add_seconds(10, (GSourceFunc)change_output_filename, mux);
 
-    g_main_loop_run(loop);
+    gstLoop = g_main_loop_new(NULL, FALSE);
+
+	if(!gstLoop) {
+        __LOG(LOG_CRIT, "[GST][%s:%d] Main loop create error", _FILE_, __LINE__);
+    } else {
+        __LOG(LOG_NOTICE, "[GST][%s:%d] Main loop start", _FILE_, __LINE__);
+        //g_main_loop_run(gstLoop);
+        while (!is_interrupted)
+        {
+            g_main_context_iteration(g_main_loop_get_context(gstLoop), FALSE);
+            taskLoop(&customData);
+        }
+    }
+    __LOG(LOG_CRIT, "[GST][%s:%d] Main loop end", _FILE_, __LINE__);
 #if 0
     // Wait until error or EOS
     GstBus *bus = gst_element_get_bus(pipeline);
