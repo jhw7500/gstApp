@@ -15,8 +15,6 @@
 #define CAPTURE_L_ENABLEx
 #define CAPTURE_R_ENABLEx
 
-#define JHW_TESTx
-
 #define HIGH_BITRATE    4096
 #define LOW_BITRATE     1024
 
@@ -25,7 +23,12 @@
 #define QUEUE_NAME    "queue"
 #define QUEUE_RTSP_NAME    "queueRtsp"
 
-#define FILE_PATH   "/mnt/sd_cam"
+#define JHW_TEST
+#ifdef JHW_TEST
+#define FILE_PATH   "/home/user/jhw/"
+#else
+#define FILE_PATH   "/mnt/sd_cam/"
+#endif
 
 void mylog( int opt, const char* _szfmt, ... );
 #define __LOG(opt, fmt, args...) do { mylog(opt, (char*)fmt, ##args); } while(0)
@@ -231,8 +234,11 @@ static gboolean my_bus_callback(GstBus *bus, GstMessage *message, gpointer data)
 
     if(GST_MESSAGE_TYPE(message) == GST_MESSAGE_QOS)
         return TRUE;
-        
-    printf("Got %s message\n", GST_MESSAGE_TYPE_NAME(message));
+
+    if(GST_MESSAGE_TYPE(message) != GST_MESSAGE_STATE_CHANGED)
+        __LOG(LOG_INFO, "[BUS][%s:%d] Got %s message from %s", _FILE_, __LINE__, GST_MESSAGE_TYPE_NAME(message), GST_OBJECT_NAME (message->src));
+    else
+        return TRUE;
 
     switch(GST_MESSAGE_TYPE(message)) 
     {
@@ -554,11 +560,7 @@ static GstFlowReturn new_sample_handler(GstElement *sink, gpointer userData) {
 
         case RECORDING:
             {
-#ifdef JHW_TEST
-                path = g_strdup_printf("%s", info->file_name);
-#else
                 path = g_strdup_printf("%s/%s", FILE_PATH, info->file_name);
-#endif
                 //g_print("path : %s\n", path);
                 file = fopen(path, "ab");
                 if (file) {
@@ -595,11 +597,8 @@ static GstFlowReturn new_sample_handler(GstElement *sink, gpointer userData) {
                 }
                 __LOG(LOG_DEBUG, "[GST][%s:%d] captureCnt %d captureMax %d", _FILE_, __LINE__, info->captureCnt, info->captureMax);
 
-#ifdef JHW_TEST
-                path = g_strdup_printf("%s_%d.jpg", info->file_name, info->captureCnt++);
-#else
                 path = g_strdup_printf("%s/%s_%d.jpg", FILE_PATH, info->file_name, info->captureCnt++);
-#endif
+
                 //g_print("path : %s\n", path);
                 file = fopen(path, "ab");
                 if (file) {
@@ -1319,7 +1318,7 @@ int main(int argc, char *argv[]) {
                 g_object_set(main[i].sub[idx].crop, "top", 0, "bottom", 0, "left", 0, "right", _WIDTH, NULL);
 
             g_object_set(main[i].sub[idx].videorate, "max-rate", FILE_FPS, NULL);
-            g_object_set(main[i].sub[idx].videorate, "drop-only", TRUE, NULL);
+            g_object_set(main[i].sub[idx].videorate, "drop-only", FALSE, NULL);
             //g_object_set(main[i].sub[idx].queue, "max-size-bytes", 0, "max-size-time", 0, "max-size-buffers", 60, "leaky", 1, NULL);
             g_object_set(main[i].sub[idx].queue, "max-size-buffers", 60, NULL);
             g_object_set(main[i].sub[idx].queue, "leaky", 2, NULL);
@@ -1373,7 +1372,7 @@ int main(int argc, char *argv[]) {
                 g_object_set(main[i].sub[idx].crop, "top", 0, "bottom", 0, "left", 0, "right", _WIDTH, NULL);
 
             g_object_set(main[i].sub[idx].videorate, "max-rate", FILE_FPS, NULL);
-            g_object_set(main[i].sub[idx].videorate, "drop-only", TRUE, NULL);
+            g_object_set(main[i].sub[idx].videorate, "drop-only", FALSE, NULL);
             //g_object_set(main[i].sub[idx].queue, "max-size-bytes", 0, "max-size-time", 0, "max-size-buffers", 60, "leaky", 1, NULL);
             g_object_set(main[i].sub[idx].queue, "max-size-buffers", 60, NULL);
             g_object_set(main[i].sub[idx].queue, "leaky", 2, NULL);
