@@ -27,6 +27,9 @@
         "rtsp-media-factory.h": "c",
         "gstrtsptransport.h": "c",
         "functional": "c",
-        "gstinfo.h": "c"
+        "gstinfo.h": "c",
+        "signal.h": "c",
+        "glib-unix.h": "c",
+        "locale.h": "c"
     }
 }

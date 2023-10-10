@@ -6,7 +6,7 @@
 #include <gst/rtsp-server/rtsp-server.h>
 #include <gst/check/gstcheck.h>
 
-#define FILENAME_SEC_ZEROx
+#define FILENAME_SEC_ZERO
 
 #define FILE_L_ENABLE
 #define FILE_R_ENABLE
@@ -38,7 +38,7 @@ void mylog( int opt, const char* _szfmt, ... );
 #define FILE_SAVE_DURATION 60
 #define _WIDTH   1920
 #define _HEIGHT  1080
-#define MAIN_FPS 30
+#define MAIN_FPS FILE_FPS
 #define FILE_FPS 30
 #define RTSP_FPS 15
 #define DEFAULT_FPS     2147483647
@@ -53,6 +53,7 @@ GMainLoop  *gstLoop;
 GstRTSPServer *rtspServer;
 GstRTSPMountPoints *rtspMounts;
 GThread *ipcThread;
+gchar* fileName = NULL;
 
 volatile sig_atomic_t is_interrupted = 0;
 
@@ -485,6 +486,35 @@ static gboolean changeFPS(gpointer data)
     return TRUE;
 }
 
+static gboolean changeFileName(gpointer data)
+{
+    GDateTime *datetime = g_date_time_new_now_local();
+    gchar *date_str;
+    static gint min = -1;
+    gint tmp = g_date_time_get_minute(datetime);
+
+    if(min == tmp)
+        return TRUE;
+
+    min = tmp;
+
+    if(fileName == NULL)
+    {
+        date_str = g_date_time_format(datetime, "%Y%m%d_%H%M%S");
+        fileName = g_strdup_printf("output_%s", date_str);
+    }
+    else
+    {
+        date_str = g_date_time_format(datetime, "%Y%m%d_%H%M00");
+        fileName = g_strdup_printf("output_%s", date_str);
+    }
+    __LOG(LOG_NOTICE, "[GST][%s:%d] %s (file_name : %s)", _FILE_, __LINE__, __FUNCTION__, fileName);
+
+    g_date_time_unref(datetime);
+    g_free(date_str);
+
+    return TRUE;
+}
 
 static gboolean change_file_name(gpointer data) 
 {
@@ -523,6 +553,7 @@ static gboolean change_file_name(gpointer data)
 
     return TRUE;
 }
+
 // appsink의 "new-sample" 시그널 처리 함수
 static GstFlowReturn new_sample_handler(GstElement *sink, gpointer userData) {
     GstSample *sample;
@@ -560,7 +591,8 @@ static GstFlowReturn new_sample_handler(GstElement *sink, gpointer userData) {
 
         case RECORDING:
             {
-                path = g_strdup_printf("%s/%s", FILE_PATH, info->file_name);
+                //path = g_strdup_printf("%s/%s", FILE_PATH, info->file_name);
+                path = g_strdup_printf("%s/%s_ch%d.mp4", FILE_PATH, fileName, info->ch);
                 //g_print("path : %s\n", path);
                 file = fopen(path, "ab");
                 if (file) {
@@ -691,14 +723,24 @@ static GstFlowReturn new_preroll_handler(GstElement *sink, gpointer data) {
     __LOG(LOG_NOTICE, "[GST][%s:%d] sink_name:%s channel:%d", _FILE_, __LINE__, sink_name, info->ch);
     g_free (sink_name);
 
+    static gboolean start_f = FALSE;
     if(info->mode == RECORDING)
     {
+        if(start_f == FALSE)
+        {
+            __LOG(LOG_NOTICE, "[GST][%s:%d] changeFileName timer start", _FILE_, __LINE__);
+            g_timeout_add(500, (GSourceFunc)changeFileName, NULL);
+            start_f = TRUE;
+        }
+#if 0
         change_file_name(info);
 #ifdef FILENAME_SEC_ZERO
         g_timeout_add(100, (GSourceFunc)change_file_name, info);
         //g_timeout_add_seconds(FILE_SAVE_DURATION, (GSourceFunc)change_file_name, info);
 #else
         g_timeout_add_seconds(FILE_SAVE_DURATION, (GSourceFunc)change_file_name, info);
+#endif
+
 #endif
     }
 
@@ -794,11 +836,11 @@ static void	media_configure(GstRTSPMediaFactory *factory, GstRTSPMedia *media, g
     return;
 }
 
-static gboolean timeout(GstRTSPServer *server)
+static gboolean cleanRtspSessionPool(GstRTSPServer *server)
 {
   GstRTSPSessionPool *pool;
 
-   __LOG(LOG_DEBUG, "[GST][%s:%d] rtsp session pool", _FILE_, __LINE__);
+  //__LOG(LOG_DEBUG, "[GST][%s:%d] rtsp session pool", _FILE_, __LINE__);
 
   pool = gst_rtsp_server_get_session_pool (server);
   gst_rtsp_session_pool_cleanup (pool);
@@ -1080,7 +1122,7 @@ int rtsp_server_start()
     
     //g_signal_connect(rtspServer, "client-disconnected", G_CALLBACK(handle_client_disconnected), NULL);
 
-    g_timeout_add_seconds (3, (GSourceFunc) timeout, rtspServer);
+    g_timeout_add_seconds (1, (GSourceFunc) cleanRtspSessionPool, rtspServer);
 
 #if 0
     /* make a new authentication manager */
@@ -1246,12 +1288,19 @@ int main(int argc, char *argv[]) {
     GstBus *bus[MAX_CAM];
     guint bus_watch_id[MAX_CAM];
     CustomData customData[MAX_PIPENUM*MAX_CAM];
-    guint8 i = 0, k = 0, idx = 0, tdx = 0;
+    guint8 i = 0, k = 0, idx = 0, tdx = 0, init_sec = 0;
     GstCaps *caps;
     GstStateChangeReturn ret;
 
-    rtsp_server_start();
+    if(argc > 1)
+    {
+        //parseArguments(argc, argv);
+        init_sec = atoi(argv[1]);
+        __LOG(LOG_NOTICE, "[GST][%s:%d] init_sec : %d", _FILE_, __LINE__, init_sec);
+    }
 
+    rtsp_server_start();
+    
 
     // 파이프라인 생성
 
@@ -1260,11 +1309,11 @@ int main(int argc, char *argv[]) {
         __LOG(LOG_NOTICE, "[GST][%s:%d] pipeline%d", _FILE_, __LINE__, i);
         main[i].pipeline = gst_pipeline_new(g_strdup_printf("pipeline%d", i));
         // 요소 생성
-        main[i].src = gst_element_factory_make("v4l2src", "src");
+        main[i].src = gst_element_factory_make("v4l2src", g_strdup_printf("main_src%d", i));
         //GstElement *src = gst_element_factory_make("videotestsrc", "src");
-        main[i].convert = gst_element_factory_make("imxvideoconvert_g2d", "convert");
-        main[i].capsfilter = gst_element_factory_make("capsfilter", "caps");
-        main[i].tee = gst_element_factory_make("tee", "tee");
+        main[i].convert = gst_element_factory_make("imxvideoconvert_g2d", g_strdup_printf("main_convert%d", i));
+        main[i].capsfilter = gst_element_factory_make("capsfilter", g_strdup_printf("main_caps%d", i));
+        main[i].tee = gst_element_factory_make("tee", g_strdup_printf("main_tee%d", i));
 
         if (!main[i].pipeline || !main[i].src || !main[i].capsfilter || !main[i].tee)
         {
@@ -1324,8 +1373,6 @@ int main(int argc, char *argv[]) {
             g_object_set(main[i].sub[idx].queue, "leaky", 2, NULL);
             g_object_set(main[i].sub[idx].encoder, "bitrate", 4096, NULL);
             g_object_set(main[i].sub[idx].sink, "emit-signals", TRUE, "sync", FALSE, NULL);
-            //g_signal_connect(main[i].sub[FILE_L].sink, "new-sample", G_CALLBACK(new_sample_handler_file), &main[i].sub[FILE_L].customData);
-            //g_signal_connect(main[i].sub[FILE_L].sink, "new-preroll", G_CALLBACK(new_preroll_handler), &main[i].sub[FILE_L].customData);
             g_signal_connect(main[i].sub[idx].sink, "new-sample", G_CALLBACK(new_sample_handler), &customData[tdx]);
             g_signal_connect(main[i].sub[idx].sink, "new-preroll", G_CALLBACK(new_preroll_handler), &customData[tdx]);
             customData[tdx].index = tdx;
@@ -1378,8 +1425,6 @@ int main(int argc, char *argv[]) {
             g_object_set(main[i].sub[idx].queue, "leaky", 2, NULL);
             g_object_set(main[i].sub[idx].encoder, "bitrate", 4096, NULL);
             g_object_set(main[i].sub[idx].sink, "emit-signals", TRUE, "sync", FALSE, NULL);
-            //g_signal_connect(main[i].sub[FILE_L].sink, "new-sample", G_CALLBACK(new_sample_handler_file), &main[i].sub[FILE_L].customData);
-            //g_signal_connect(main[i].sub[FILE_L].sink, "new-preroll", G_CALLBACK(new_preroll_handler), &main[i].sub[FILE_L].customData);
             g_signal_connect(main[i].sub[idx].sink, "new-sample", G_CALLBACK(new_sample_handler), &customData[tdx]);
             g_signal_connect(main[i].sub[idx].sink, "new-preroll", G_CALLBACK(new_preroll_handler), &customData[tdx]);
             customData[tdx].index = tdx;
@@ -1645,9 +1690,10 @@ int main(int argc, char *argv[]) {
         gst_caps_unref(caps);
 
         // 파이프라인 실행
-        ret = gst_element_set_state(main[i].pipeline, GST_STATE_PLAYING);
+        //ret = gst_element_set_state(main[i].pipeline, GST_STATE_PLAYING);
+        ret = gst_element_set_state(main[i].pipeline, GST_STATE_PAUSED);
         if (ret == GST_STATE_CHANGE_FAILURE) {
-            __LOG(LOG_CRIT, "[GST][%s:%d] pipeline[%d] playing error", _FILE_, __LINE__, i);
+            __LOG(LOG_CRIT, "[GST][%s:%d] pipeline[%d] paused error", _FILE_, __LINE__, i);
             gst_object_unref(main[i].pipeline);
             return -1;
         } else if (ret == GST_STATE_CHANGE_NO_PREROLL) {
@@ -1663,7 +1709,28 @@ int main(int argc, char *argv[]) {
 
     }while(++i < MAX_CAM);
 
+    //g_timeout_add(500, (GSourceFunc)changeFileName, NULL);
 
+    if (init_sec > 0)
+    {
+        __LOG(LOG_NOTICE, "[GST][%s:%d] standby wait %d sec for playing", _FILE_, __LINE__, init_sec);
+        sleep(init_sec);
+    }
+
+    i = 0;
+
+    do
+    {
+        ret = gst_element_set_state(main[i].pipeline, GST_STATE_PLAYING);
+        if (ret == GST_STATE_CHANGE_FAILURE) {
+            __LOG(LOG_CRIT, "[GST][%s:%d] pipeline[%d] playing error", _FILE_, __LINE__, i);
+            gst_object_unref(main[i].pipeline);
+            return -1;
+        } else if (ret == GST_STATE_CHANGE_NO_PREROLL) {
+            customData->is_live = TRUE;
+        }
+    } while (++i < MAX_CAM);
+    
 #if 0
     //GstClock *clock = gst_element_get_clock(pipeline);
     //gst_clock_set_calibration(clock, 1.0);
