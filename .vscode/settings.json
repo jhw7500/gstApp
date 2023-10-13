@@ -30,6 +30,7 @@
         "gstinfo.h": "c",
         "signal.h": "c",
         "glib-unix.h": "c",
-        "locale.h": "c"
+        "locale.h": "c",
+        "msg.h": "c"
     }
 }
