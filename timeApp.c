@@ -241,6 +241,9 @@ static gboolean my_bus_callback(GstBus *bus, GstMessage *message, gpointer data)
     else
         return TRUE;
 
+    if(GST_MESSAGE_TYPE(message) == GST_MESSAGE_STREAM_STATUS)
+        return TRUE;
+
     switch(GST_MESSAGE_TYPE(message)) 
     {
         case GST_MESSAGE_STATE_CHANGED:
@@ -498,7 +501,7 @@ static gboolean changeFileName(gpointer data)
     if(fileName == NULL)
     {
         date_str = g_date_time_format(datetime, "%Y%m%d_%H%M%S");
-        fileName = g_strdup_printf("output_%s", date_str);
+        fileName = g_strdup_printf("%s_%s", PROGRAM_NAME, date_str);
     }
     else
     {
@@ -1381,11 +1384,11 @@ int main(int argc, char *argv[]) {
             else
                 g_object_set(main[i].sub[idx].crop, "top", 0, "bottom", 0, "left", 0, "right", _WIDTH, NULL);
 
-            //g_object_set(main[i].sub[idx].videorate, "max-rate", FILE_FPS, NULL);
-            //g_object_set(main[i].sub[idx].videorate, "drop-only", FALSE, NULL);
-            //g_object_set(main[i].sub[idx].queue, "max-size-bytes", 0, "max-size-time", 0, "max-size-buffers", 60, "leaky", 1, NULL);
-            g_object_set(main[i].sub[idx].queue, "max-size-buffers", 60, NULL);
-            g_object_set(main[i].sub[idx].queue, "leaky", 2, NULL);
+            g_object_set(main[i].sub[idx].videorate, "max-rate", FILE_FPS, NULL);
+            //g_object_set(main[i].sub[idx].videorate, "drop-only", TRUE, NULL);
+            g_object_set(main[i].sub[idx].queue, "max-size-bytes", 0, "max-size-time", GST_SECOND, "max-size-buffers", 60, "leaky", 2, NULL);
+            //g_object_set(main[i].sub[idx].queue, "max-size-buffers", 60, NULL);
+            //g_object_set(main[i].sub[idx].queue, "leaky", 2, NULL);
             g_object_set(main[i].sub[idx].encoder, "bitrate", FILE_BITRATE, NULL);
             g_object_set(main[i].sub[idx].sink, "emit-signals", TRUE, "sync", FALSE, NULL);
             g_signal_connect(main[i].sub[idx].sink, "new-sample", G_CALLBACK(new_sample_handler), &customData[tdx]);
@@ -1433,11 +1436,11 @@ int main(int argc, char *argv[]) {
             else
                 g_object_set(main[i].sub[idx].crop, "top", 0, "bottom", 0, "left", 0, "right", _WIDTH, NULL);
 
-            //g_object_set(main[i].sub[idx].videorate, "max-rate", FILE_FPS, NULL);
-            //g_object_set(main[i].sub[idx].videorate, "drop-only", FALSE, NULL);
-            //g_object_set(main[i].sub[idx].queue, "max-size-bytes", 0, "max-size-time", 0, "max-size-buffers", 60, "leaky", 1, NULL);
-            g_object_set(main[i].sub[idx].queue, "max-size-buffers", 60, NULL);
-            g_object_set(main[i].sub[idx].queue, "leaky", 2, NULL);
+            g_object_set(main[i].sub[idx].videorate, "max-rate", FILE_FPS, NULL);
+            //g_object_set(main[i].sub[idx].videorate, "drop-only", TRUE, NULL);
+            g_object_set(main[i].sub[idx].queue, "max-size-bytes", 0, "max-size-time", GST_SECOND, "max-size-buffers", 60, "leaky", 2, NULL);
+            //g_object_set(main[i].sub[idx].queue, "max-size-buffers", 60, NULL);
+            //g_object_set(main[i].sub[idx].queue, "leaky", 2, NULL);
             g_object_set(main[i].sub[idx].encoder, "bitrate", FILE_BITRATE, NULL);
             g_object_set(main[i].sub[idx].sink, "emit-signals", TRUE, "sync", FALSE, NULL);
             g_signal_connect(main[i].sub[idx].sink, "new-sample", G_CALLBACK(new_sample_handler), &customData[tdx]);
@@ -1481,16 +1484,16 @@ int main(int argc, char *argv[]) {
                 g_object_set(main[i].sub[idx].crop, "top", 0, "bottom", 0, "left", _WIDTH, "right", 0, NULL);
             else
                 g_object_set(main[i].sub[idx].crop, "top", 0, "bottom", 0, "left", 0, "right", _WIDTH, NULL);
-            //g_object_set(main[i].sub[idx].videorate, "max-rate", RTSP_FPS, NULL);
-            //g_object_set(main[i].sub[idx].videorate, "drop-only", TRUE, NULL);
+            g_object_set(main[i].sub[idx].videorate, "max-rate", RTSP_FPS, NULL);
+            g_object_set(main[i].sub[idx].videorate, "drop-only", TRUE, NULL);
             g_object_set(main[i].sub[idx].encoder, "bitrate", RTSP_BITRATE, NULL);
             //g_object_set(encoder2, "gop-size", 30, NULL);
             //g_object_set(appsink2, "emit-signals", TRUE, "sync", FALSE, NULL);
             //g_object_set(appsink2, "max-lateness", 5000000000, NULL);
-            //g_object_set(queue2, "max-size-bytes", 0, "max-size-time", 0, "max-size-buffers", 60, "leaky", 1, NULL);
-            g_object_set(main[i].sub[idx].queue, "max-size-time", GST_SECOND, NULL);
-            g_object_set(main[i].sub[idx].queue, "max-size-buffers", 60, NULL);
-            g_object_set(main[i].sub[idx].queue, "leaky", 1, NULL);
+            g_object_set(main[i].sub[idx].queue, "max-size-bytes", 0, "max-size-time", GST_SECOND, "max-size-buffers", 60, "leaky", 2, NULL);
+            //g_object_set(main[i].sub[idx].queue, "max-size-time", GST_SECOND, NULL);
+            //g_object_set(main[i].sub[idx].queue, "max-size-buffers", 60, NULL);
+            //g_object_set(main[i].sub[idx].queue, "leaky", 1, NULL);
 #if 0
             g_object_set(queue2, "max-size-bytes", 0, NULL);
             g_object_set(queue2, "max-size-time", 0, NULL);
@@ -1562,14 +1565,14 @@ int main(int argc, char *argv[]) {
             else
                 g_object_set(main[i].sub[idx].crop, "top", 0, "bottom", 0, "left", 0, "right", _WIDTH, NULL);
 
-            //g_object_set(main[i].sub[idx].videorate, "max-rate", RTSP_FPS, NULL);
-            //g_object_set(main[i].sub[idx].videorate, "drop-only", TRUE, NULL);
+            g_object_set(main[i].sub[idx].videorate, "max-rate", RTSP_FPS, NULL);
+            g_object_set(main[i].sub[idx].videorate, "drop-only", TRUE, NULL);
             g_object_set(main[i].sub[idx].encoder, "bitrate", RTSP_BITRATE, NULL);
             //g_object_set(encoder2, "gop-size", 30, NULL);
             //g_object_set(appsink2, "emit-signals", TRUE, "sync", FALSE, NULL);
             //g_object_set(appsink2, "max-lateness", 5000000000, NULL);
-            //g_object_set(queue2, "max-size-bytes", 0, "max-size-time", 0, "max-size-buffers", 60, "leaky", 1, NULL);
-            g_object_set(main[i].sub[idx].queue, "max-size-time", GST_SECOND, NULL);
+            g_object_set(main[i].sub[idx].queue, "max-size-bytes", 0, "max-size-time", GST_SECOND, "max-size-buffers", 60, "leaky", 2, NULL);
+            //g_object_set(main[i].sub[idx].queue, "max-size-time", GST_SECOND, NULL);
             g_object_set(main[i].sub[idx].queue, "max-size-buffers", 60, NULL);
             g_object_set(main[i].sub[idx].queue, "leaky", 1, NULL);
 
@@ -1692,7 +1695,7 @@ int main(int argc, char *argv[]) {
 
         // 캡처 포맷 설정 (video3 장치의 적절한 캡처 포맷에 맞게 변경)
 
-        g_object_set(main[i].src, "device", g_strdup_printf("/dev/video%d", i+3), NULL);
+        g_object_set(main[i].src, "device", g_strdup_printf("/dev/video%d", i? 3:4), NULL);
         __LOG(LOG_NOTICE, "[GST][%s:%d] src[%d] : /dev/video%d", _FILE_, __LINE__, i, i+3);
         //g_object_set(main[i].src, "device", "/dev/video3", NULL);
         caps = gst_caps_new_simple("video/x-raw",

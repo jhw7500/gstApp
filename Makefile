@@ -3,10 +3,12 @@
 OUTPUT = bin
 
 #SOURCE += basic-tutorial-15
+#SOURCE+=cropApp
 #SOURCE=rtspApp
 #SOURCE+= timeApp
 #SOURCE+= mp4App
-SOURCE+= mp4App_backup
+SOURCE+= mApp
+#SOURCE+= mp4App_backup
 #SOURCE+= muxApp
 #SOURCE+= audioApp
 #SOURCE+= dynamicApp
