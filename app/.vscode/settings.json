@@ -1,0 +1,15 @@
+{
+    "files.associations": {
+        "global.h": "c",
+        "cstdio": "c",
+        "*.tcc": "cpp",
+        "unordered_map": "cpp",
+        "fstream": "cpp",
+        "istream": "cpp",
+        "numeric": "cpp",
+        "ostream": "cpp",
+        "sstream": "cpp",
+        "limits": "cpp",
+        "type_traits": "cpp"
+    }
+}
