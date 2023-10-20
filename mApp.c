@@ -1772,7 +1772,7 @@ gint setRtspPipe(GstElement *pipeline, gpointer data, gpointer user_data, guint8
 
     if (!gst_element_link_many(pipe->queue, pipe->crop, pipe->overlay, pipe->videorate, pipe->encoder, pipe->sink, NULL))
 #else
-    if(!gst_element_link_many(pipe->queue, pipe->crop, pipe->videorate, pipe->encoder, pipe->sink, NULL))
+    if(!gst_element_link_many(pipe->queue, pipe->crop, pipe->videorate, pipe->convert, pipe->encoder, pipe->sink, NULL))
     //if(!gst_element_link_many(pipe->queue, pipe->crop, pipe->videorate, pipe->encoder, pipe->sink, NULL))
 #endif
     {
@@ -1808,7 +1808,7 @@ gint setRtspPipe(GstElement *pipeline, gpointer data, gpointer user_data, guint8
         g_object_set(pipe->crop, "top", 0, "bottom", 0, "left", 0, "right", _WIDTH, NULL);
 
     //g_object_set(pipe->videorate, "rate", RTSP_FPS, NULL);
-    g_object_set(pipe->videorate, "max-rate", RTSP_FPS, NULL);
+    g_object_set(pipe->videorate, "max-rate", FILE_FPS, NULL);
     g_object_set(pipe->videorate, "drop-only", TRUE, NULL);
     g_object_set(pipe->encoder, "bitrate", RTSP_BITRATE, NULL);
     // g_object_set(encoder2, "gop-size", 30, NULL);
@@ -1821,9 +1821,10 @@ gint setRtspPipe(GstElement *pipeline, gpointer data, gpointer user_data, guint8
     g_signal_connect(pipe->queue, "running", G_CALLBACK(running_callback), NULL);
     g_signal_connect(pipe->queue, "pushing", G_CALLBACK(pushing_callback), NULL);
 #endif
+    g_object_set(pipe->sink, "ts-offset", 1*GST_SECOND, NULL);
     g_object_set(pipe->sink, "max-buffers", 60, NULL);
     g_object_set(pipe->sink, "drop", TRUE, NULL);
-    g_object_set(pipe->sink, "max-lateness", 100*GST_MSECOND, NULL);
+    //g_object_set(pipe->sink, "max-lateness", 100*GST_MSECOND, NULL);
     //g_object_set(pipe->sink, "render-delay", 100*GST_MSECOND, NULL);
     g_object_set(pipe->sink, "emit-signals", TRUE, "sync", FALSE, NULL);
     // g_object_set(appsink2, "enable-last-sample", TRUE, NULL);
@@ -2319,19 +2320,20 @@ gint setRecordPipe(GstElement* pipeline, gpointer data, gpointer user_data, guin
     pipe->queue = gst_element_factory_make("queue", g_strdup_printf("queue%d", idx));
     pipe->queue2 = gst_element_factory_make("queue2", g_strdup_printf("queue2_%d", idx));
     pipe->parse = gst_element_factory_make("h264parse", g_strdup_printf("parse%d", idx));
+    pipe->convert = gst_element_factory_make("imxvideoconvert_g2d", g_strdup_printf("convert%d", idx));
 #ifdef RECORD_SPLITMUXSINK_ENABLE
     pipe->sink = gst_element_factory_make("splitmuxsink", g_strdup_printf("splitmuxsink%d", idx));
 #else
     pipe->sink = gst_element_factory_make("appsink", g_strdup_printf("appsink%d", idx));
 #endif
 
-    if (!pipe->videorate || !pipe->crop|| !pipe->encoder || !pipe->queue || !pipe->parse || !pipe->queue2 || !pipe->sink)
+    if (!pipe->videorate || !pipe->crop|| !pipe->encoder || !pipe->queue || !pipe->parse || !pipe->queue2 || !pipe->sink || !pipe->convert)
     {
         __LOG(LOG_CRIT, "[GST][%s:%d] video pipe[%d] make error", _FILE_, __LINE__, ch_num);
         // gst_object_unref(pipeline[i]);
         return -1;
     }
-    gst_bin_add_many(GST_BIN(pipeline), pipe->crop, pipe->queue, pipe->videorate, pipe->encoder, pipe->parse, pipe->sink, NULL);
+    gst_bin_add_many(GST_BIN(pipeline), pipe->crop, pipe->queue, pipe->videorate, pipe->encoder, pipe->parse, pipe->sink, pipe->convert, NULL);
 
 #ifdef OVERLAY_ENABLE
 
@@ -2361,7 +2363,7 @@ gint setRecordPipe(GstElement* pipeline, gpointer data, gpointer user_data, guin
 
     if (!gst_element_link_many(pipe->queue, pipe->crop, pipe->overlay, pipe->videorate, pipe->encoder, pipe->parse, NULL))
 #else
-    if (!gst_element_link_many(pipe->queue, pipe->crop, pipe->videorate, pipe->encoder, pipe->parse, NULL))
+    if (!gst_element_link_many(pipe->queue, pipe->crop, pipe->videorate, pipe->convert, pipe->encoder, pipe->parse, NULL))
 #endif
     {
         __LOG(LOG_CRIT, "[GST][%s:%d] video pipe[%d] link error", _FILE_, __LINE__, ch_num);
@@ -2646,7 +2648,7 @@ gint main(int argc, char *argv[])
             __LOG(LOG_CRIT, "[GST][%s:%d] bus get error from pipeline", _FILE_, __LINE__);
         }
 
-        gst_bus_add_watch(bus, my_bus_callback, NULL);
+        gst_bus_add_watch(bus, my_bus_callback, main[i].pipeline);
 
         gst_object_unref(bus);
         putenv("GST_DEBUG_DUMP_DOT_DIR=/home/user/jhw/dot/");

@@ -7,8 +7,8 @@ OUTPUT = bin
 #SOURCE=rtspApp
 #SOURCE+= timeApp
 #SOURCE+= mp4App
-SOURCE+= mApp
-SOURCE+=cropApp
+#SOURCE+= mApp
+#SOURCE+=cropApp
 #SOURCE=rtspApp
 #SOURCE+= timeApp
 #SOURCE+= mp4App
@@ -24,7 +24,7 @@ SOURCE+=cropApp
 #SOURCE+= fakeApp
 
 #SOURCE+= customApp
-#SOURCE+= jhwApp
+SOURCE+= jhwApp
 #SOURCE += testApp
 #SOURCE=*
 

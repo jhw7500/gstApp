@@ -31,6 +31,14 @@
         "signal.h": "c",
         "glib-unix.h": "c",
         "locale.h": "c",
-        "msg.h": "c"
+        "msg.h": "c",
+        "rtsp-session-media.h": "c",
+        "rtsp-stream.h": "c",
+        "rtsp-stream-transport.h": "c",
+        "rtsp-address-pool.h": "c",
+        "rtsp-context.h": "c",
+        "rtsp-client.h": "c",
+        "gstrtspdefs.h": "c",
+        "fcntl.h": "c"
     }
 }
