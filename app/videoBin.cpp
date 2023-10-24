@@ -76,7 +76,7 @@ VideoBin::~VideoBin()
 
 gint VideoBin::addCrop(CropDir dir)
 {
-    g_print("csi:%d, dir:%d\n", csi, dir);
+    //g_print("csi:%d, dir:%d\n", csi, dir);
     
     ve.crop[dir] = gst_element_factory_make("videocrop", g_strdup_printf("crop%d", dir));
     ve.tee[dir] = gst_element_factory_make("tee", g_strdup_printf("tee%d", dir));
@@ -84,9 +84,9 @@ gint VideoBin::addCrop(CropDir dir)
     ve.queue[dir] = gst_element_factory_make("queue", g_strdup_printf("queue%d", dir));
 
     if (dir % 2 == 0)
-        g_object_set(ve.crop[dir], "top", 0, "bottom", 0, "left", 0, "right", _WIDTH, NULL);
+        g_object_set(ve.crop[dir], "top", 0, "bottom", 0, "left", 0, "right", cmdArg.res[cmdArg.resMode].width, NULL);
     else
-        g_object_set(ve.crop[dir], "top", 0, "bottom", 0, "left", _WIDTH, "right", 0, NULL);
+        g_object_set(ve.crop[dir], "top", 0, "bottom", 0, "left", cmdArg.res[cmdArg.resMode].width, "right", 0, NULL);
 
     if (!ve.crop[dir] || !ve.tee[dir] || !ve.overlay[dir] || !ve.queue[dir])
     {
@@ -104,16 +104,16 @@ gint VideoBin::addCrop(CropDir dir)
 
     GstCaps *caps = gst_caps_new_simple("video/x-raw",
                                         "format", G_TYPE_STRING, "NV12",
-                                        "width", G_TYPE_INT, _WIDTH*2,
-                                        "height", G_TYPE_INT, _HEIGHT,
-                                        "framerate", GST_TYPE_FRACTION, MAIN_FPS, 1,
+                                        "width", G_TYPE_INT, cmdArg.res[cmdArg.resMode].width*2,
+                                        "height", G_TYPE_INT, cmdArg.res[cmdArg.resMode].height,
+                                        "framerate", GST_TYPE_FRACTION, cmdArg.main_fps, 1,
                                         NULL);
 
     g_object_set(ve.capsfilter, "caps", caps, NULL);
     gst_caps_unref(caps);
 
     gst_bin_add_many(GST_BIN(ve.bin), ve.crop[dir], ve.tee[dir], ve.overlay[dir], ve.queue[dir], NULL);
-    if (!gst_element_link_many(ve.teeCrop, ve.crop[dir], ve.queue[dir], ve.tee[dir], NULL))
+    if (!gst_element_link_many(ve.teeCrop, ve.queue[dir], ve.crop[dir], ve.tee[dir], NULL))
     //if (!gst_element_link_many(ve.teeCrop, ve.crop[dir], ve.overlay[dir], ve.tee[dir], NULL))
     {
         __LOG(LOG_CRIT, "[GST][%s:%d] crop [%d] link err", _FILE_, __LINE__, dir);
@@ -148,14 +148,14 @@ gint VideoBin::init(CsiNum num)
 
     if(ve.bin != NULL)
     {
-        __LOG(LOG_NOTICE, "[GST][%s:%d] %s(%d) already init", _FILE_, __LINE__, __FUNCTION__, csi);
+        //__LOG(LOG_NOTICE, "[GST][%s:%d] %s(%d) already init", _FILE_, __LINE__, __FUNCTION__, csi);
         return 0;
     }
 
     do
     {
         //ve.bins
-        __LOG(LOG_NOTICE, "[GST][%s:%d] %s[%d]", _FILE_, __LINE__, __FUNCTION__, csi);
+        //__LOG(LOG_NOTICE, "[GST][%s:%d] %s[%d]", _FILE_, __LINE__, __FUNCTION__, csi);
 
         ve.bin = gst_bin_new(g_strdup_printf("videoBin%d", csi));
         ve.src = gst_element_factory_make("v4l2src", "src");
@@ -166,13 +166,24 @@ gint VideoBin::init(CsiNum num)
         ve.crop[1] = NULL;
 
         g_object_set(ve.src, "do-timestamp", TRUE, NULL);
-        g_object_set(ve.src, "device", g_strdup_printf("/dev/video%d", csi+3), NULL);
 
+        if(csi == 0) {
+             __LOG(LOG_NOTICE, "[GST][%s:%d] %s : video4", _FILE_, __LINE__, __FUNCTION__);
+            g_object_set(ve.src, "device", "/dev/video4", NULL);
+        }
+        else if(csi == 1) {
+             __LOG(LOG_NOTICE, "[GST][%s:%d] %s : video3", _FILE_, __LINE__, __FUNCTION__);
+            g_object_set(ve.src, "device", "/dev/video3", NULL);
+        }
+        //g_object_set(ve.src, "device", g_strdup_printf("/dev/video%d", csi+3), NULL);
+
+        //g_print("cmdArg.res[cmdArg.resMode].width:%d\n", cmdArg.res[cmdArg.resMode].width);
+        //g_print("cmdArg.res[cmdArg.resMode].height:%d\n", cmdArg.res[cmdArg.resMode].height);
         GstCaps *caps = gst_caps_new_simple("video/x-raw",
                                         "format", G_TYPE_STRING, "NV12",
-                                        "width", G_TYPE_INT, _WIDTH,
-                                        "height", G_TYPE_INT, _HEIGHT,
-                                        "framerate", GST_TYPE_FRACTION, MAIN_FPS, 1,
+                                        "width", G_TYPE_INT, cmdArg.res[cmdArg.resMode].width,
+                                        "height", G_TYPE_INT, cmdArg.res[cmdArg.resMode].height,
+                                        "framerate", GST_TYPE_FRACTION, cmdArg.main_fps, 1,
                                         NULL);
 
         g_object_set(ve.capsfilter, "caps", caps, NULL);

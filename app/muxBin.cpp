@@ -85,7 +85,7 @@ gchararray MuxBin::format_location(GstElement *sink, guint arg0, gpointer data)
 #endif
 
     //date_str = g_date_time_format(datetime, "%Y%m%d_%H%M%S");
-    gchararray file_name = g_strdup_printf("%s%s_%s-ch%d.mp4", FILE_PATH, PROGRAM_NAME, date_str, info->ch);
+    gchararray file_name = g_strdup_printf("%s%s_%s-ch%d.mp4", cmdArg.saveDir, PROGRAM_NAME, date_str, info->ch);
     
     __LOG(LOG_NOTICE, "[GST][%s:%d] %s : %s", _FILE_, __LINE__, __FUNCTION__, file_name);
 

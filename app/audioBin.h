@@ -17,7 +17,6 @@
 #ifndef _AUDIOBIN_H_
 #define _AUDIOBIN_H_
 
-#include "global.h"
 #include "util.h"
 
 typedef struct _AudioElement

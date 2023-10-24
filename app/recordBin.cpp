@@ -24,14 +24,14 @@ RecordBin* RecordBin::getInstance()
 
 GstPad* RecordBin::getBinSrcPad()
 {
-    __LOG(LOG_NOTICE, "[GST][%s:%d] %s ch:%d", _FILE_, __LINE__, __FUNCTION__, ch);
+    __LOG(LOG_INFO, "[GST][%s:%d] %s ch:%d", _FILE_, __LINE__, __FUNCTION__, ch);
     //return gst_element_get_static_pad(re.bin, g_strdup_printf("recordBin_src_ch%d", ch));
     return srcPad;
 }
 
 GstPad* RecordBin::getBinSinkPad()
 {
-    __LOG(LOG_NOTICE, "[GST][%s:%d] %s ch:%d", _FILE_, __LINE__, __FUNCTION__, ch);
+    __LOG(LOG_INFO, "[GST][%s:%d] %s ch:%d", _FILE_, __LINE__, __FUNCTION__, ch);
     //return gst_element_get_static_pad(re.bin, g_strdup_printf("recordBin_sink_ch%d", ch));
     return sinkPad;
 }
@@ -53,23 +53,24 @@ gint RecordBin::init(guint8 num)
     GstPad *staticPad;
     ch = num;
     //sinkPad = NULL;
-    __LOG(LOG_NOTICE, "[GST][%s:%d] %s (%d)", _FILE_, __LINE__, __FUNCTION__, ch);
+    __LOG(LOG_NOTICE, "[GST][%s:%d] %s ch : %d", _FILE_, __LINE__, __FUNCTION__, ch);
 
     re.bin = gst_bin_new(g_strdup_printf("recordBin%d", ch));
     re.queue = gst_element_factory_make("queue", "queue");
     re.queue2 = gst_element_factory_make("queue", "queue2");
     re.parse = gst_element_factory_make("h264parse", "h264parse");
+    re.capsfilter = gst_element_factory_make("capsfilter", "capsfilter");
     re.enc = gst_element_factory_make("vpuenc_h264", "vpuenc_h264");
     re.rate = gst_element_factory_make("videorate", "videorate");
     re.convert = gst_element_factory_make("imxvideoconvert_g2d", "convert");
 
-    if (!re.bin || !re.queue || !re.queue2 || !re.parse || !re.enc || !re.rate || !re.convert)
+    if (!re.bin || !re.queue || !re.queue2 || !re.parse || !re.enc || !re.rate || !re.convert || !re.capsfilter)
     {
         __LOG(LOG_CRIT, "[GST][%s:%d] record element create error", _FILE_, __LINE__);
         return -1;
     }
 
-    gst_bin_add_many(GST_BIN(re.bin), re.queue, re.rate, re.convert, re.enc, re.parse, re.queue2, NULL);
+    gst_bin_add_many(GST_BIN(re.bin), re.queue, re.rate, re.convert, re.capsfilter, re.enc, re.parse, re.queue2, NULL);
 
     if(!gst_bin_add(GST_BIN(pipeline), re.bin))
     {
@@ -77,13 +78,21 @@ gint RecordBin::init(guint8 num)
         return -1;
     }
 
-    g_object_set(re.enc, "bitrate", MAIN_BITRATE, NULL);
+    GstCaps *caps = gst_caps_new_simple("video/x-raw", "framerate", GST_TYPE_FRACTION, cmdArg.rec_fps, 1, NULL);
+
+    g_object_set(re.capsfilter, "caps", caps, NULL);
+    gst_caps_unref(caps);
+
+    //if(cmdArg.rec_fps >= 25) g_object_set(re.rate, "max-rate", cmdArg.rec_fps, "drop-only", TRUE, NULL);
+
+    g_object_set(re.enc, "bitrate", cmdArg.rec_bitrate, NULL);
     g_object_set(re.parse, "config-interval", -1, NULL);
     //g_object_set(re.rate, "max-rate", MAIN_FPS, "drop-only", FALSE, NULL);
     g_object_set(re.queue, "max-size-time", GST_SECOND, "max-size-buffers", 60, "leaky", 2, NULL);
     g_object_set(re.queue2, "max-size-time", GST_SECOND, "max-size-buffers", 60, "leaky", 2, NULL);
 
-    if (!gst_element_link_many(re.queue, re.rate, re.convert, re.enc, re.parse, re.queue2, NULL))
+    if (!gst_element_link_many(re.queue, re.rate, re.capsfilter, re.convert, re.enc, re.parse, re.queue2, NULL))
+    //if (!gst_element_link_many(re.queue, re.rate, re.convert, re.capsfilter, re.enc, re.parse, re.queue2, NULL))
     {
         __LOG(LOG_CRIT, "[GST][%s:%d] video main link err", _FILE_, __LINE__);
         return -1;

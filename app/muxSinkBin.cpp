@@ -18,12 +18,40 @@
 
 static void sink_added(GstElement *sink, guint arg0, gpointer data)
 {
-    __LOG(LOG_NOTICE, "[GST][%s:%d] %s", _FILE_, __LINE__, __FUNCTION__);
+    __LOG(LOG_INFO, "[GST][%s:%d] %s", _FILE_, __LINE__, __FUNCTION__);
 }
 
 static void muxer_added(GstElement *sink, guint arg0, gpointer data)
 {
-    __LOG(LOG_NOTICE, "[GST][%s:%d] %s", _FILE_, __LINE__, __FUNCTION__);
+    __LOG(LOG_INFO, "[GST][%s:%d] %s", _FILE_, __LINE__, __FUNCTION__);
+}
+
+static gboolean handle_eos_event(GstPad *pad, GstPadProbeInfo *info, gpointer user_data) 
+{
+    MuxSinkData *data = (MuxSinkData *)user_data;
+    GstEventType event = GST_EVENT_TYPE(GST_PAD_PROBE_INFO_DATA(info));
+
+
+    if (event == GST_EVENT_EOS) {
+        g_print("Received EOS event on pad[%d] : %s\n", data->ch, GST_PAD_NAME(pad));
+    }
+    else if(event == GST_EVENT_TAG)
+    {
+
+    }
+    else
+    {
+        g_print("Event Type: %s\n", gst_event_type_get_name(event));
+    }
+
+    return GST_PAD_PROBE_OK;
+}
+
+static void split(gpointer data)
+{
+    MuxSinkElement *me = (MuxSinkElement *)data;
+    __LOG(LOG_INFO, "[GST][%s:%d] %s", _FILE_, __LINE__, __FUNCTION__);
+    g_signal_emit_by_name (me->sink, "split-now");
 }
 
 guint8 MuxSinkBin::getStartFlag()
@@ -33,14 +61,16 @@ guint8 MuxSinkBin::getStartFlag()
     return muxSinkData.start_f;
 }
 
-gboolean MuxSinkBin::splitNow(gpointer data)
+gboolean MuxSinkBin::splitNow(gpointer data, gboolean timer_en)
 {
     //MuxBin* muxBin = MuxBin::getInstance();
     //MuxBin* muxBin = (MuxBin *)data;
 
-    __LOG(LOG_NOTICE, "[GST][%s:%d] %s", _FILE_, __LINE__, __FUNCTION__);
+    __LOG(LOG_NOTICE, "[GST][%s:%d] %s ch : %d", _FILE_, __LINE__, __FUNCTION__, muxSinkData.ch);
 
     g_signal_emit_by_name (me.sink, "split-now");
+
+    if(timer_en) g_timeout_add_seconds(cmdArg.duration, (GSourceFunc)split, &me);
 
     return TRUE;
 }
@@ -67,7 +97,7 @@ gchararray format_location(GstElement *sink, guint arg0, gpointer data)
 #endif
 
     //date_str = g_date_time_format(datetime, "%Y%m%d_%H%M%S");
-    gchararray file_name = g_strdup_printf("%s%s_%s-ch%d.mp4", FILE_PATH, ohtName, date_str, info->ch);
+    gchararray file_name = g_strdup_printf("%s%s_%s-ch%d.mp4", FILE_PATH, cmdArg.ohtName, date_str, info->ch);
     
     __LOG(LOG_NOTICE, "[GST][%s:%d] %s : %s", _FILE_, __LINE__, __FUNCTION__, file_name);
 
@@ -85,40 +115,44 @@ MuxSinkBin* MuxSinkBin::getInstance()
 
 gboolean MuxSinkBin::addBinVideoSinkPad()
 {
-    __LOG(LOG_NOTICE, "[GST][%s:%d] %s ch:%d", _FILE_, __LINE__, __FUNCTION__, muxSinkData.ch);
+    __LOG(LOG_INFO, "[GST][%s:%d] %s ch:%d", _FILE_, __LINE__, __FUNCTION__, muxSinkData.ch);
     
     sinkVideoPad = gst_ghost_pad_new(g_strdup_printf("muxBinSink_video_ch%d", muxSinkData.ch), gst_element_get_request_pad(me.sink, "video_aux_%u"));
     if(!gst_element_add_pad(me.bin, sinkVideoPad))
         g_error("error");
-
+    else gst_pad_add_probe(sinkVideoPad, GST_PAD_PROBE_TYPE_EVENT_BOTH, (GstPadProbeCallback)handle_eos_event, &muxSinkData, NULL);
+    
     return 0;
 }
 
 gboolean MuxSinkBin::addBinAudioSinkPad()
 {
-    __LOG(LOG_NOTICE, "[GST][%s:%d] %s ch:%d", _FILE_, __LINE__, __FUNCTION__, muxSinkData.ch);
+    __LOG(LOG_INFO, "[GST][%s:%d] %s ch:%d", _FILE_, __LINE__, __FUNCTION__, muxSinkData.ch);
 
     sinkAudioPad = gst_ghost_pad_new(g_strdup_printf("muxBinSink_audio_ch%d", muxSinkData.ch), gst_element_get_request_pad(me.sink, "audio_%u"));
     if(!gst_element_add_pad(me.bin, sinkAudioPad))
         g_error("error");
+    else gst_pad_add_probe(sinkAudioPad, GST_PAD_PROBE_TYPE_EVENT_BOTH, (GstPadProbeCallback)handle_eos_event, &muxSinkData, NULL);
 
     return 0;
 }
 
 GstPad* MuxSinkBin::getBinVideoSinkPad()
 {
-    __LOG(LOG_NOTICE, "[GST][%s:%d] %s ch:%d", _FILE_, __LINE__, __FUNCTION__, muxSinkData.ch);
+    __LOG(LOG_INFO, "[GST][%s:%d] %s ch:%d", _FILE_, __LINE__, __FUNCTION__, muxSinkData.ch);
     return sinkVideoPad;
 }
 
 GstPad* MuxSinkBin::getBinAudioSinkPad()
 {
-    __LOG(LOG_NOTICE, "[GST][%s:%d] %s ch:%d", _FILE_, __LINE__, __FUNCTION__, muxSinkData.ch);
+    __LOG(LOG_INFO, "[GST][%s:%d] %s ch:%d", _FILE_, __LINE__, __FUNCTION__, muxSinkData.ch);
     return sinkAudioPad;
 }
 
 gint MuxSinkBin::init(guint8 num)
 {
+    sinkVideoPad = NULL;
+    sinkAudioPad = NULL;
     muxSinkData.ch = num;
     muxSinkData.start_f = 0;
     me.bin = gst_bin_new(g_strdup_printf("muxBinSink%d", muxSinkData.ch));

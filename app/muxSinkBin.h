@@ -17,7 +17,6 @@
 #ifndef _MUXSINKBIN_H_
 #define _MUXSINKBIN_H_
 
-#include "global.h"
 #include "util.h"
 
 typedef struct _MuxSinkElement
@@ -41,7 +40,7 @@ public :
     GstPad* getBinPad();
     GstPad* getBinVideoSinkPad();
     GstPad* getBinAudioSinkPad();
-    gboolean splitNow(gpointer data);
+    gboolean splitNow(gpointer data, gboolean timer_en);
     gboolean addBinAudioSinkPad();
     gboolean addBinVideoSinkPad();
     guint8 getStartFlag();
@@ -55,7 +54,6 @@ private :
 	gboolean m_flagDestroy;
     //GstElement *pipeline[2];
     MuxSinkElement me;
-    guint8 ch_enable_bit;
     MuxSinkData muxSinkData;
     GstPad *sinkAudioPad;
     GstPad *sinkVideoPad;

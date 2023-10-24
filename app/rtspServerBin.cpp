@@ -17,7 +17,7 @@
 #include "rtspServerBin.h"
 
 GstRTSPMountPoints *rtspMounts;
-GstRTSPServer *rtspServer;
+GstRTSPServer *rtspServer = NULL;
 
 static void client_closed(GstRTSPClient* client, gpointer user_data)
 {
@@ -214,7 +214,7 @@ gint RtspServerBin::init(guint8 num)
     GstPad *staticPad;
     ch = num;
     //sinkPad = NULL;
-    __LOG(LOG_NOTICE, "[GST][%s:%d] %s (%d)", _FILE_, __LINE__, __FUNCTION__, ch);
+    __LOG(LOG_NOTICE, "[GST][%s:%d] %s ch : %d", _FILE_, __LINE__, __FUNCTION__, ch);
 
     re.bin = gst_bin_new(g_strdup_printf("rtspServerBin%d", ch));
     re.queue = gst_element_factory_make("queue", "queue");
@@ -240,13 +240,21 @@ gint RtspServerBin::init(guint8 num)
         return -1;
     }
 
-    GstCaps *caps = gst_caps_new_simple("video/x-raw", "framerate", GST_TYPE_FRACTION, RTSP_FPS, 1, NULL);
+    if (!gst_element_link_many(re.queue, re.rate, re.capsfilter, re.convert, re.enc, re.parse, re.queue2, re.sink, NULL))
+    //if (!gst_element_link_many(re.queue, re.rate, re.convert, re.capsfilter, re.enc, re.parse, re.queue2, re.sink, NULL))
+    {
+        __LOG(LOG_CRIT, "[GST][%s:%d] video main link err", _FILE_, __LINE__);
+        return -1;
+    }
+
+    GstCaps *caps = gst_caps_new_simple("video/x-raw", "framerate", GST_TYPE_FRACTION, cmdArg.rtsp_fps, 1, NULL);
 
     g_object_set(re.capsfilter, "caps", caps, NULL);
     gst_caps_unref(caps);
 
-    g_object_set(re.enc, "bitrate", RTSP_BITRATE, NULL);
-    //g_object_set(re.rate, "max-rate", RTSP_FPS, "drop-only", FALSE, NULL);
+    //if(cmdArg.rtsp_fps >= 25) g_object_set(re.rate, "max-rate", cmdArg.rtsp_fps, "drop-only", TRUE, NULL);
+
+    g_object_set(re.enc, "bitrate", cmdArg.rtsp_bitrate, NULL);
     g_object_set(re.queue, "max-size-time", GST_SECOND, "max-size-buffers", 60, "leaky", 2, NULL);
     g_object_set(re.queue2, "max-size-time", GST_SECOND, "max-size-buffers", 60, "leaky", 2, NULL);
     //g_object_set(re.capsfilter, "max-size-time", 5*GST_SECOND, "max-size-buffers", 60, "leaky", 1, NULL);
@@ -258,12 +266,6 @@ gint RtspServerBin::init(guint8 num)
     g_signal_connect(re.sink, "eos", G_CALLBACK(eos_callback), NULL);
     g_signal_connect(re.sink, "new-sample", G_CALLBACK(new_sample_handler), &rtspServerData);
     g_signal_connect(re.sink, "new-preroll", G_CALLBACK(new_preroll_handler), NULL );
-
-    if (!gst_element_link_many(re.queue, re.rate, re.convert, re.capsfilter, re.enc, re.parse, re.queue2, re.sink, NULL))
-    {
-        __LOG(LOG_CRIT, "[GST][%s:%d] video main link err", _FILE_, __LINE__);
-        return -1;
-    }
 
     staticPad = gst_element_get_static_pad(re.queue, "sink");
     sinkPad = gst_ghost_pad_new(g_strdup_printf("rtspServerBin_sink_ch%d", ch), staticPad);
@@ -288,7 +290,7 @@ gint RtspServerBin::init(guint8 num)
     g_signal_connect(factory, "media-configure", (GCallback)media_configure, &rtspServerData);
 
     gchar *point = g_strdup_printf("/ch%d", rtspServerData.ch);
-    __LOG(LOG_NOTICE, "[RTSP][%s:%d] point : %s", _FILE_, __LINE__, point);
+    __LOG(LOG_INFO, "[RTSP][%s:%d] point : %s", _FILE_, __LINE__, point);
 
     gst_rtsp_mount_points_add_factory(rtspMounts, point, factory);
 
@@ -311,6 +313,8 @@ void rtspStop()
 
 gint rtspStart()
 {
+    if(rtspServer) return 0;
+
     __LOG(LOG_NOTICE, "[RTSP][%s:%d] %s", _FILE_, __LINE__, __FUNCTION__);
     rtspServer = gst_rtsp_server_new ();
     g_object_set (rtspServer, "service", RTSP_PORT, NULL);

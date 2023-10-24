@@ -2,7 +2,7 @@
 #TOP_DIR = $(shell pwd)
 OUTPUT = bin
 
-SOURCE=main.cpp util.cpp util.h global.c global.h videoBin.cpp videoBin.h recordBin.cpp recordBin.h muxBin.cpp muxBin.h audioBin.cpp audioBin.h muxSinkBin.cpp muxSinkBin.h rtspServerBin.cpp rtspServerBin.h
+SOURCE=main.cpp util.cpp util.h videoBin.cpp videoBin.h recordBin.cpp recordBin.h muxBin.cpp muxBin.h audioBin.cpp audioBin.h muxSinkBin.cpp muxSinkBin.h rtspServerBin.cpp rtspServerBin.h
 
 #ROOTFS += /opt/desktop/build-desktop/tmp/work/imx8mpevk-fsl-linux/imx-image-desktop/20.04.2-r0/rootfs
 #SYSROOT += /shared/fsl-imx-xwayland/5.10-hardknott/sysroots/cortexa53-crypto-poky-linux
@@ -33,11 +33,31 @@ CFLAGS+=$(shell pkg-config --cflags $(LIBS))
 ALL_CFLAGS=-I$(IDIR) $(CFLAGS)
 
 ALLFLAGS=$(ALL_CFLAGS) $(ALL_LDFLAGS)
+#OBJS = videoBin.o recordBin.o muxSinkBin.o rtspServerBin.o audioBin.o muxBin.o
+OBJS = videoBin.o recordBin.o muxSinkBin.o rtspServerBin.o
 
-
-gstApp : $(SOURCE)
+gstApp : $(OBJS) main.cpp util.cpp util.h
 	$(CXX) -o $@ $^ $(ALLFLAGS)
 	mv $@ $(OUTPUT)
+	mv *.o obj
+
+videoBin.o : videoBin.cpp videoBin.h
+	$(CXX) $(ALLFLAGS) -c videoBin.cpp
+
+recordBin.o : recordBin.cpp recordBin.h
+	$(CXX) $(ALLFLAGS) -c recordBin.cpp
+
+muxSinkBin.o : muxSinkBin.cpp muxSinkBin.h
+	$(CXX) $(ALLFLAGS) -c muxSinkBin.cpp
+
+rtspServerBin.o : rtspServerBin.cpp rtspServerBin.h
+	$(CXX) $(ALLFLAGS) -c rtspServerBin.cpp
+
+muxBin.o : muxBin.cpp muxBin.h
+	$(CXX) $(ALLFLAGS) -c muxBin.cpp
+
+audioBin.o : audioBin.cpp audioBin.h
+	$(CXX) $(ALLFLAGS) -c audioBin.cpp
 
 clean :
 	rm -f $(OUTPUT)/*

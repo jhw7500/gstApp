@@ -17,7 +17,6 @@
 #ifndef _RTSPSERVER_H_
 #define _RTSPSERVER_H_
 
-#include "global.h"
 #include "util.h"
 #include <gst/app/gstappsrc.h>
 #include <gst/app/gstappsink.h>

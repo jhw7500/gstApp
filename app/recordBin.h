@@ -17,7 +17,6 @@
 #ifndef _RECORD_H_
 #define _RECORD_H_
 
-#include "global.h"
 #include "util.h"
 
 typedef struct _RecordElement
@@ -30,6 +29,7 @@ typedef struct _RecordElement
     GstElement *parse;
     GstElement *bin;
     GstElement *sink;
+    GstElement *capsfilter;
 } RecordElement;
 
 class RecordBin

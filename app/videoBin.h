@@ -18,7 +18,6 @@
 #ifndef _VIDEO_H_
 #define _VIDEO_H_
 
-#include "global.h"
 #include "util.h"
 
 typedef struct _VideoElement

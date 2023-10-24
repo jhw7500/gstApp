@@ -17,7 +17,6 @@
 #ifndef _MUXBIN_H_
 #define _MUXBIN_H_
 
-#include "global.h"
 #include "util.h"
 
 typedef struct _MuxElement
