@@ -43,7 +43,7 @@ void mylog( int opt, const char* _szfmt, ... );
 #define _WIDTH   1920
 #define _HEIGHT  1080
 #define MAIN_FPS FILE_FPS
-#define FILE_FPS 15
+#define FILE_FPS 30
 #define RTSP_FPS 15
 #define DEFAULT_FPS     2147483647
 #define FILE_BITRATE    4096

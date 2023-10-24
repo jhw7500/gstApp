@@ -12,7 +12,7 @@ OUTPUT = bin
 #SOURCE=rtspApp
 #SOURCE+= timeApp
 #SOURCE+= mp4App
-#SOURCE+= mp4App_backup
+SOURCE+= mp4App_backup
 #SOURCE+= muxApp
 #SOURCE+= audioApp
 #SOURCE+= dynamicApp
@@ -24,7 +24,7 @@ OUTPUT = bin
 #SOURCE+= fakeApp
 
 #SOURCE+= customApp
-SOURCE+= jhwApp
+#SOURCE+= jhwApp
 #SOURCE += testApp
 #SOURCE=*
 

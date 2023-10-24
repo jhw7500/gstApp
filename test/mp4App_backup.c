@@ -8,7 +8,7 @@
 
 #define AUDIO_ENABLEx
 #define RECORD_ENABLE
-#define RTSP_ENABLE
+#define RTSP_ENABLEx
 #define CAPTURE_ENABLEx
 #define RECORD_SPLITMUXSINK_ENABLE
 #define FILENAME_SEC_ZERO
@@ -31,7 +31,7 @@
 #define LEAKY_NONE          0
 #define LEAKY_UPSTREAM      1
 #define LEAKY_DOWNSTREAM    2
-#define MAIN_FPS 60
+#define MAIN_FPS 30
 #define FILE_FPS 30
 #define RTSP_FPS 15
 #define DEFAULT_FPS     2147483647
@@ -1731,7 +1731,7 @@ gint setRtspPipe(GstElement *pipeline, gpointer data, gpointer user_data, guint8
     pipe->crop = gst_element_factory_make("videocrop", g_strdup_printf("videocrop%d", idx));
     pipe->encoder = gst_element_factory_make("vpuenc_h264", g_strdup_printf("vpuenc_h264%d", idx));
     pipe->queue = gst_element_factory_make("queue", g_strdup_printf("queue%d", idx));
-    pipe->capsfilter = gst_element_factory_make("capsfilter", g_strdup_printf("capsfilter_%d", idx));
+    pipe->capsfilter = gst_element_factory_make("capsfilter", g_strdup_printf("capsfilter%d", idx));
     pipe->convert = gst_element_factory_make("imxvideoconvert_g2d", g_strdup_printf("videoconvert%d", idx));
     pipe->sink = gst_element_factory_make("appsink", g_strdup_printf("appsink%d", idx));
 
@@ -1772,7 +1772,7 @@ gint setRtspPipe(GstElement *pipeline, gpointer data, gpointer user_data, guint8
 
     if (!gst_element_link_many(pipe->queue, pipe->crop, pipe->overlay, pipe->videorate, pipe->encoder, pipe->sink, NULL))
 #else
-    if(!gst_element_link_many(pipe->queue, pipe->crop, pipe->videorate, pipe->encoder, pipe->sink, NULL))
+    if(!gst_element_link_many(pipe->queue, pipe->crop, pipe->videorate, pipe->capsfilter, pipe->convert, pipe->encoder, pipe->sink, NULL))
     //if(!gst_element_link_many(pipe->queue, pipe->crop, pipe->videorate, pipe->encoder, pipe->sink, NULL))
 #endif
     {
@@ -1790,8 +1790,8 @@ gint setRtspPipe(GstElement *pipeline, gpointer data, gpointer user_data, guint8
     // g_object_set(main[i].videoPipe[dir].overlay, "y-absolute", 10.0, NULL);
     // g_object_set(main[i].videoPipe[dir].overlay, "text-x", 1000, NULL);
 
-    //GstCaps *caps = gst_caps_new_simple("video/x-raw", "framerate", GST_TYPE_FRACTION, RTSP_FPS, 1, NULL);
-#if 1
+    GstCaps *caps = gst_caps_new_simple("video/x-raw", "framerate", GST_TYPE_FRACTION, RTSP_FPS, 1, NULL);
+#if 0
     GstCaps *caps = gst_caps_new_simple("video/x-raw",
                                             "format", G_TYPE_STRING, "RGB16",
                                             "width", G_TYPE_INT, _WIDTH,
@@ -1807,12 +1807,12 @@ gint setRtspPipe(GstElement *pipeline, gpointer data, gpointer user_data, guint8
     else
         g_object_set(pipe->crop, "top", 0, "bottom", 0, "left", 0, "right", _WIDTH, NULL);
 
-    g_object_set(pipe->videorate, "max-rate", RTSP_FPS, NULL);
+    //g_object_set(pipe->videorate, "max-rate", RTSP_FPS, NULL);
     //g_object_set(pipe->videorate, "drop-only", TRUE, NULL);
     g_object_set(pipe->encoder, "bitrate", RTSP_BITRATE, NULL);
     // g_object_set(encoder2, "gop-size", 30, NULL);
     // g_object_set(appsink2, "emit-signals", TRUE, "sync", FALSE, NULL);
-    g_object_set(pipe->queue, "max-size-bytes", 0, "max-size-time", 100*GST_MSECOND, "max-size-buffers", 60, "leaky", queue_leaky, NULL);
+    g_object_set(pipe->queue, "max-size-bytes", 0, "max-size-time", 0, "max-size-buffers", 60, "leaky", queue_leaky, NULL);
     //g_object_set(pipe->queue, "flush-on-eos", TRUE, NULL);
 #if 0
     g_signal_connect(pipe->queue, "underrun", G_CALLBACK(underrun_callback), NULL);
@@ -2318,19 +2318,21 @@ gint setRecordPipe(GstElement* pipeline, gpointer data, gpointer user_data, guin
     pipe->queue = gst_element_factory_make("queue", g_strdup_printf("queue%d", idx));
     pipe->queue2 = gst_element_factory_make("queue2", g_strdup_printf("queue2_%d", idx));
     pipe->parse = gst_element_factory_make("h264parse", g_strdup_printf("parse%d", idx));
+    pipe->capsfilter = gst_element_factory_make("capsfilter", g_strdup_printf("capsfilter%d", idx));
+    pipe->convert = gst_element_factory_make("imxvideoconvert_g2d", g_strdup_printf("videoconvert%d", idx));
 #ifdef RECORD_SPLITMUXSINK_ENABLE
     pipe->sink = gst_element_factory_make("splitmuxsink", g_strdup_printf("splitmuxsink%d", idx));
 #else
     pipe->sink = gst_element_factory_make("appsink", g_strdup_printf("appsink%d", idx));
 #endif
 
-    if (!pipe->videorate || !pipe->crop|| !pipe->encoder || !pipe->queue || !pipe->parse || !pipe->queue2 || !pipe->sink)
+    if (!pipe->videorate || !pipe->crop|| !pipe->encoder || !pipe->queue || !pipe->parse || !pipe->queue2 || !pipe->sink || !pipe->capsfilter || !pipe->convert)
     {
         __LOG(LOG_CRIT, "[GST][%s:%d] video pipe[%d] make error", _FILE_, __LINE__, ch_num);
         // gst_object_unref(pipeline[i]);
         return -1;
     }
-    gst_bin_add_many(GST_BIN(pipeline), pipe->crop, pipe->queue, pipe->videorate, pipe->encoder, pipe->parse, pipe->sink, NULL);
+    gst_bin_add_many(GST_BIN(pipeline), pipe->crop, pipe->queue, pipe->videorate, pipe->encoder, pipe->parse, pipe->sink, pipe->capsfilter, pipe->convert, NULL);
 
 #ifdef OVERLAY_ENABLE
 
@@ -2360,7 +2362,7 @@ gint setRecordPipe(GstElement* pipeline, gpointer data, gpointer user_data, guin
 
     if (!gst_element_link_many(pipe->queue, pipe->crop, pipe->overlay, pipe->videorate, pipe->encoder, pipe->parse, NULL))
 #else
-    if (!gst_element_link_many(pipe->queue, pipe->crop, pipe->videorate, pipe->encoder, pipe->parse, NULL))
+    if (!gst_element_link_many(pipe->queue, pipe->crop, pipe->videorate, pipe->capsfilter, pipe->convert, pipe->encoder, pipe->parse, NULL))
 #endif
     {
         __LOG(LOG_CRIT, "[GST][%s:%d] video pipe[%d] link error", _FILE_, __LINE__, ch_num);
@@ -2370,7 +2372,9 @@ gint setRecordPipe(GstElement* pipeline, gpointer data, gpointer user_data, guin
 
     // g_object_set(main[i].videoPipe[idx].mux, "faststart", TRUE, NULL);
 
-
+    GstCaps *caps = gst_caps_new_simple("video/x-raw", "framerate", GST_TYPE_FRACTION, FILE_FPS, 1, NULL);
+    g_object_set(pipe->capsfilter, "caps", caps, NULL);
+    gst_caps_unref(caps);
 
     if (ch_num % 2 == 0)
         g_object_set(pipe->crop, "top", 0, "bottom", 0, "left", _WIDTH, "right", 0, NULL);
@@ -2378,7 +2382,7 @@ gint setRecordPipe(GstElement* pipeline, gpointer data, gpointer user_data, guin
         g_object_set(pipe->crop, "top", 0, "bottom", 0, "left", 0, "right", _WIDTH, NULL);
 
     g_object_set(pipe->parse, "config-interval", -1, NULL);
-    g_object_set(pipe->videorate, "max-rate", FILE_FPS, NULL);
+    //g_object_set(pipe->videorate, "max-rate", FILE_FPS, NULL);
     //g_object_set(pipe->videorate, "drop-only", TRUE, NULL);
     g_object_set(pipe->encoder, "bitrate", FILE_BITRATE, NULL);
     g_object_set(pipe->queue, "max-size-time", 0, "max-size-bytes", 0, "max-size-buffers", 60, "leaky", queue_leaky, NULL);
@@ -2451,6 +2455,8 @@ gint main(int argc, char *argv[])
     GstStateChangeReturn ret;
     gint i = 0 ,init_sec = 0;
     guint cleanRtsp_id;
+    gint main_fps = MAIN_FPS;
+    gboolean rtsp_enable = TRUE;
 
     atexit(cleanup);
     attachInterruptHandlers();
@@ -2459,7 +2465,19 @@ gint main(int argc, char *argv[])
         //parseArguments(argc, argv);
         init_sec = atoi(argv[1]);
         __LOG(LOG_NOTICE, "[GST][%s:%d] init_sec : %d", _FILE_, __LINE__, init_sec);
+        if(argc > 2)
+        {
+            main_fps = atoi(argv[2]);
+            __LOG(LOG_NOTICE, "[GST][%s:%d] main_fps : %d", _FILE_, __LINE__, main_fps);
+            if(argc > 3)
+            {
+                rtsp_enable = atoi(argv[3]);
+                __LOG(LOG_NOTICE, "[GST][%s:%d] rtsp_enable : %s", _FILE_, __LINE__, rtsp_enable? "TRUE":"FALSE");
+            }
+        }
     }
+
+
 
     gst_init(&argc, &argv);
 
@@ -2505,7 +2523,7 @@ gint main(int argc, char *argv[])
                                             "format", G_TYPE_STRING, "NV12",
                                             "width", G_TYPE_INT, _WIDTH*2,
                                             "height", G_TYPE_INT, _HEIGHT,
-                                            "framerate", GST_TYPE_FRACTION, MAIN_FPS, 1,
+                                            "framerate", GST_TYPE_FRACTION, main_fps, 1,
                                             NULL);
 
 
@@ -2596,25 +2614,27 @@ gint main(int argc, char *argv[])
     }
 #endif
 
-#ifdef RTSP_ENABLE
-    if (rtsp_server_start())
+    if(rtsp_enable)
     {
-        for (i = start_index*2; i < end_index*2; i++)
+        if (rtsp_server_start())
         {
-            idx = RTSP0_L + i;
-            src_num = i / MAX_SRC;
-            dir = RTSP0_L / MAX_SRC + i % MAX_SRC;
-            __LOG(LOG_NOTICE, "[RTSP][%s:%d] idx:%d ch:%d src_num:%d dir:%d",  _FILE_, __LINE__, idx, i, src_num, dir);
-            setRtspPipe(main[src_num].pipeline, &main[src_num].videoPipe[dir], &customData[idx], idx);
-            // g_timeout_add_seconds(1, (GSourceFunc)setSRT, &customData[tdx]);
-            if (!gst_element_link(main[src_num].tee, main[src_num].videoPipe[dir].queue))
+            for (i = start_index*2; i < end_index*2; i++)
             {
-                __LOG(LOG_CRIT, "[RTSP][%s:%d] rtsp pipe[%d] link error", _FILE_, __LINE__, i);
+                idx = RTSP0_L + i;
+                src_num = i / MAX_SRC;
+                dir = RTSP0_L / MAX_SRC + i % MAX_SRC;
+                __LOG(LOG_NOTICE, "[RTSP][%s:%d] idx:%d ch:%d src_num:%d dir:%d",  _FILE_, __LINE__, idx, i, src_num, dir);
+                setRtspPipe(main[src_num].pipeline, &main[src_num].videoPipe[dir], &customData[idx], idx);
+                // g_timeout_add_seconds(1, (GSourceFunc)setSRT, &customData[tdx]);
+                if (!gst_element_link(main[src_num].tee, main[src_num].videoPipe[dir].queue))
+                {
+                    __LOG(LOG_CRIT, "[RTSP][%s:%d] rtsp pipe[%d] link error", _FILE_, __LINE__, i);
+                }
             }
         }
+        cleanRtsp_id = g_timeout_add_seconds(5, (GSourceFunc)cleanRtspSession, rtspServer);
     }
-    cleanRtsp_id = g_timeout_add_seconds(5, (GSourceFunc)cleanRtspSession, rtspServer);
-#endif
+
 
 #if 0
     ret = gst_element_set_state(pipeline, GST_STATE_READY);
