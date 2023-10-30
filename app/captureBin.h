@@ -1,8 +1,8 @@
 /*
  *
- * Cantops recordBin.cpp support
+ * Cantops captureBin.cpp support
  *
- * Copyright (C)2022 Cantops, Inc. All rights reserved.
+ * Copyright (C)2022 Pointimage, Inc. All rights reserved.
  *
  * Author:
  *   jhw <hwjo@cantops.biz>, 2023/09/18
@@ -14,54 +14,59 @@
  *    option) any later version.
  */
 
-#ifndef _RECORD_H_
-#define _RECORD_H_
+
+#ifndef _CAPTRUE_H_
+#define _CAPTURE_H_
 
 #include "util.h"
+#include <gst/app/gstappsink.h>
 
-typedef struct _RecordElement
+typedef struct _CaptureData
+{
+    guint8 ch;
+    guint8 captureCnt;
+    GstBuffer *buf;
+    gchar *filePath;
+} CaptureData;
+
+typedef struct _CaptureElement
 {
     GstElement *rate;
     GstElement *enc;
     GstElement *queue;
     GstElement *queue2;
     GstElement *convert;
+    GstElement *capsfilter;
     GstElement *parse;
     GstElement *bin;
     GstElement *sink;
-    GstElement *capsfilter;
     GstElement *crop;
-    GstElement *overlay;
-} RecordElement;
+} CaptureElement;
 
-class RecordBin
+class CaptureBin
 {
 public :
-	static RecordBin* getInstance() ;
-    RecordBin();
-    ~RecordBin();
-	gint init(guint8 num) ;
+	static CaptureBin* getInstance();
+    CaptureBin();
+    ~CaptureBin();
+	gint init(guint8 num);
 	gint destroy() ;
+    gint setFilePath();
+    gint startCapture();
+    gint stopCapture();
     GstPad* getBinSinkPad();
-    GstPad* getBinSrcPad();
-    gboolean setBitrate(guint16 data);
-    gboolean getBitrate();
-    gboolean setFps(guint16 data);
-    gboolean getFps();
-    gboolean setOverlayText(gchar *text);
 
 private :
 	
 public :
 	gboolean m_flagDestroy;
-    //GstPad *sinkPad;
     //GstElement *pipeline[2];
 	
 private :
-    RecordElement re;
+    CaptureElement be;
     guint8 ch;
     GstPad *sinkPad;
-    GstPad *srcPad;
+    CaptureData captureData;
 };
 
 #endif

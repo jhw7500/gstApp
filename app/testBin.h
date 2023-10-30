@@ -1,6 +1,6 @@
 /*
  *
- * Cantops audioBin.cpp support
+ * Cantops testBin.cpp support
  *
  * Copyright (C)2022 Cantops, Inc. All rights reserved.
  *
@@ -14,22 +14,25 @@
  *    option) any later version.
  */
 
-#ifndef _AUDIOBIN_H_
-#define _AUDIOBIN_H_
+#ifndef _TESTBIN_H_
+#define _TESTBIN_H_
 
 #include "util.h"
 
-typedef struct _AudioElement
+typedef struct _TestElement
 {
     GstElement *element[10];
     GstElement *bin;
-} AudioElement;
+} TestElement;
 
-class AudioBin
+class TestBin
 {
 public :
-	static AudioBin* getInstance();
+	static TestBin* getInstance();
 	gint init() ;
+    TestBin();
+    TestBin(gboolean x);
+    ~TestBin();
 	gint destroy() ;
     gint addElement(const gchar* firstStr, ...);
     gint linkElement();
@@ -41,10 +44,10 @@ private :
 public :
 	gboolean m_flagDestroy;
     //GstElement *pipeline[2];
-    AudioElement ae;
+    TestElement be;
 	
 private :
-    //AudioElement ae;
+    //TestElement ae;
     guint8 ptr;
 };
 

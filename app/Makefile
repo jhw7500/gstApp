@@ -34,9 +34,9 @@ ALL_CFLAGS=-I$(IDIR) $(CFLAGS)
 
 ALLFLAGS=$(ALL_CFLAGS) $(ALL_LDFLAGS)
 #OBJS = videoBin.o recordBin.o muxSinkBin.o rtspServerBin.o audioBin.o muxBin.o
-OBJS = videoBin.o recordBin.o muxSinkBin.o rtspServerBin.o
+OBJS = videoBin.o recordBin.o muxSinkBin.o rtspServerBin.o testBin.o captureBin.o util.o
 
-gstApp : $(OBJS) main.cpp util.cpp util.h
+gstApp : $(OBJS) main.cpp
 	$(CXX) -o $@ $^ $(ALLFLAGS)
 	mv $@ $(OUTPUT)
 	mv *.o obj
@@ -56,8 +56,14 @@ rtspServerBin.o : rtspServerBin.cpp rtspServerBin.h
 muxBin.o : muxBin.cpp muxBin.h
 	$(CXX) $(ALLFLAGS) -c muxBin.cpp
 
-audioBin.o : audioBin.cpp audioBin.h
-	$(CXX) $(ALLFLAGS) -c audioBin.cpp
+testBin.o : testBin.cpp testBin.h
+	$(CXX) $(ALLFLAGS) -c testBin.cpp
+
+captureBin.o : captureBin.cpp captureBin.h
+	$(CXX) $(ALLFLAGS) -c captureBin.cpp
+
+util.o : util.cpp util.h
+	$(CXX) $(ALLFLAGS) -c util.cpp
 
 clean :
 	rm -f $(OUTPUT)/*

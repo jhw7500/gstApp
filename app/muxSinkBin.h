@@ -37,6 +37,8 @@ public :
 	static MuxSinkBin* getInstance();
 	gint init(guint8 num) ;
 	gint destroy() ;
+    MuxSinkBin();
+    ~MuxSinkBin();
     GstPad* getBinPad();
     GstPad* getBinVideoSinkPad();
     GstPad* getBinAudioSinkPad();
@@ -53,7 +55,7 @@ public :
 private :
 	gboolean m_flagDestroy;
     //GstElement *pipeline[2];
-    MuxSinkElement me;
+    MuxSinkElement be;
     MuxSinkData muxSinkData;
     GstPad *sinkAudioPad;
     GstPad *sinkVideoPad;

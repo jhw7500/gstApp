@@ -16,30 +16,58 @@
 
 #include "util.h"
 
-guint8 log_level = 7;
-guint8 dbg_level = 5;
-
-GstElement *pipeline;
-GMainLoop *loop;
+GstElement *pipeline = NULL;
+GMainLoop *loop = NULL;
 volatile sig_atomic_t is_interrupted = 0;
 gboolean is_live = FALSE;
 CmdArg cmdArg;
 
-void mylog( int opt, const char* _szfmt, ... )
+void log_once(gint opt, const gchar *message) 
+{
+    static gchar lastMessage[256][256];
+    static guint8 ptr = 0;
+
+    for(guint8 i=0; i<ptr; i++)
+    {
+        if (strcmp(message, lastMessage[i]) == 0) {
+            return;
+        }
+    }
+
+    if(opt <= cmdArg.log_level || opt <= LOG_ALERT)
+    {
+        syslog( opt|LOG_LOCAL0, "%s", message);
+    }
+    if(opt <= cmdArg.dbg_level || opt <= LOG_ALERT)
+    {
+        GDateTime *datetime = g_date_time_new_now_local();
+        gchar *date_str = g_date_time_format(datetime, "%Y-%m-%d %H:%M:%S");
+        const gchar *debug_codes[] = {"emerg", "alert", "crit", "err", "warning", "notice", "info", "debug"};
+		const gchar *color_codes[] = {"\033[1;34m", "\033[0;34m", "\033[1;31m", "\033[1;35m", "\033[1;33m", "\033[1;32m", "\033[1;36m", "\033[0m"};
+
+		g_print("%s%s %s: [%s]\033[0m", color_codes[opt], date_str, PROGRAM_NAME, debug_codes[opt]);
+        g_print("%s\n", message);
+        g_date_time_unref(datetime);
+        g_free(date_str);
+    }
+
+    strncpy(lastMessage[ptr], message, sizeof(lastMessage));
+    ptr++;
+}
+
+void mylog(gint opt, const gchar* _szfmt, ... )
 {
 	va_list va;
-	char strTmp[512];
-	const char *debug_codes[] = {"emerg", "alert", "crit", "err", "warning", "notice", "info", "debug"};
+	gchar strTmp[512];
 
 	va_start( va, _szfmt );
-	
 	vsprintf(strTmp, _szfmt ,va);
 
-	if(opt <= log_level || opt <= LOG_ALERT) {
+	if(opt <= cmdArg.log_level || opt <= LOG_ALERT) {
 		//syslog( opt|LOG_LOCAL0, "  [%5ld.%06ld] [%s]%s", ts.tv_sec, ts.tv_nsec/1000, debug_codes[opt], strTmp);
 		syslog( opt|LOG_LOCAL0, "%s", strTmp);
 	}
-	if(opt <= dbg_level || opt <= LOG_ALERT) {
+	if(opt <= cmdArg.dbg_level || opt <= LOG_ALERT) {
 		//timer = time(NULL);
 		//localtime_r(&timer, &t);
         GDateTime *datetime = g_date_time_new_now_local();
@@ -48,8 +76,8 @@ void mylog( int opt, const char* _szfmt, ... )
 
         //gchar *tmp = g_strdup_printf("output_%s.mp4", date_str);
         //memcpy(file_name, tmp, 128);
- 
-		const char *color_codes[] = {"\033[1;34m", "\033[0;34m", "\033[1;31m", "\033[1;35m", "\033[1;33m", "\033[1;32m", "\033[1;36m", "\033[0m"};
+        const gchar *debug_codes[] = {"emerg", "alert", "crit", "err", "warning", "notice", "info", "debug"};
+		const gchar *color_codes[] = {"\033[1;34m", "\033[0;34m", "\033[1;31m", "\033[1;35m", "\033[1;33m", "\033[1;32m", "\033[1;36m", "\033[0m"};
 		g_print("%s%s %s: [%s]\033[0m", color_codes[opt], date_str, PROGRAM_NAME, debug_codes[opt]);
 
 		vprintf( _szfmt, va );
@@ -61,6 +89,33 @@ void mylog( int opt, const char* _szfmt, ... )
 	va_end( va );
 }
 
+guint charArrayToInt(gchar *arr)
+{
+    guint8 i;
+    guint result = 0;
+
+    for(i=0; (arr[i]!='\n' && arr[i]!='\r' && arr[i]!='\0' && arr[i]!=' '); i++)
+    {
+        //g_print("arr[%d] : %c %d\n", i, arr[i], arr[i]);
+        result = (result * 10) + (arr[i] - '0');
+    }
+
+    //g_print("result : %d\n", result);
+
+    return result;
+}
+
+gboolean compareBuf(guint8 *cmp1, guint8 *cmp2, guint8 len)
+{
+	guint8 i;
+
+	for(i=0;i<len;i++)
+	{
+		if(cmp1[i] != cmp2[i])
+			return 0;
+	}
+	return 1;
+}
 
 gint cmd_parser(int *argc, char **argv[], gpointer data)
 {
@@ -77,41 +132,63 @@ gint cmd_parser(int *argc, char **argv[], gpointer data)
     gchar *ohtName = CHARNEXT(*argv[0], '/');
 #endif
     //CmdArg* cmdArg = (CmdArg *)data;
-    cmdArg.debug_level = 0;
-    cmdArg.saveDot = "/tmp";
-    cmdArg.saveDir = FILE_PATH;
-    cmdArg.ch_enable = 0x0f;
-    cmdArg.resMode = ResFHD;
-    cmdArg.rec_fps = RECORD_FPS;
-    cmdArg.rtsp_fps = RTSP_FPS;
-    cmdArg.main_fps = MAIN_FPS;
-    cmdArg.rec_bitrate = RECORD_BITRATE;
-    cmdArg.rtsp_bitrate = RTSP_BITRATE;
-    cmdArg.ohtName = CHARNEXT(*argv[0], '/');
-    cmdArg.play_delay = 0;
-    cmdArg.no_fault = TRUE;
-    cmdArg.duration = DEFUALT_DURATION;
     GOptionContext *ctx;
     GError *err = NULL;
-
-    cmdArg.res[0] = {1920, 1080};
-    cmdArg.res[1] = {1280, 720};
+    cmdArg.ohtName = cmdArg.appname;
+    cmdArg.ch_enable = 0x0f;
+    cmdArg.mode = NORMAL_MODE;
+    cmdArg.resMode = ResFHD;
+    cmdArg.log_level = DEFAULT_LOG_LEVEL;
+    cmdArg.dbg_level = DEFAULT_DBG_LEVEL;
+    cmdArg.dotDir = DEFULAT_DOT_PATH;
+    cmdArg.mntDir = DEFAULT_MOUNT_PATH;
+    cmdArg.captureDir = DEFAULT_CAPTURE_PATH;
+    cmdArg.rec_fps = DEFAULT_RECORD_FPS;
+    cmdArg.rtsp_fps = DEFAULT_RTSP_FPS;
+    cmdArg.main_fps = DEFAULT_MAIN_FPS;
+    cmdArg.rec_bitrate = DEFAULT_RECORD_BITRATE;
+    cmdArg.rtsp_bitrate = DEFAULT_RTSP_BITRATE;
+    cmdArg.play_delay = DEFAULT_PLAY_DELAY;
+    cmdArg.fault = FALSE;
+    cmdArg.duration = DEFUALT_DURATION;
+    cmdArg.rtsp_en = TRUE;
+    cmdArg.rec_en = TRUE;
+    cmdArg.audio_en = FALSE;
+    cmdArg.capture_en = FALSE;
+    cmdArg.captureMaxCnt = DEFAULT_CAPTURE_MAX_CNT;
+    cmdArg.input_en = FALSE;
+    cmdArg.rtsp_port = DEFAULT_RTSP_PORT;
+    cmdArg.rtsp_id = DEFAULT_RTSP_ID;
+    cmdArg.rtsp_passwd = DEFAULT_RTSP_PASSWD;
+    cmdArg.overlay_en = FALSE;
 
     GOptionEntry entries[] = {
-        {"debug", 'd', 0, G_OPTION_ARG_INT, &cmdArg.debug_level, "do not output status information, default(0)", "INT"},
-        {"dot", 's', 0, G_OPTION_ARG_STRING, &cmdArg.saveDot, "save dot representation of pipeline to FILE and exit, default(/tmp)", "STRING"},
-        {"channel", 'c', 0, G_OPTION_ARG_INT, &cmdArg.ch_enable, "camera channel enable bit, default(0x0f)", "HEX"},
-        {"output", 'o', 0, G_OPTION_ARG_STRING, &cmdArg.saveDir, "save video & audio file to directory, default(/mnt/sd_cam)", "STRING"},
-        {"mode", 'm', 0, G_OPTION_ARG_INT, &cmdArg.resMode, "resolution select FHD(0) and HD(1), default(FHD)", "INT"},
+        {"mode", 'm', 0, G_OPTION_ARG_INT, &cmdArg.mode, "mode select 0(normal), 1(test), default(0)", "INT"},
+        {"debug", 'd', 0, G_OPTION_ARG_INT, &cmdArg.dbg_level, "debug level, default(5)", "INT"},
+        {"debug", 'l', 0, G_OPTION_ARG_INT, &cmdArg.log_level, "log level, default(6)", "INT"},
+        {"dot", NULL, 0, G_OPTION_ARG_STRING, &cmdArg.dotDir, "save dot representation of pipeline to FILE and exit, default(/tmp)", "STRING"},
+        {"channel", 'n', 0, G_OPTION_ARG_INT, &cmdArg.ch_enable, "camera channel enable bit, default(0x0f)", "HEX"},
+        {"output", 'o', 0, G_OPTION_ARG_STRING, &cmdArg.mntDir, "save video & audio file to directory, default(/mnt/sd_cam)", "STRING"},
+        {"res", 'r', 0, G_OPTION_ARG_INT, &cmdArg.resMode, "resolution select FHD(0) and HD(1), default(FHD)", "INT"},
         {"fmain", NULL, 0, G_OPTION_ARG_INT, &cmdArg.main_fps, "main frame per second, default(15)", "INT"},
         {"frec", NULL, 0, G_OPTION_ARG_INT, &cmdArg.rec_fps, "record frame per second, default(15)", "INT"},
         {"frtsp", NULL, 0, G_OPTION_ARG_INT, &cmdArg.rtsp_fps, "rtsp frame per second, default(15)", "INT"},
-        {"brec", NULL, 0, G_OPTION_ARG_INT, &cmdArg.rec_bitrate, "record bit per second, default(4096)", "KBYTE"},
-        {"brtsp", NULL, 0, G_OPTION_ARG_INT, &cmdArg.rtsp_bitrate, "rtsp bit per second, default(1024)", "KBYTE"},
+        {"brec", NULL, 0, G_OPTION_ARG_INT, &cmdArg.rec_bitrate, "record Kbyte per second, default(4096)", "INT"},
+        {"brtsp", NULL, 0, G_OPTION_ARG_INT, &cmdArg.rtsp_bitrate, "rtsp Kbyte per second, default(1024)", "INT"},
         {"oht", 'O', 0, G_OPTION_ARG_STRING, &cmdArg.ohtName, "oht name, default(APPNAME)", "STRING"},
         {"delay", 'D', 0, G_OPTION_ARG_INT, &cmdArg.play_delay, "from pause to play delay, default(0)", "SECOND"},
-        {"fault", 'f', 0, G_OPTION_ARG_NONE, &cmdArg.no_fault, "no fault setup, default(1)", "BOOLEAN"},
-        {"duration", 't', 0, G_OPTION_ARG_INT, &cmdArg.duration, "file split duration, default(1)", "MINUTE"},
+        {"fault", 'f', 0, G_OPTION_ARG_NONE, &cmdArg.fault, "no fault setup, default(NONE)", "NONE"},
+        {"duration", 's', 0, G_OPTION_ARG_INT, &cmdArg.duration, "recoding file split duration, default(1)", "MINUTE"},
+        {"ertsp", 't', 0, G_OPTION_ARG_INT, &cmdArg.rtsp_en, "rtsp streaming enable, default(1)", "INT"},
+        {"erec", 'e', 0, G_OPTION_ARG_INT, &cmdArg.rec_en, "video recording enable, default(1)", "INT"},
+        {"eaudio", 'a', 0, G_OPTION_ARG_NONE, &cmdArg.audio_en, "audio recording enable, default(NONE)", "NONE"},
+        {"ecap", 'c', 0, G_OPTION_ARG_NONE, &cmdArg.capture_en, "video capturing enable, default(NONE)", "NONE"},
+        {"ein", 'i', 0, G_OPTION_ARG_NONE, &cmdArg.input_en, "terminal input enable, default(NONE)", "NONE"},
+        {"port", 'p', 0, G_OPTION_ARG_STRING, &cmdArg.rtsp_port, "rtsp port number, default(8554)", "STRING"},
+        {"id", NULL, 0, G_OPTION_ARG_STRING, &cmdArg.rtsp_id, "rtsp id, default(semes)", "STRING"},
+        {"passwd", NULL, 0, G_OPTION_ARG_STRING, &cmdArg.rtsp_passwd, "rtsp passwd, default(semes)", "STRING"},
+        {"cmax", 'x', 0, G_OPTION_ARG_INT, &cmdArg.captureMaxCnt, "capture max count, default(3)", "INT"},
+        {"eover", 'v', 0, G_OPTION_ARG_NONE, &cmdArg.overlay_en, "overlay enable, default(NONE)", "NONE"},
         {NULL}
     };
 
@@ -121,15 +198,25 @@ gint cmd_parser(int *argc, char **argv[], gpointer data)
 
     if(!g_option_context_parse(ctx, argc, argv, &err))
     {
-        g_print("Failed to initialize: %s\n", err->message);
+        __LOG(LOG_ERR, "[GST][%s:%d] Failed to initialize: %s", _FILE_, __LINE__, err->message);
         g_error_free(err);
         return -1;
     }
+
     g_print("oht name : %s\n", cmdArg.ohtName);
-    g_print("debug_level : %d\n", cmdArg.debug_level);
-    g_print("saveDot : %s\n", cmdArg.saveDot);
-    g_print("saveDirectory : %s\n", cmdArg.saveDir);
+    g_print("mode : %s\n", cmdArg.mode? "test":"normal");
+    g_print("log_level : %d\n", cmdArg.log_level);
+    g_print("debug_level : %d\n", cmdArg.dbg_level);
+    g_print("mount directory : %s\n", cmdArg.mntDir);
+    g_print("save dot directory : %s\n", cmdArg.dotDir);
+    g_print("save capture directory : %s\n", cmdArg.captureDir);
     g_print("ch_enable : 0x%02x\n", cmdArg.ch_enable);
+    g_print("rtsp stream enable : %s\n", cmdArg.rtsp_en? "TURE":"FALSE");
+    g_print("video record enable : %s\n", cmdArg.rec_en? "TURE":"FALSE");
+    g_print("audio record enable : %s\n", cmdArg.audio_en? "TURE":"FALSE");
+    g_print("captrue enable : %s\n", cmdArg.capture_en? "TURE":"FALSE");
+    g_print("captrue max count : %d\n", cmdArg.captureMaxCnt);
+    g_print("terminal input enable : %s\n", cmdArg.input_en? "TURE":"FALSE");
     g_print("res mode : %s\n", cmdArg.resMode? "HD":"FHD");
     g_print("width : %d\n", cmdArg.res[cmdArg.resMode].width);
     g_print("height : %d\n", cmdArg.res[cmdArg.resMode].height);
@@ -139,8 +226,12 @@ gint cmd_parser(int *argc, char **argv[], gpointer data)
     g_print("rec bitrate : %d\n", cmdArg.rec_bitrate);
     g_print("rtsp bitrate : %d\n", cmdArg.rtsp_bitrate);
     g_print("play delay : %d\n", cmdArg.play_delay);
-    g_print("no fault : %s\n", cmdArg.no_fault? "TURE":"FALSE");
+    g_print("fault : %s\n", cmdArg.fault? "TURE":"FALSE");
     g_print("duration : %d\n", cmdArg.duration);
+    g_print("rtsp port : %s\n", cmdArg.rtsp_port);
+    g_print("rtsp id : %s\n", cmdArg.rtsp_id);
+    g_print("rtsp passwd : %s\n", cmdArg.rtsp_passwd);
+    g_print("overlay enable : %s\n", cmdArg.overlay_en? "TURE":"FALSE");
 
     return 1;
 }
@@ -177,14 +268,15 @@ gboolean my_bus_callback(GstBus *bus, GstMessage *message, gpointer data)
     //PipeMain *info = (PipeMain *)data;
     static guint8 cam_cnt = 0;
 
-    static GstState state = GST_STATE_PLAYING;
+    static GstState state = GST_STATE_VOID_PENDING;
 
     if(GST_MESSAGE_TYPE(message) == GST_MESSAGE_QOS) return TRUE;
 
     if(GST_MESSAGE_TYPE(message) == GST_MESSAGE_TAG) return TRUE;
 
-    if(GST_MESSAGE_TYPE(message) == GST_MESSAGE_STREAM_STATUS) return TRUE;
+    if(GST_MESSAGE_TYPE(message) == GST_MESSAGE_ELEMENT) return TRUE;
 
+    if(GST_MESSAGE_TYPE(message) == GST_MESSAGE_STREAM_STATUS) return TRUE;
     //printf("Got %s message\n", GST_MESSAGE_TYPE_NAME(message));
     if(GST_MESSAGE_TYPE(message) != GST_MESSAGE_STATE_CHANGED)
         __LOG(LOG_NOTICE, "[GST][%s:%d] Got %s message from %s", _FILE_, __LINE__, GST_MESSAGE_TYPE_NAME(message), GST_OBJECT_NAME (message->src));
@@ -197,10 +289,10 @@ gboolean my_bus_callback(GstBus *bus, GstMessage *message, gpointer data)
             gst_message_parse_state_changed(message, &old_state, &new_state, &pending_state);
             if(state != old_state)
             {
-                __LOG(LOG_INFO, "[GST][%s:%d] from %s to %s", _FILE_, __LINE__, gst_element_state_get_name(old_state), gst_element_state_get_name(new_state));
+                //__LOG(LOG_INFO, "[GST][%s:%d] from %s to %s", _FILE_, __LINE__, gst_element_state_get_name(old_state), gst_element_state_get_name(new_state));
                 state = old_state;
             }
-            __LOG(LOG_DEBUG, "[GST][%s:%d] in %s", _FILE_, __LINE__, GST_OBJECT_NAME (message->src));
+            __LOG(LOG_INFO, "[GST][%s:%d] in %s", _FILE_, __LINE__, GST_OBJECT_NAME (message->src));
             break;
         }
 

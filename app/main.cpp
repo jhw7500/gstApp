@@ -18,23 +18,32 @@
 #include "videoBin.h"
 #include "recordBin.h"
 #include "muxBin.h"
-#include "audioBin.h"
+#include "testBin.h"
 #include "muxSinkBin.h"
 #include "rtspServerBin.h"
+#include "captureBin.h"
 #include <glib-unix.h>
+#include <fcntl.h>
 
 #define RECORDBIN_ENABLE
-#define RTSPSERVERBIN_ENABLEx
-#define AUDIOBIN_ENABLEx
+#define RTSPSERVERBIN_ENABLE
+#define AUDIOBIN_ENABLE
 #define MUXBIN_ENABLEx
 //MuxSinkBin muxSinkBin[MAX_CHANNEL];
 
 #define GST_API_VERSION "1.0"
 
+typedef struct {
+    void* arg0;
+    void* arg1;
+    void* arg2;
+} ThreadArgs;
+
 static gboolean quiet = FALSE;
 extern volatile gboolean glib_on_error_halt;
 guint signal_watch_intr_id;
 guint signal_watch_hup_id;
+gboolean ch_en_array[MAX_CHANNEL] = { TRUE, TRUE, TRUE, TRUE };
 
 static void fault_restore (void);
 static void fault_spin (void);
@@ -157,6 +166,184 @@ void cleanup() {
     gst_deinit();  // GStreamer 해제
 }
 
+static void check_terminal_input(gpointer arg)  //(gpointer arg0, gpointer arg1, gpointer arg2) 
+{
+    ThreadArgs *thraedArgs = (ThreadArgs *)arg;
+    RecordBin *recordBin = (RecordBin *)(thraedArgs->arg0);
+    RtspServerBin *rtspServerBin = (RtspServerBin *)(thraedArgs->arg1);
+    CaptureBin *captrueBin = (CaptureBin *)(thraedArgs->arg2);
+    //RecordBin *recordBin = (RecordBin *)arg0;
+    //RtspServerBin *rtspServerBin = (RtspServerBin *)arg1;
+    //CaptureBin *captrueBin = (CaptureBin *)arg2;
+    int bytesRead;
+    GstState state;
+    guint8 i;
+    gchar *cmd;
+    gchar *token = NULL;
+    guint bps, fps;
+    char buffer[64];
+
+    int flags = fcntl(STDIN_FILENO, F_GETFL, 0);
+    fcntl(STDIN_FILENO, F_SETFL, flags | O_NONBLOCK);
+
+    __LOG(LOG_NOTICE, "[TERMINAL][%s:%d] %s start", _FILE_, __LINE__, __FUNCTION__);
+
+    do
+    {
+        g_usleep(1000);
+
+        if(is_interrupted)
+            break;
+
+        bytesRead = read(STDIN_FILENO, buffer, sizeof(buffer));
+
+        if (bytesRead == -1)
+        {
+
+        }
+        else if(bytesRead > 0)
+        {
+            buffer[bytesRead] = '\0';
+            g_print("Input: %s", buffer);
+
+            do
+            {
+                token = strtok(buffer, " ");
+
+                if (!strcmp(token, "get"))
+                {
+                    token = strtok(NULL, " ");
+                    if(!strcmp(token, "bps"))
+                    {
+                        token = strtok(NULL, "\n");
+                        if(!strcmp(token, "rec"))
+                        {
+                            for (i = 0; i < MAX_CHANNEL; i++)
+                                if (recordBin[i].getBinSinkPad()) recordBin[i].getBitrate();
+                        }
+                        if(!strcmp(token, "rtsp"))
+                        {
+                            for (i = 0; i < MAX_CHANNEL; i++)
+                                if (rtspServerBin[i].getBinSinkPad()) rtspServerBin[i].getBitrate();
+                        }
+                    }
+                    else if(!strcmp(token, "fps"))
+                    {
+                        token = strtok(NULL, "\n");
+                        if(!strcmp(token, "rec"))
+                        {
+                            for (i = 0; i < MAX_CHANNEL; i++)
+                                if (recordBin[i].getBinSinkPad()) recordBin[i].getFps();
+                        }
+                        if(!strcmp(token, "rtsp"))
+                        {
+                            for (i = 0; i < MAX_CHANNEL; i++)
+                                if (rtspServerBin[i].getBinSinkPad()) rtspServerBin[i].getFps();
+                        }
+                    }
+                    else if(!strcmp(token, "cap"))
+                    {
+                        token = strtok(NULL, "\n");
+                        if(!strcmp(token, "rec"))
+                        {
+                            //for (i = 0; i < MAX_CHANNEL; i++)
+                                //if (recordBin[i].getBinSinkPad()) recordBin[i].getFps();
+                        }
+                        if(!strcmp(token, "rtsp"))
+                        {
+                            for (i = 0; i < MAX_CHANNEL; i++)
+                                if (rtspServerBin[i].getBinSinkPad()) rtspServerBin[i].getCaps();
+                        }
+                    }
+                }
+                if (!strcmp(token, "set"))
+                {
+                    token = strtok(NULL, " ");
+                    if(!strcmp(token, "bps"))
+                    {
+                        token = strtok(NULL, " ");
+                        if(!strcmp(token, "rec"))
+                        {
+                            token = strtok(NULL, "\0");
+                            bps = charArrayToInt(token);
+
+                            if(bps > 9999) {
+                                __LOG(LOG_ERR, "[GST][%s:%d] bps %d not supported", _FILE_, __LINE__, bps);
+                                break;
+                            }
+
+                            for (i = 0; i < MAX_CHANNEL; i++)
+                                if (recordBin[i].getBinSinkPad()) recordBin[i].setBitrate(bps);
+                        }
+                        if(!strcmp(token, "rtsp"))
+                        {
+                            token = strtok(NULL, "\0");
+                            bps = charArrayToInt(token);
+
+                            if(bps > 9999) {
+                                __LOG(LOG_ERR, "[GST][%s:%d] bps %d not supported", _FILE_, __LINE__, bps);
+                                break;
+                            }
+
+                            for (i = 0; i < MAX_CHANNEL; i++)
+                                if (rtspServerBin[i].getBinSinkPad()) rtspServerBin[i].setBitrate(bps);
+                        }
+                    }
+                    else if(!strcmp(token, "fps"))
+                    {
+                        token = strtok(NULL, " ");
+                        if(!strcmp(token, "rec"))
+                        {
+                            token = strtok(NULL, "\0");
+                            fps = charArrayToInt(token);
+
+                            if(fps > 99) {
+                                __LOG(LOG_ERR, "[GST][%s:%d] fps %d not supported", _FILE_, __LINE__, bps);
+                                break;
+                            }
+
+                            for (i = 0; i < MAX_CHANNEL; i++)
+                                if (recordBin[i].getBinSinkPad()) recordBin[i].setFps(fps);
+                        }
+                        if(!strcmp(token, "rtsp"))
+                        {
+                            token = strtok(NULL, "\0");
+                            fps = charArrayToInt(token);
+
+                            if(fps > 99) {
+                                __LOG(LOG_ERR, "[GST][%s:%d] fps %d not supported", _FILE_, __LINE__, bps);
+                                break;
+                            }
+
+                            for (i = 0; i < MAX_CHANNEL; i++)
+                                if (rtspServerBin[i].getBinSinkPad()) rtspServerBin[i].setFps(fps);
+                        }
+                    }
+                }
+                else if(!strncmp(buffer, "capture", 7))
+                {
+                    token = strtok(NULL, "\n");
+                    if(!strcmp(token, "start"))
+                    {
+                        for (i = 0; i < MAX_CHANNEL; i++)
+                            if (captrueBin[i].getBinSinkPad()) captrueBin[i].startCapture();
+                    }
+                    else if(!strcmp(token, "stop"))
+                    {
+                        for (i = 0; i < MAX_CHANNEL; i++)
+                            if (captrueBin[i].getBinSinkPad()) captrueBin[i].stopCapture();
+                    }
+                }
+
+            } while(0);
+        }
+    } while(1);
+
+    __LOG(LOG_NOTICE, "[TERMINAL][%s:%d] %s break", _FILE_, __LINE__, __FUNCTION__);
+
+    return;
+}
+
 static void splitTimerStart(gpointer data)
 {
     MuxSinkBin* muxSinkBin = (MuxSinkBin *)data;
@@ -186,7 +373,7 @@ static void splitTimerStart(gpointer data)
     return;
 }
 
-static void splitCheck(gpointer data, gint startSec)
+static void splitCheck(gpointer data, guint8 startSec)
 {
     MuxSinkBin* muxSinkBin = (MuxSinkBin *)data;
     static gboolean start_flag = 0;
@@ -199,7 +386,8 @@ static void splitCheck(gpointer data, gint startSec)
         //if(muxSinkBin[0].getStartFlag() == 0 && muxSinkBin[1].getStartFlag() == 0 && muxSinkBin[2].getStartFlag() == 0 && muxSinkBin[3].getStartFlag() == 0) return;
         for(i=0; i<MAX_CHANNEL; i++)
         {
-            if(!(cmdArg.ch_enable & (0x1 << i))) continue;
+            //if(!(cmdArg.ch_enable & (0x1 << i))) continue;
+            if(!muxSinkBin[i].getBinVideoSinkPad()) continue;
             if (muxSinkBin[i].getStartFlag() == 0) return; 
         }
     }
@@ -217,20 +405,25 @@ static void splitCheck(gpointer data, gint startSec)
     {
         target_min = min + 1;
         if(target_min >= 60) target_min = 0;
-        g_print("target min init : %d\n", target_min);
+        g_print("init target min : %d\n", target_min);
     }
 
     if(target_min != min)
+    {
+        g_date_time_unref(datetime);
         return;
+    }
 
     if(sec == startSec+1)    //if(sec == 1 && microsec <= 50000)   //if(sec == 59 && microsec >= 700000 && microsec <b= 750000)
     {
-        for(i=0; i<MAX_CHANNEL; i++) muxSinkBin[i].splitNow(NULL, FALSE);
+        for(i=0; i<MAX_CHANNEL; i++) {
+            if(muxSinkBin[i].getBinVideoSinkPad()) muxSinkBin[i].splitNow(NULL, FALSE);
+        }
 
         //staticMin = min;
         target_min += cmdArg.duration;
         if(target_min >= 60) target_min -= 60;
-        g_print("target min set : %d\n", target_min);
+        g_print("set target min : %d\n", target_min);
     }
 
     g_date_time_unref(datetime);
@@ -238,63 +431,123 @@ static void splitCheck(gpointer data, gint startSec)
     return;
 }
 
-static void taskLoop(gpointer data)
+static void splitLoop(gpointer data)
 {
-    splitCheck(data, 0);
+    __LOG(LOG_NOTICE, "[GST][%s:%d] %s start", _FILE_, __LINE__, __FUNCTION__);
+    while(1)
+    {
+        if(is_interrupted)
+            break;
+
+        splitCheck(data, 0);
+
+        g_usleep(1000);
+    }
+    __LOG(LOG_NOTICE, "[GST][%s:%d] %s break", _FILE_, __LINE__, __FUNCTION__);
+}
+
+static void taskLoop(gpointer arg)
+{
+    //splitCheck(data, 0);
     //splitTimerStart(data);
+    //if(cmdArg.input_en) check_terminal_input(arg0, arg1, arg2);
 
     g_usleep(1000);
     
     return;
 }
 
-int main(int argc, char *argv[]) 
+static gboolean setSRT(gpointer arg) 
 {
-    //gst_init(&argc, &argv);
+    ThreadArgs *thraedArgs = (ThreadArgs *)arg;
+    RecordBin *recordBin = (RecordBin *)(thraedArgs->arg0);
+    RtspServerBin *rtspServerBin = (RtspServerBin *)(thraedArgs->arg1);
+    CaptureBin *captrueBin = (CaptureBin *)(thraedArgs->arg2);
+    static gint index = 0;
+    guint8 i;
+    gchar* text;
+    //GDateTime *datetime = g_date_time_new_now_local();
+    //text = g_strdup_printf("2023-01-27 22:40:02 VD3001, M, A, 34049/174014(1000000), 1298.5678mm/s, 300mV, (?)400mA, 80.5%/71.5%, E696, Level 7, Level 4");
+#ifdef TIMEOVERLAY
+    text = g_strdup_printf("VD3001, M, A, 34049/174014(1000000), \n1298.5678mm/s, %dmV, (?)400mA, 80.5%/71.5%, E696, Level 7, Level 4", index++);
+#else
+    text = g_strdup_printf("%s VD3001, M, A, 34049/174014(1000000), \n1298.5678mm/s, %dmV, (?)400mA, 80.5%%/71.5%%, E696, Level 7, Level 4", \
+                        g_date_time_format(g_date_time_new_now_local(), "%Y-%m-%d %H:%M:%S"), index++);
+#endif
+    //__LOG(LOG_DEBUG, "[GST][%s:%d] %s (index : %d, ch : %d)", _FILE_, __LINE__, __FUNCTION__, info->index, info->ch);
+    //g_object_set(info->timeoveraly, "text", g_strdup_printf("test srt num(%d)", i++), NULL);
+    for(i=0; i<MAX_CHANNEL; i++)
+    {
+        if(recordBin[i].getBinSinkPad()) recordBin[i].setOverlayText(text);
+        if(rtspServerBin[i].getBinSinkPad()) rtspServerBin[i].setOverlayText(text);
+    }
+
+    index++;
+
+    g_free(text);
+
+    return TRUE;
+}
+
+gint main(gint argc, gchar *argv[]) 
+{
+    gst_init(&argc, &argv);
     atexit(cleanup);
     //attachInterruptHandlers();
+    cmdArg.appname = CHARNEXT(argv[0], '/');
+    cmd_parser(&argc, &argv, &cmdArg);
 
-    __LOG(LOG_NOTICE, "[GST][%s:%d] %s", __FILE__, __LINE__, PROGRAM_NAME);
+    //MuxBin* muxBin = MuxBin::getInstance();
+    GstBus *bus;
     VideoBin videoBin[MAX_VIDEO_SRC];
     RecordBin recordBin[MAX_CHANNEL];
     RtspServerBin rtspServerBin[MAX_CHANNEL];
-    //GstElement *sink[MAX_CHANNEL];
     MuxSinkBin muxSinkBin[MAX_CHANNEL];
+    CaptureBin captureBin[MAX_CHANNEL];
+    TestBin audioBin;
     ChannelNum chNum;
+    GThread *splitThread = NULL, *terminalThread = NULL;
+    ThreadArgs* thraedArgs = g_new(ThreadArgs, 1);
+    GstStateChangeReturn ret;
     guint8 i;
-    
-    //MuxBin* muxBin = MuxBin::getInstance();
+    guint srtTimer_id = 0;
 
-    //ohtName = g_strdup_printf("%s", PRGORAM_NAME);
-    cmd_parser(&argc, &argv, &cmdArg);
+    __LOG(LOG_NOTICE, "[GST][%s:%d] %s", __FILE__, __LINE__, PROGRAM_NAME);
 
-    if(!cmdArg.no_fault) fault_setup();
+    if(cmdArg.fault) fault_setup();
 
-    pipeline = gst_pipeline_new("pipeline");
+    g_setenv("GST_DEBUG_DUMP_DOT_DIR", cmdArg.dotDir, 1);
+    pipeline = gst_pipeline_new(g_strdup_printf("pipeline-%s", cmdArg.appname));
     //muxBin.init();
     //g_print("width : %d\n", cmdArg.res[cmdArg.resolution_mode].height);
 
     signal_watch_intr_id = g_unix_signal_add (SIGINT, (GSourceFunc) intr_handler, pipeline);
     signal_watch_hup_id = g_unix_signal_add (SIGHUP, (GSourceFunc) hup_handler, pipeline);
 
+    thraedArgs->arg0 = recordBin;
+    thraedArgs->arg1 = rtspServerBin;
+    thraedArgs->arg2 = captureBin;
+
 #ifdef MUXBIN_ENABLE
     MuxBin muxBin;
     muxBin.init();
 #endif
 
-#ifdef AUDIOBIN_ENABLE
-    AudioBin audioBin;
-    audioBin.init();
-    audioBin.addElement("audiotestsrc", "audioconvert", "audiorate", "lamemp3enc", "mpegaudioparse", "queue", "tee", NULL);
-    audioBin.linkElement();
+#if 0
+    if(cmdArg.audio_en)
+    {
+        audioBin.init();
+        audioBin.addElement("audiotestsrc", "audioconvert", "audiorate", "lamemp3enc", "mpegaudioparse", "queue", "tee", NULL);
+        audioBin.linkElement();
 
-    g_object_set(audioBin.ae.element[0], "is-live", TRUE, NULL);
-    //g_object_set(audioBin.ae.element[0], "wave", 5, NULL);
-    g_object_set(audioBin.ae.element[0], "wave", 8, NULL);
-    g_object_set(audioBin.ae.element[0], "tick-interval", 200000000, NULL);
-    g_object_set(audioBin.ae.element[2], "max-size-time", 5*GST_SECOND, "max-size-buffers", 60, "leaky", 1, NULL);
-    g_object_set(audioBin.ae.element[6], "max-size-time", 5*GST_SECOND, "max-size-buffers", 60, "leaky", 1, NULL);
-    //g_object_set(audioBin.ae.element[6], "max-size-bytes", 0, "max-size-time", 0, "max-size-buffers", 60, "leaky", LEAKY_DOWNSTREAM, NULL);
+        g_object_set(audioBin.be.element[0], "is-live", TRUE, NULL);
+        //g_object_set(audioBin.be.element[0], "wave", 5, NULL);
+        g_object_set(audioBin.be.element[0], "wave", 8, NULL);
+        g_object_set(audioBin.be.element[0], "tick-interval", 200000000, NULL);
+        //g_object_set(audioBin.be.element[2], "max-size-time", 5*GST_SECOND, "max-size-buffers", 60, "leaky", 2, NULL);
+        //g_object_set(audioBin.be.element[6], "max-size-time", 5*GST_SECOND, "max-size-buffers", 60, "leaky", 2, NULL);
+        //g_object_set(audioBin.be.element[6], "max-size-bytes", 0, "max-size-time", 0, "max-size-buffers", 60, "leaky", LEAKY_DOWNSTREAM, NULL);
+    }
 #endif
 
     for(i=0; i<MAX_CHANNEL; i++)
@@ -303,40 +556,90 @@ int main(int argc, char *argv[])
         chNum = (ChannelNum)i;
         __LOG(LOG_NOTICE, "[GST][%s:%d] ch[%d] enable", _FILE_, __LINE__, chNum);
         videoBin[chNum/2].init((CsiNum)(chNum/2));
-        videoBin[chNum/2].addCrop((CropDir)(chNum%2));
-#ifdef RECORDBIN_ENABLE
-        videoBin[chNum/2].addBinRecordSrcPad(chNum);
-        recordBin[chNum].init(chNum);
-
-        if(gst_pad_link(videoBin[chNum/2].getBinRecordSrcPad(chNum), recordBin[chNum].getBinSinkPad()) != GST_PAD_LINK_OK)
+        //videoBin[chNum/2].addCrop((CropDir)(chNum%2));
+        if(cmdArg.rec_en)
         {
-            __LOG(LOG_CRIT, "[GST][%s:%d] Record ch[%d] pad link err", _FILE_, __LINE__, chNum);
-            //return -1;
-        }
-        //else __LOG(LOG_NOTICE, "[GST][%s:%d] Record ch[%d] pad link", _FILE_, __LINE__, chNum);
+            videoBin[chNum/2].addBinRecordSrcPad(chNum);
+            recordBin[chNum].init(chNum);
 
-        muxSinkBin[chNum].init(chNum);
-        muxSinkBin[chNum].addBinVideoSinkPad();
-        
-        if(gst_pad_link(recordBin[chNum].getBinSrcPad(), muxSinkBin[chNum].getBinVideoSinkPad()) != GST_PAD_LINK_OK)
-        {
-            __LOG(LOG_CRIT, "[GST][%s:%d] mux video ch[%d] pad link err", _FILE_, __LINE__, chNum);
-            //return -1;
-        }
-        //else __LOG(LOG_NOTICE, "[GST][%s:%d] mux video ch[%d] pad link", _FILE_, __LINE__, chNum);
-        //g_thread_new("split-timer-thread", (GThreadFunc)splitTimerStart, &muxSinkBin[chNum]);
-#endif
+            if(gst_pad_link(videoBin[chNum/2].getBinRecordSrcPad(chNum), recordBin[chNum].getBinSinkPad()) != GST_PAD_LINK_OK)
+            {
+                __LOG(LOG_CRIT, "[GST][%s:%d] Record ch[%d] pad link err", _FILE_, __LINE__, chNum);
+                //return -1;
+                goto main_end;
+            }
+            //else __LOG(LOG_NOTICE, "[GST][%s:%d] Record ch[%d] pad link", _FILE_, __LINE__, chNum);
 
-#ifdef AUDIOBIN_ENABLE
-        audioBin.addBinSrcPad(chNum);
-        muxSinkBin[chNum].addBinAudioSinkPad();
-        if(gst_pad_link(audioBin.getBinSrcPad(chNum), muxSinkBin[chNum].getBinAudioSinkPad()) != GST_PAD_LINK_OK)
-        {
-            __LOG(LOG_CRIT, "[GST][%s:%d] mux audio ch[%d] pad link err", _FILE_, __LINE__, chNum);
-            //return -1;
+            muxSinkBin[chNum].init(chNum);
+            muxSinkBin[chNum].addBinVideoSinkPad();
+            
+            if(gst_pad_link(recordBin[chNum].getBinSrcPad(), muxSinkBin[chNum].getBinVideoSinkPad()) != GST_PAD_LINK_OK)
+            {
+                __LOG(LOG_CRIT, "[GST][%s:%d] mux video ch[%d] pad link err", _FILE_, __LINE__, chNum);
+                //return -1;
+                goto main_end;
+            }
+            //else __LOG(LOG_NOTICE, "[GST][%s:%d] mux video ch[%d] pad link", _FILE_, __LINE__, chNum);
+            //g_thread_new("split-timer-thread", (GThreadFunc)splitTimerStart, &muxSinkBin[chNum]);
         }
-        else __LOG(LOG_NOTICE, "[GST][%s:%d] mux audio ch[%d] pad link", _FILE_, __LINE__, chNum);
-#endif
+
+        if(cmdArg.rtsp_en)
+        {
+            rtspStart();
+            videoBin[chNum/2].addBinRtspSrcPad(chNum);
+            rtspServerBin[chNum].init(chNum);
+
+            if(gst_pad_link(videoBin[chNum/2].getBinRtspSrcPad(chNum), rtspServerBin[chNum].getBinSinkPad()) != GST_PAD_LINK_OK)
+            {
+                __LOG(LOG_CRIT, "[GST][%s:%d] Record ch[%d] pad link err", _FILE_, __LINE__, chNum);
+                //return -1;
+                goto main_end;
+            }
+            //else __LOG(LOG_NOTICE, "[GST][%s:%d] Record ch[%d] pad link", _FILE_, __LINE__, chNum);
+        }
+
+        if(cmdArg.audio_en)
+        {
+            if(!audioBin.init())
+            {
+                audioBin.addElement("audiotestsrc", "audioconvert", "audiorate", "lamemp3enc", "mpegaudioparse", "queue", "tee", NULL);
+                if(!audioBin.linkElement()) {
+                    //return -1;
+                    goto main_end;
+                }
+
+                g_object_set(audioBin.be.element[0], "is-live", TRUE, NULL);
+                //g_object_set(audioBin.be.element[0], "wave", 5, NULL);
+                g_object_set(audioBin.be.element[0], "wave", 8, NULL);
+                g_object_set(audioBin.be.element[0], "tick-interval", 200000000, NULL);
+                //g_object_set(audioBin.be.element[2], "max-size-time", 5*GST_SECOND, "max-size-buffers", 60, "leaky", 2, NULL);
+                //g_object_set(audioBin.be.element[6], "max-size-time", 5*GST_SECOND, "max-size-buffers", 60, "leaky", 2, NULL);
+                //g_object_set(audioBin.be.element[6], "max-size-bytes", 0, "max-size-time", 0, "max-size-buffers", 60, "leaky", LEAKY_DOWNSTREAM, NULL);
+            }
+
+            audioBin.addBinSrcPad(chNum);
+            muxSinkBin[chNum].addBinAudioSinkPad();
+            if(gst_pad_link(audioBin.getBinSrcPad(chNum), muxSinkBin[chNum].getBinAudioSinkPad()) != GST_PAD_LINK_OK)
+            {
+                __LOG(LOG_CRIT, "[GST][%s:%d] mux audio ch[%d] pad link err", _FILE_, __LINE__, chNum);
+                //return -1;
+                goto main_end;
+            }
+            else __LOG(LOG_NOTICE, "[GST][%s:%d] mux audio ch[%d] pad link", _FILE_, __LINE__, chNum);
+        }
+
+        if(cmdArg.capture_en)
+        {
+            videoBin[chNum/2].addBinCaptureSrcPad(chNum);
+            captureBin[chNum].init(chNum);
+
+            if(gst_pad_link(videoBin[chNum/2].getBinCaptureSrcPad(chNum), captureBin[chNum].getBinSinkPad()) != GST_PAD_LINK_OK)
+            {
+                __LOG(LOG_CRIT, "[GST][%s:%d] capture ch[%d] pad link err", _FILE_, __LINE__, chNum);
+                //return -1;
+                goto main_end;
+            }
+        }
 
 #ifdef MUXBIN_ENABLE
         //muxBin.addSink(CH0);
@@ -360,47 +663,29 @@ int main(int argc, char *argv[])
             //return -1;
         }
 #endif
-
-#ifdef RTSPSERVERBIN_ENABLE
-        rtspStart();
-        videoBin[chNum/2].addBinRtspSrcPad(chNum);
-#if 1
-        rtspServerBin[chNum].init(chNum);
-
-        if(gst_pad_link(videoBin[chNum/2].getBinRtspSrcPad(chNum), rtspServerBin[chNum].getBinSinkPad()) != GST_PAD_LINK_OK)
-        {
-            __LOG(LOG_CRIT, "[GST][%s:%d] Record ch[%d] pad link err", _FILE_, __LINE__, chNum);
-            //return -1;
-        }
-        //else __LOG(LOG_NOTICE, "[GST][%s:%d] Record ch[%d] pad link", _FILE_, __LINE__, chNum);
-#endif
-
-#endif
     }
 
     //gst_element_set_state(pipeline, GST_STATE_PLAYING);
 
-    g_setenv("GST_DEBUG_DUMP_DOT_DIR", "/home/user/jhw/dot/", 1);
     GST_DEBUG_BIN_TO_DOT_FILE(GST_BIN(pipeline), GST_DEBUG_GRAPH_SHOW_ALL, gst_element_get_name(pipeline));
 
-    GstBus *bus = gst_element_get_bus(pipeline);
+    bus = gst_element_get_bus(pipeline);
     if (!bus)
     {
         __LOG(LOG_CRIT, "[GST][%s:%d] bus get error from pipeline", _FILE_, __LINE__);
+        goto main_end;
     }
 
     gst_bus_add_watch(bus, my_bus_callback, NULL);
 
     gst_object_unref(bus);
 
-    GstStateChangeReturn ret;
-    
     ret = gst_element_set_state(pipeline, GST_STATE_PAUSED);
     if (ret == GST_STATE_CHANGE_FAILURE)
     {
         __LOG(LOG_CRIT, "[GST][%s:%d] pipeline state paused error", _FILE_, __LINE__);
         gst_object_unref(pipeline);
-        return -1;
+        goto main_end;
     }
     else if(ret == GST_STATE_CHANGE_NO_PREROLL)
     {
@@ -408,6 +693,7 @@ int main(int argc, char *argv[])
         __LOG(LOG_NOTICE, "[GST][%s:%d] pipeline state paused (ret : %d)", _FILE_, __LINE__, ret);
     }
 
+    __LOG(LOG_NOTICE, "[GST][%s:%d] delay %d sec for play", __FILE__, __LINE__, cmdArg.play_delay);
     sleep(cmdArg.play_delay);
 
     ret = gst_element_set_state(pipeline, GST_STATE_PLAYING);
@@ -415,11 +701,24 @@ int main(int argc, char *argv[])
     {
         __LOG(LOG_CRIT, "[GST][%s:%d] pipeline state playing error", _FILE_, __LINE__);
         gst_object_unref(pipeline);
-        return -1;
+        goto main_end;
+    }
+
+
+    if(cmdArg.input_en) {
+        terminalThread = g_thread_new("terminal-thread", (GThreadFunc)check_terminal_input, thraedArgs);
+    }
+
+    if(cmdArg.rec_en || cmdArg.audio_en) {
+        splitThread = g_thread_new("split-thread", (GThreadFunc)splitLoop, muxSinkBin);
+    }
+    
+    if(cmdArg.overlay_en) {
+        srtTimer_id = g_timeout_add(500, (GSourceFunc)setSRT, thraedArgs);
     }
 
     loop = g_main_loop_new(NULL, FALSE);
-    
+
 	if(!loop) {
         __LOG(LOG_CRIT, "[GST][%s:%d] Main loop create error", _FILE_, __LINE__);
     } else {
@@ -428,8 +727,7 @@ int main(int argc, char *argv[])
         while (!is_interrupted)
         {
             g_main_context_iteration(g_main_loop_get_context(loop), FALSE);
-            //taskLoop(&muxBin);
-            taskLoop(muxSinkBin);
+            taskLoop(NULL);
         }
     }
     __LOG(LOG_NOTICE, "[GST][%s:%d] Main loop exit", _FILE_, __LINE__);
@@ -444,6 +742,8 @@ int main(int argc, char *argv[])
     {
         if(muxSinkBin[i].getBinVideoSinkPad()) gst_pad_send_event(muxSinkBin[i].getBinVideoSinkPad(), gst_event_new_eos());
         if(muxSinkBin[i].getBinAudioSinkPad()) gst_pad_send_event(muxSinkBin[i].getBinAudioSinkPad(), gst_event_new_eos());
+        //if(rtspServerBin[i].getBinSinkPad()) gst_pad_send_event(rtspServerBin[i].getBinSinkPad(), gst_event_new_eos());
+        //if(captureBin[i].getBinSinkPad()) gst_pad_send_event(captureBin[i].getBinSinkPad(), gst_event_new_eos());
     }
 #endif
 
@@ -455,14 +755,26 @@ int main(int argc, char *argv[])
         __LOG(LOG_NOTICE, "[GST][%s:%d] Pipeline unset successfully", _FILE_, __LINE__);
     }
 
+main_end:
     rtspStop();
-    g_main_loop_unref(loop);
-    gst_object_unref(pipeline);
+    if(loop) g_main_loop_unref(loop);
+    if(pipeline) gst_object_unref(pipeline);
+    if(thraedArgs) g_free(thraedArgs);
 
-    if (signal_watch_intr_id > 0)
-      g_source_remove (signal_watch_intr_id);
-    if (signal_watch_hup_id > 0)
-      g_source_remove (signal_watch_hup_id);
+    if(terminalThread) {
+        g_thread_join(terminalThread);
+        g_thread_unref(terminalThread);
+    }
+    if(splitThread) {
+        g_thread_join(splitThread);
+        g_thread_unref(splitThread);
+    }
+    if(srtTimer_id) {
+        g_source_remove(srtTimer_id);
+    }
+
+    if (signal_watch_intr_id > 0) g_source_remove(signal_watch_intr_id);
+    if (signal_watch_hup_id > 0) g_source_remove(signal_watch_hup_id);
 
     return 0;
 }

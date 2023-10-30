@@ -22,8 +22,6 @@
 #include <gst/app/gstappsink.h>
 #include <gst/rtsp-server/rtsp-server.h>
 
-#define RTSP_PORT       "8554"
-
 gint rtspStart();
 void rtspStop();
 
@@ -34,6 +32,7 @@ typedef struct _RtspServerData
     guint8 ch;
     guint8 start_f;
     GstBuffer *buf;
+    GstCaps *caps;
 } RtspServerData;
 
 typedef struct _RtspServerElement
@@ -47,6 +46,8 @@ typedef struct _RtspServerElement
     GstElement *parse;
     GstElement *bin;
     GstElement *sink;
+    GstElement *crop;
+    GstElement *overlay;
 } RtspServerElement;
 
 class RtspServerBin
@@ -58,6 +59,13 @@ public :
 	gint init(guint8 num) ;
 	gint destroy() ;
     GstPad* getBinSinkPad();
+    gboolean getBitrate();
+    gboolean setBitrate(guint16 data);
+    gboolean getFps();
+    gboolean setFps(guint16 data);
+    gboolean getCaps();
+    gboolean setOverlayText(gchar *text);
+    gboolean getStartFlag();
 
 private :
 	

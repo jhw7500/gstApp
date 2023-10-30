@@ -29,19 +29,29 @@ static void muxer_added(GstElement *sink, guint arg0, gpointer data)
 static gboolean handle_eos_event(GstPad *pad, GstPadProbeInfo *info, gpointer user_data) 
 {
     MuxSinkData *data = (MuxSinkData *)user_data;
-    GstEventType event = GST_EVENT_TYPE(GST_PAD_PROBE_INFO_DATA(info));
+    GstEvent *event = GST_PAD_PROBE_INFO_EVENT(info);
+    GstEventType eventType = GST_EVENT_TYPE(GST_PAD_PROBE_INFO_DATA(info));
 
 
-    if (event == GST_EVENT_EOS) {
-        g_print("Received EOS event on pad[%d] : %s\n", data->ch, GST_PAD_NAME(pad));
+    if (eventType == GST_EVENT_EOS) {
+        g_print("ch%d Received EOS event on pad : %s\n", data->ch, GST_PAD_NAME(pad));
     }
-    else if(event == GST_EVENT_TAG)
+    else if(eventType == GST_EVENT_TAG)
     {
 
+    }
+    else if(eventType == GST_EVENT_LATENCY)
+    {
+        GstClockTime latency;
+
+        gst_event_parse_latency(event, &latency);
+        g_print("ch%d latency : %" GST_TIME_FORMAT "\n", data->ch, GST_TIME_ARGS(latency));
+
+        return TRUE;
     }
     else
     {
-        g_print("Event Type: %s\n", gst_event_type_get_name(event));
+        g_print("ch%d Event Type: %s\n", data->ch, gst_event_type_get_name(eventType));
     }
 
     return GST_PAD_PROBE_OK;
@@ -49,9 +59,9 @@ static gboolean handle_eos_event(GstPad *pad, GstPadProbeInfo *info, gpointer us
 
 static void split(gpointer data)
 {
-    MuxSinkElement *me = (MuxSinkElement *)data;
+    MuxSinkElement *be = (MuxSinkElement *)data;
     __LOG(LOG_INFO, "[GST][%s:%d] %s", _FILE_, __LINE__, __FUNCTION__);
-    g_signal_emit_by_name (me->sink, "split-now");
+    g_signal_emit_by_name (be->sink, "split-now");
 }
 
 guint8 MuxSinkBin::getStartFlag()
@@ -66,11 +76,11 @@ gboolean MuxSinkBin::splitNow(gpointer data, gboolean timer_en)
     //MuxBin* muxBin = MuxBin::getInstance();
     //MuxBin* muxBin = (MuxBin *)data;
 
-    __LOG(LOG_NOTICE, "[GST][%s:%d] %s ch : %d", _FILE_, __LINE__, __FUNCTION__, muxSinkData.ch);
+    __LOG(LOG_INFO, "[GST][%s:%d] %s ch : %d", _FILE_, __LINE__, __FUNCTION__, muxSinkData.ch);
 
-    g_signal_emit_by_name (me.sink, "split-now");
+    g_signal_emit_by_name (be.sink, "split-now");
 
-    if(timer_en) g_timeout_add_seconds(cmdArg.duration, (GSourceFunc)split, &me);
+    if(timer_en) g_timeout_add_seconds(cmdArg.duration, (GSourceFunc)split, &be);
 
     return TRUE;
 }
@@ -97,7 +107,7 @@ gchararray format_location(GstElement *sink, guint arg0, gpointer data)
 #endif
 
     //date_str = g_date_time_format(datetime, "%Y%m%d_%H%M%S");
-    gchararray file_name = g_strdup_printf("%s%s_%s-ch%d.mp4", FILE_PATH, cmdArg.ohtName, date_str, info->ch);
+    gchararray file_name = g_strdup_printf("%s/%s_%s-ch%d.mp4", cmdArg.mntDir, cmdArg.ohtName, date_str, info->ch);
     
     __LOG(LOG_NOTICE, "[GST][%s:%d] %s : %s", _FILE_, __LINE__, __FUNCTION__, file_name);
 
@@ -113,12 +123,28 @@ MuxSinkBin* MuxSinkBin::getInstance()
 	return &instance;
 }
 
+MuxSinkBin::MuxSinkBin()
+{
+    // 생성자 코드 추가
+    __LOG(LOG_INFO, "[GST][%s:%d] %s", _FILE_, __LINE__, __FUNCTION__);
+    sinkAudioPad = NULL;
+    sinkVideoPad = NULL;
+    be.bin = NULL;
+    muxSinkData.start_f = 0;
+}
+
+MuxSinkBin::~MuxSinkBin()
+{
+    // 소멸자 코드 추가
+    __LOG(LOG_INFO, "[GST][%s:%d] %s", _FILE_, __LINE__, __FUNCTION__);
+}
+
 gboolean MuxSinkBin::addBinVideoSinkPad()
 {
     __LOG(LOG_INFO, "[GST][%s:%d] %s ch:%d", _FILE_, __LINE__, __FUNCTION__, muxSinkData.ch);
     
-    sinkVideoPad = gst_ghost_pad_new(g_strdup_printf("muxBinSink_video_ch%d", muxSinkData.ch), gst_element_get_request_pad(me.sink, "video_aux_%u"));
-    if(!gst_element_add_pad(me.bin, sinkVideoPad))
+    sinkVideoPad = gst_ghost_pad_new(g_strdup_printf("muxBinSink_video_ch%d", muxSinkData.ch), gst_element_get_request_pad(be.sink, "video_aux_%u"));
+    if(!gst_element_add_pad(be.bin, sinkVideoPad))
         g_error("error");
     else gst_pad_add_probe(sinkVideoPad, GST_PAD_PROBE_TYPE_EVENT_BOTH, (GstPadProbeCallback)handle_eos_event, &muxSinkData, NULL);
     
@@ -129,8 +155,8 @@ gboolean MuxSinkBin::addBinAudioSinkPad()
 {
     __LOG(LOG_INFO, "[GST][%s:%d] %s ch:%d", _FILE_, __LINE__, __FUNCTION__, muxSinkData.ch);
 
-    sinkAudioPad = gst_ghost_pad_new(g_strdup_printf("muxBinSink_audio_ch%d", muxSinkData.ch), gst_element_get_request_pad(me.sink, "audio_%u"));
-    if(!gst_element_add_pad(me.bin, sinkAudioPad))
+    sinkAudioPad = gst_ghost_pad_new(g_strdup_printf("muxBinSink_audio_ch%d", muxSinkData.ch), gst_element_get_request_pad(be.sink, "audio_%u"));
+    if(!gst_element_add_pad(be.bin, sinkAudioPad))
         g_error("error");
     else gst_pad_add_probe(sinkAudioPad, GST_PAD_PROBE_TYPE_EVENT_BOTH, (GstPadProbeCallback)handle_eos_event, &muxSinkData, NULL);
 
@@ -151,39 +177,37 @@ GstPad* MuxSinkBin::getBinAudioSinkPad()
 
 gint MuxSinkBin::init(guint8 num)
 {
-    sinkVideoPad = NULL;
-    sinkAudioPad = NULL;
     muxSinkData.ch = num;
     muxSinkData.start_f = 0;
-    me.bin = gst_bin_new(g_strdup_printf("muxBinSink%d", muxSinkData.ch));
+    be.bin = gst_bin_new(g_strdup_printf("muxSinkBin%d", muxSinkData.ch));
     //me.sink = gst_element_factory_make("splitmuxsink", "splitmuxsink");
     __LOG(LOG_NOTICE, "[GST][%s:%d] %s ch:%d", _FILE_, __LINE__, __FUNCTION__, muxSinkData.ch);
     //g_object_set(me.sink, "max-size-time", 10*GST_SECOND, NULL);
-    me.sink = gst_element_factory_make("splitmuxsink", g_strdup_printf("splitmuxsink%d", muxSinkData.ch));
+    be.sink = gst_element_factory_make("splitmuxsink", g_strdup_printf("splitmuxsink%d", muxSinkData.ch));
 #if 0
-    g_object_set(me.sink, "max-size-time", 60*GST_SECOND, NULL);
-    if(ch==0) g_object_set(me.sink, "location", "test_ch0_%02d.mp4", NULL);
-    if(ch==1) g_object_set(me.sink, "location", "test_ch1_%02d.mp4", NULL);
-    if(ch==2) g_object_set(me.sink, "location", "test_ch2_%02d.mp4", NULL);
-    if(ch==3) g_object_set(me.sink, "location", "test_ch3_%02d.mp4", NULL);
+    g_object_set(be.sink, "max-size-time", 60*GST_SECOND, NULL);
+    if(ch==0) g_object_set(be.sink, "location", "test_ch0_%02d.mp4", NULL);
+    if(ch==1) g_object_set(be.sink, "location", "test_ch1_%02d.mp4", NULL);
+    if(ch==2) g_object_set(be.sink, "location", "test_ch2_%02d.mp4", NULL);
+    if(ch==3) g_object_set(be.sink, "location", "test_ch3_%02d.mp4", NULL);
 #endif
 
-    g_signal_connect(me.sink, "format-location", G_CALLBACK(format_location), &muxSinkData);
-    g_signal_connect(me.sink, "muxer-added", G_CALLBACK(muxer_added), NULL);
-    g_signal_connect(me.sink, "sink-added", G_CALLBACK(sink_added), NULL);
+    g_signal_connect(be.sink, "format-location", G_CALLBACK(format_location), &muxSinkData);
+    g_signal_connect(be.sink, "muxer-added", G_CALLBACK(muxer_added), NULL);
+    g_signal_connect(be.sink, "sink-added", G_CALLBACK(sink_added), NULL);
 
-    if (!me.bin || !me.sink)
+    if (!be.bin || !be.sink)
     {
-        __LOG(LOG_CRIT, "[GST][%s:%d] mux sink element create error", _FILE_, __LINE__);
+        __LOG(LOG_CRIT, "[GST][%s:%d] mux element create error", _FILE_, __LINE__);
         return -1;
     }
 
-    if(!gst_bin_add(GST_BIN(me.bin), me.sink))
+    if(!gst_bin_add(GST_BIN(be.bin), be.sink))
         g_error("error");
 
-    if(!gst_bin_add(GST_BIN(pipeline), me.bin))
+    if(!gst_bin_add(GST_BIN(pipeline), be.bin))
     {
-        __LOG(LOG_CRIT, "[GST][%s:%d] mux bin add error in pipeline", _FILE_, __LINE__);
+        __LOG(LOG_CRIT, "[GST][%s:%d] mux add error in pipeline", _FILE_, __LINE__);
         return -1;
     }
 

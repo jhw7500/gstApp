@@ -26,10 +26,10 @@ typedef struct _VideoElement
     GstElement *teeCrop;
     GstElement *capsfilter;
     GstElement *convert;
-    GstElement *crop[2];
-    GstElement *tee[2];
-    GstElement *overlay[2];
-    GstElement *queue[2];
+    GstElement *crop[MAX_CHANNEL/2];
+    GstElement *tee[MAX_CHANNEL/2];
+    GstElement *overlay[MAX_CHANNEL/2];
+    GstElement *queue[MAX_CHANNEL/2];
     GstElement *bin;
 } VideoElement;
 
@@ -44,8 +44,10 @@ public :
     gint addCrop(CropDir dir);
     gint addBinRtspSrcPad(ChannelNum ch);
     gint addBinRecordSrcPad(ChannelNum ch);
+    gint addBinCaptureSrcPad(ChannelNum ch);
     GstPad* getBinRtspSrcPad(ChannelNum ch);
     GstPad* getBinRecordSrcPad(ChannelNum ch);
+    GstPad* getBinCaptureSrcPad(ChannelNum ch);
 
 private :
 	
@@ -54,10 +56,11 @@ public :
     //GstElement *pipeline[2];
 	
 private :
-    VideoElement ve;
+    VideoElement be;
     guint8 csi;
     GstPad *srcRtspPad;
     GstPad *srcRecordPad;
+    GstPad *srcCapturePad;
 };
 
 #endif
