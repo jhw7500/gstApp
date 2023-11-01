@@ -125,6 +125,7 @@ static void	media_configure(GstRTSPMediaFactory *factory, GstRTSPMedia *media, g
     g_signal_connect (media, "prepared", (GCallback) media_prepared_cb, factory);
 	//g_mutex_unlock(&mutex);
 
+#ifdef DYNAMIC_CAPS
     GstCaps *caps;
 
     g_object_get(info->appsrc, "caps", &caps, NULL);
@@ -134,6 +135,7 @@ static void	media_configure(GstRTSPMediaFactory *factory, GstRTSPMedia *media, g
     __LOG(LOG_NOTICE, "[GST][%s:%d] ch%d set caps : %s", _FILE_, __LINE__, info->ch, gst_caps_to_string(caps));
 
     gst_caps_unref(caps);
+#endif
 
     return;
 }
@@ -152,12 +154,14 @@ static GstFlowReturn new_sample_handler(GstElement *sink, gpointer userData)
     GstMapInfo map;
 
     //__LOG(LOG_NOTICE, "[GST][%s:%d] %s", _FILE_, __LINE__, __FUNCTION__);
+#ifdef DYNAMIC_CAPS
     if(!info->caps) {
         info->caps = gst_pad_get_current_caps(gst_element_get_static_pad(sink, "sink"));
         //__LOG(LOG_NOTICE, "[GST][%s:%d] ch %d caps : %s", _FILE_, __LINE__, __FUNCTION__, info->ch, gst_caps_to_string(info->caps));
         //g_print("ch%d caps : %s\n", info->ch, gst_caps_to_string(info->caps));
     }
-    
+#endif
+
     sample = gst_app_sink_pull_sample(GST_APP_SINK(sink));
     if (!sample) {
         //__LOG(LOG_CRIT, "[GST][%s:%d] sample cannot get from sink", _FILE_, __LINE__);
@@ -365,7 +369,8 @@ gint RtspServerBin::init(guint8 num)
 
     }
 
-    if(cmdArg.overlay_en) ret = gst_element_link_many(re.queue, re.crop, re.overlay, re.rate, re.capsfilter, re.convert, re.enc, re.parse, re.queue2, re.sink, NULL);
+    if(cmdArg.mode) ret = gst_element_link_many(re.queue, re.crop, re.convert, re.enc, re.parse, re.queue2, re.sink, NULL);
+    else if(cmdArg.overlay_en) ret = gst_element_link_many(re.queue, re.crop, re.overlay, re.rate, re.capsfilter, re.convert, re.enc, re.parse, re.queue2, re.sink, NULL);
     else ret = gst_element_link_many(re.queue, re.crop, re.rate, re.capsfilter, re.convert, re.enc, re.parse, re.queue2, re.sink, NULL);
 
     if (!ret)

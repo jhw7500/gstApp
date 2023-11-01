@@ -591,7 +591,7 @@ gint main(gint argc, gchar *argv[])
 
             if(gst_pad_link(videoBin[chNum/2].getBinRtspSrcPad(chNum), rtspServerBin[chNum].getBinSinkPad()) != GST_PAD_LINK_OK)
             {
-                __LOG(LOG_CRIT, "[GST][%s:%d] Record ch[%d] pad link err", _FILE_, __LINE__, chNum);
+                __LOG(LOG_CRIT, "[GST][%s:%d] rtsp ch[%d] pad link err", _FILE_, __LINE__, chNum);
                 //return -1;
                 goto main_end;
             }

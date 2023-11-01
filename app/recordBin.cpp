@@ -164,12 +164,13 @@ gint RecordBin::init(guint8 num)
         return -1;
     }
 
-    if(cmdArg.overlay_en) ret = gst_element_link_many(re.queue, re.crop, re.overlay, re.rate, re.capsfilter, re.convert, re.enc, re.parse, re.queue2, NULL);
+    if(cmdArg.mode) ret = gst_element_link_many(re.queue, re.crop, re.convert, re.enc, re.parse, re.queue2, NULL);
+    else if(cmdArg.overlay_en) ret = gst_element_link_many(re.queue, re.crop, re.overlay, re.rate, re.capsfilter, re.convert, re.enc, re.parse, re.queue2, NULL);
     else ret = gst_element_link_many(re.queue, re.crop, re.rate, re.capsfilter, re.convert, re.enc, re.parse, re.queue2, NULL);
 
     if (!ret)
     {
-        __LOG(LOG_CRIT, "[GST][%s:%d] rtsp link err", _FILE_, __LINE__);
+        __LOG(LOG_CRIT, "[GST][%s:%d] record link err", _FILE_, __LINE__);
         return -1;
     }
 

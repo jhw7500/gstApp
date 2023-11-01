@@ -22,6 +22,8 @@
 #include <gst/app/gstappsink.h>
 #include <gst/rtsp-server/rtsp-server.h>
 
+#define DYNAMIC_CAPSx
+
 gint rtspStart();
 void rtspStop();
 
