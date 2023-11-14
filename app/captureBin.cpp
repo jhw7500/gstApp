@@ -27,7 +27,7 @@ static GstFlowReturn new_sample_handler(GstElement *sink, gpointer userData)
     GstSample *sample;
     GstBuffer *buffer;
     CaptureData *info = (CaptureData *)userData;
-    guint8 mode;
+    //guint8 mode;
     GstMapInfo map;
     FILE *file;
     gchar *path;

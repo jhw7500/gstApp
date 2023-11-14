@@ -76,11 +76,16 @@ gboolean MuxSinkBin::splitNow(gpointer data, gboolean timer_en)
     //MuxBin* muxBin = MuxBin::getInstance();
     //MuxBin* muxBin = (MuxBin *)data;
 
-    __LOG(LOG_INFO, "[GST][%s:%d] %s ch : %d", _FILE_, __LINE__, __FUNCTION__, muxSinkData.ch);
+    __LOG(LOG_NOTICE, "[GST][%s:%d] %s ch : %d", _FILE_, __LINE__, __FUNCTION__, muxSinkData.ch);
 
-    g_signal_emit_by_name (be.sink, "split-now");
+    //g_signal_emit_by_name (be.sink, "split-at-running-time");
+    g_signal_emit_by_name (be.sink, "split-after");
+    //g_signal_emit_by_name (be.sink, "split-now");
 
-    if(timer_en) g_timeout_add_seconds(cmdArg.duration, (GSourceFunc)split, &be);
+    if(timer_en) {
+        __LOG(LOG_NOTICE, "[GST][%s:%d] split timer start ch : %d", _FILE_, __LINE__, muxSinkData.ch);
+        g_timeout_add_seconds(cmdArg.duration, (GSourceFunc)split, &be);
+    }
 
     return TRUE;
 }
@@ -89,8 +94,9 @@ gchararray format_location(GstElement *sink, guint arg0, gpointer data)
 {
     MuxSinkData *info = (MuxSinkData *)data;
     GDateTime *datetime = g_date_time_new_now_local();
-    //gint sec = g_date_time_get_second(datetime);
+    gint sec = g_date_time_get_second(datetime);
     gchar *date_str;
+    gint margin_sec = 3;
 
 #if 1
     if(info->start_f == 0)
@@ -98,15 +104,20 @@ gchararray format_location(GstElement *sink, guint arg0, gpointer data)
         __LOG(LOG_NOTICE, "[GST][%s:%d] ch%d firstSplitFlag", _FILE_, __LINE__, info->ch);
         //g_timeout_add_seconds(FILE_SAVE_DURATION, (GSourceFunc)splitNow, data);
         info->start_f = 1;
-        date_str = g_date_time_format(datetime, "%Y%m%d_%H%M%S");
+        //date_str = g_date_time_format(datetime, "%Y%m%d_%H%M%S");
     }
     else
     {
-        date_str = g_date_time_format(datetime, "%Y%m%d_%H%M00");
+        if(sec <= margin_sec) {
+            datetime = g_date_time_add_seconds(datetime, -sec);
+        }
+        else if(sec >= 60-margin_sec) {
+            datetime = g_date_time_add_seconds(datetime, 60-sec);
+        }
     }
 #endif
 
-    //date_str = g_date_time_format(datetime, "%Y%m%d_%H%M%S");
+    date_str = g_date_time_format(datetime, "%Y%m%d_%H%M%S");
     gchararray file_name = g_strdup_printf("%s/%s_%s-ch%d.mp4", cmdArg.mntDir, cmdArg.ohtName, date_str, info->ch);
     
     __LOG(LOG_NOTICE, "[GST][%s:%d] %s : %s", _FILE_, __LINE__, __FUNCTION__, file_name);
@@ -191,7 +202,7 @@ gint MuxSinkBin::init(guint8 num)
     if(ch==2) g_object_set(be.sink, "location", "test_ch2_%02d.mp4", NULL);
     if(ch==3) g_object_set(be.sink, "location", "test_ch3_%02d.mp4", NULL);
 #endif
-
+    g_object_set(be.sink, "max-size-time", GST_SECOND*60*cmdArg.duration, NULL);
     g_signal_connect(be.sink, "format-location", G_CALLBACK(format_location), &muxSinkData);
     g_signal_connect(be.sink, "muxer-added", G_CALLBACK(muxer_added), NULL);
     g_signal_connect(be.sink, "sink-added", G_CALLBACK(sink_added), NULL);

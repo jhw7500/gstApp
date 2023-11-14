@@ -130,7 +130,6 @@ static void fault_setup (void)
 
 void sigHandler(int sig)
 {
-    guint8 i;
     static guint8 cnt = 0;
     __LOG(LOG_NOTICE, "[GST][%s:%d] sigHandler(%d)", _FILE_, __LINE__, sig);
 	is_interrupted = 1;
@@ -142,7 +141,7 @@ void sigHandler(int sig)
     }
 
 #if 0
-    for(i=0; i<MAX_CHANNEL; i++)
+    for(guint8 i=0; i<MAX_CHANNEL; i++)
     {
         gst_pad_send_event(muxSinkBin[i].getBinVideoSinkPad(), gst_event_new_eos());
 #ifdef AUDIOBIN_ENABLE
@@ -176,9 +175,9 @@ static void check_terminal_input(gpointer arg)  //(gpointer arg0, gpointer arg1,
     //RtspServerBin *rtspServerBin = (RtspServerBin *)arg1;
     //CaptureBin *captrueBin = (CaptureBin *)arg2;
     int bytesRead;
-    GstState state;
+    //GstState state;
     guint8 i;
-    gchar *cmd;
+    //gchar *cmd;
     gchar *token = NULL;
     guint bps, fps;
     char buffer[64];
@@ -298,7 +297,7 @@ static void check_terminal_input(gpointer arg)  //(gpointer arg0, gpointer arg1,
                             fps = charArrayToInt(token);
 
                             if(fps > 99) {
-                                __LOG(LOG_ERR, "[GST][%s:%d] fps %d not supported", _FILE_, __LINE__, bps);
+                                __LOG(LOG_ERR, "[GST][%s:%d] fps %d not supported", _FILE_, __LINE__, fps);
                                 break;
                             }
 
@@ -311,7 +310,7 @@ static void check_terminal_input(gpointer arg)  //(gpointer arg0, gpointer arg1,
                             fps = charArrayToInt(token);
 
                             if(fps > 99) {
-                                __LOG(LOG_ERR, "[GST][%s:%d] fps %d not supported", _FILE_, __LINE__, bps);
+                                __LOG(LOG_ERR, "[GST][%s:%d] fps %d not supported", _FILE_, __LINE__, fps);
                                 break;
                             }
 
@@ -373,13 +372,14 @@ static void splitTimerStart(gpointer data)
     return;
 }
 
-static void splitCheck(gpointer data, guint8 startSec)
+static gboolean splitCheck(gpointer data, guint8 startSec)
 {
     MuxSinkBin* muxSinkBin = (MuxSinkBin *)data;
     static gboolean start_flag = 0;
     //static gint staticMin = -1;
     static gint target_min = -1;
     guint8 i;
+
 
     if(start_flag == 0)
     {
@@ -388,10 +388,11 @@ static void splitCheck(gpointer data, guint8 startSec)
         {
             //if(!(cmdArg.ch_enable & (0x1 << i))) continue;
             if(!muxSinkBin[i].getBinVideoSinkPad()) continue;
-            if (muxSinkBin[i].getStartFlag() == 0) return; 
+            if (muxSinkBin[i].getStartFlag() == 0) return start_flag; 
         }
     }
-    start_flag = 1;
+    else return start_flag;
+    //start_flag = 1;
     
     GDateTime *datetime = g_date_time_new_now_local();
     gint min = g_date_time_get_minute(datetime);
@@ -411,10 +412,10 @@ static void splitCheck(gpointer data, guint8 startSec)
     if(target_min != min)
     {
         g_date_time_unref(datetime);
-        return;
+        return start_flag;
     }
 
-    if(sec == startSec+1)    //if(sec == 1 && microsec <= 50000)   //if(sec == 59 && microsec >= 700000 && microsec <b= 750000)
+    if(sec == startSec+0)    //if(sec == 1 && microsec <= 50000)   //if(sec == 59 && microsec >= 700000 && microsec <b= 750000)
     {
         for(i=0; i<MAX_CHANNEL; i++) {
             if(muxSinkBin[i].getBinVideoSinkPad()) muxSinkBin[i].splitNow(NULL, FALSE);
@@ -424,11 +425,12 @@ static void splitCheck(gpointer data, guint8 startSec)
         target_min += cmdArg.duration;
         if(target_min >= 60) target_min -= 60;
         g_print("set target min : %d\n", target_min);
+        start_flag = 1;
     }
 
     g_date_time_unref(datetime);
 
-    return;
+    return start_flag;
 }
 
 static void splitLoop(gpointer data)
@@ -439,7 +441,8 @@ static void splitLoop(gpointer data)
         if(is_interrupted)
             break;
 
-        splitCheck(data, 0);
+        if(splitCheck(data, 0))
+            break;
 
         g_usleep(1000);
     }
@@ -462,7 +465,7 @@ static gboolean setSRT(gpointer arg)
     ThreadArgs *thraedArgs = (ThreadArgs *)arg;
     RecordBin *recordBin = (RecordBin *)(thraedArgs->arg0);
     RtspServerBin *rtspServerBin = (RtspServerBin *)(thraedArgs->arg1);
-    CaptureBin *captrueBin = (CaptureBin *)(thraedArgs->arg2);
+    //CaptureBin *captrueBin = (CaptureBin *)(thraedArgs->arg2);
     static gint index = 0;
     guint8 i;
     gchar* text;
@@ -537,14 +540,15 @@ gint main(gint argc, gchar *argv[])
     if(cmdArg.audio_en)
     {
         audioBin.init();
-        audioBin.addElement("audiotestsrc", "audioconvert", "audiorate", "lamemp3enc", "mpegaudioparse", "queue", "tee", NULL);
+        audioBin.addElement("alsasrc", "audiorate", "audioconvert", "lamemp3enc", "mpegaudioparse", "queue", "tee", NULL);
         audioBin.linkElement();
 
-        g_object_set(audioBin.be.element[0], "is-live", TRUE, NULL);
+        g_object_set(audioBin.be.element[0], "device", "plughw:0,0", NULL);
+        //g_object_set(audioBin.be.element[0], "is-live", TRUE, NULL);
         //g_object_set(audioBin.be.element[0], "wave", 5, NULL);
-        g_object_set(audioBin.be.element[0], "wave", 8, NULL);
-        g_object_set(audioBin.be.element[0], "tick-interval", 200000000, NULL);
-        //g_object_set(audioBin.be.element[2], "max-size-time", 5*GST_SECOND, "max-size-buffers", 60, "leaky", 2, NULL);
+        //g_object_set(audioBin.be.element[0], "wave", 8, NULL);
+        //g_object_set(audioBin.be.element[0], "tick-interval", 200000000, NULL);
+        g_object_set(audioBin.be.element[5], "max-size-time", 5*GST_SECOND, "max-size-buffers", 60, "leaky", 2, NULL);
         //g_object_set(audioBin.be.element[6], "max-size-time", 5*GST_SECOND, "max-size-buffers", 60, "leaky", 2, NULL);
         //g_object_set(audioBin.be.element[6], "max-size-bytes", 0, "max-size-time", 0, "max-size-buffers", 60, "leaky", LEAKY_DOWNSTREAM, NULL);
     }
@@ -600,20 +604,20 @@ gint main(gint argc, gchar *argv[])
 
         if(cmdArg.audio_en)
         {
-            if(!audioBin.init())
+            if(audioBin.init())
             {
-                audioBin.addElement("audiotestsrc", "audioconvert", "audiorate", "lamemp3enc", "mpegaudioparse", "queue", "tee", NULL);
+                audioBin.addElement("alsasrc", "audioconvert", "audiorate", "lamemp3enc", "mpegaudioparse", "queue", "tee", NULL);
                 if(!audioBin.linkElement()) {
                     //return -1;
                     goto main_end;
                 }
-
-                g_object_set(audioBin.be.element[0], "is-live", TRUE, NULL);
+                g_object_set(audioBin.be.element[0], "device", "plughw:0,0", NULL);
+                //g_object_set(audioBin.be.element[0], "is-live", TRUE, NULL);
                 //g_object_set(audioBin.be.element[0], "wave", 5, NULL);
-                g_object_set(audioBin.be.element[0], "wave", 8, NULL);
-                g_object_set(audioBin.be.element[0], "tick-interval", 200000000, NULL);
+                //g_object_set(audioBin.be.element[0], "wave", 8, NULL);
+                //g_object_set(audioBin.be.element[0], "tick-interval", 200000000, NULL);
                 //g_object_set(audioBin.be.element[2], "max-size-time", 5*GST_SECOND, "max-size-buffers", 60, "leaky", 2, NULL);
-                //g_object_set(audioBin.be.element[6], "max-size-time", 5*GST_SECOND, "max-size-buffers", 60, "leaky", 2, NULL);
+                g_object_set(audioBin.be.element[5], "max-size-time", 5*GST_SECOND, "max-size-buffers", 60, "leaky", 2, NULL);
                 //g_object_set(audioBin.be.element[6], "max-size-bytes", 0, "max-size-time", 0, "max-size-buffers", 60, "leaky", LEAKY_DOWNSTREAM, NULL);
             }
 

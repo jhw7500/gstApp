@@ -253,7 +253,7 @@ gboolean RtspServerBin::setBitrate(guint16 data)
 
 gboolean RtspServerBin::getFps()
 {
-    gint fps;
+    //gint fps;
     GstCaps *caps;
 
     g_object_get(re.capsfilter, "caps", &caps, NULL);
@@ -266,7 +266,7 @@ gboolean RtspServerBin::getFps()
 
 gboolean RtspServerBin::setFps(guint16 data)
 {
-    gint fps;
+    //gint fps;
     GstCaps *caps;
 
 #if 0

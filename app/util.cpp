@@ -177,18 +177,18 @@ gint cmd_parser(int *argc, char **argv[], gpointer data)
         {"brtsp", NULL, 0, G_OPTION_ARG_INT, &cmdArg.rtsp_bitrate, "rtsp Kbyte per second, default(1024)", "INT"},
         {"oht", 'O', 0, G_OPTION_ARG_STRING, &cmdArg.ohtName, "oht name, default(APPNAME)", "STRING"},
         {"delay", 'D', 0, G_OPTION_ARG_INT, &cmdArg.play_delay, "from pause to play delay, default(0)", "SECOND"},
-        {"fault", 'f', 0, G_OPTION_ARG_NONE, &cmdArg.fault, "no fault setup, default(NONE)", "NONE"},
+        {"fault", 'f', 0, G_OPTION_ARG_NONE, &cmdArg.fault, "no fault setup, default(FALSE)", "NONE"},
         {"duration", 's', 0, G_OPTION_ARG_INT, &cmdArg.duration, "recoding file split duration, default(1)", "MINUTE"},
         {"ertsp", 't', 0, G_OPTION_ARG_INT, &cmdArg.rtsp_en, "rtsp streaming enable, default(1)", "INT"},
         {"erec", 'e', 0, G_OPTION_ARG_INT, &cmdArg.rec_en, "video recording enable, default(1)", "INT"},
-        {"eaudio", 'a', 0, G_OPTION_ARG_NONE, &cmdArg.audio_en, "audio recording enable, default(NONE)", "NONE"},
-        {"ecap", 'c', 0, G_OPTION_ARG_NONE, &cmdArg.capture_en, "video capturing enable, default(NONE)", "NONE"},
-        {"ein", 'i', 0, G_OPTION_ARG_NONE, &cmdArg.input_en, "terminal input enable, default(NONE)", "NONE"},
+        {"eaudio", 'a', 0, G_OPTION_ARG_NONE, &cmdArg.audio_en, "audio recording enable, default(FALSE)", "NONE"},
+        {"ecap", 'c', 0, G_OPTION_ARG_NONE, &cmdArg.capture_en, "video capturing enable, default(FALSE)", "NONE"},
+        {"ein", 'i', 0, G_OPTION_ARG_NONE, &cmdArg.input_en, "terminal input enable, default(FALSE)", "NONE"},
         {"port", 'p', 0, G_OPTION_ARG_STRING, &cmdArg.rtsp_port, "rtsp port number, default(8554)", "STRING"},
         {"id", NULL, 0, G_OPTION_ARG_STRING, &cmdArg.rtsp_id, "rtsp id, default(semes)", "STRING"},
         {"passwd", NULL, 0, G_OPTION_ARG_STRING, &cmdArg.rtsp_passwd, "rtsp passwd, default(semes)", "STRING"},
         {"cmax", 'x', 0, G_OPTION_ARG_INT, &cmdArg.captureMaxCnt, "capture max count, default(3)", "INT"},
-        {"eover", 'v', 0, G_OPTION_ARG_NONE, &cmdArg.overlay_en, "overlay enable, default(NONE)", "NONE"},
+        {"eover", 'v', 0, G_OPTION_ARG_NONE, &cmdArg.overlay_en, "overlay enable, default(FALSE)", "NONE"},
         {NULL}
     };
 
@@ -388,13 +388,13 @@ gboolean my_bus_callback(GstBus *bus, GstMessage *message, gpointer data)
 #if 1
             gboolean live;
             guint64 running_time, stream_time,timestamp,duration;
-            // gst_message_parse_qos (msg,&live,&running_time,&stream_time,&timestamp,&duration);
-            // g_warning("GOt a QOS event %llu %llu %llu %llu", running_time, stream_time, timestamp, duration);
+            gst_message_parse_qos (message,&live,&running_time,&stream_time,&timestamp,&duration);
+            g_warning("GOt a QOS event %lu %lu %lu %lu", running_time, stream_time, timestamp, duration);
             gint64 jitter;
             gdouble prop;
             gint qual;
             gst_message_parse_qos_values(message, &jitter, &prop, &qual);
-            g_warning("gotQoSE %lld %f %lu", jitter, prop, qual );
+            g_warning("gotQoSE %lu %f %d", jitter, prop, qual );
 
             GstFormat format;
             guint64 processed;
@@ -403,8 +403,8 @@ gboolean my_bus_callback(GstBus *bus, GstMessage *message, gpointer data)
 
             g_print("QoS Message:\n");
             g_print("Format: %s\n", gst_format_get_name(format));
-            g_print("Processed: %llu\n", processed);
-            g_print("Dropped: %llu\n", dropped);
+            g_print("Processed: %lu\n", processed);
+            g_print("Dropped: %lu\n", dropped);
 #endif
             break;
         }

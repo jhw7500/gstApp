@@ -70,7 +70,7 @@ gboolean RecordBin::setBitrate(guint16 data)
 
 gboolean RecordBin::getFps()
 {
-    gint fps;
+    //gint fps;
     GstCaps *caps;
     gchar *caps_str;
 
@@ -87,7 +87,7 @@ gboolean RecordBin::getFps()
 
 gboolean RecordBin::setFps(guint16 data)
 {
-    gint fps;
+    //gint fps;
     GstCaps *caps;
     gchar *caps_str;
 

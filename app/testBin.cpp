@@ -53,7 +53,7 @@ gint TestBin::addBinSrcPad(guint8 ch)
 gint TestBin::linkElement()
 {
     guint8 i = 0;
-
+    __LOG(LOG_NOTICE, "[GST][%s:%d] %s", _FILE_, __LINE__, __FUNCTION__);
     for(i=0; i<ptr; i++)
     {
         if(!gst_element_link(be.element[i], be.element[i+1]))
@@ -67,9 +67,11 @@ gint TestBin::addElement(const gchar* firstStr, ...)
 {
     guint8 i = 0;
     va_list args;
-    va_start(args, firstStr);
+    __LOG(LOG_NOTICE, "[GST][%s:%d] %s", _FILE_, __LINE__, __FUNCTION__);
 
+    va_start(args, firstStr);
     const char* currentStr = firstStr;
+    
     while (currentStr != NULL) {
         g_print("%s ", currentStr);
         be.element[i] = gst_element_factory_make(currentStr, g_strdup_printf("%s%d", currentStr, i));

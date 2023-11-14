@@ -107,8 +107,8 @@ typedef struct _CmdArg
     gstMode mode;
     gint log_level;
     gint dbg_level;
-    gchar *dotDir;
-    gchar *mntDir;
+    const gchar *dotDir;
+    const gchar *mntDir;
     gchar *ohtName;
     gint ch_enable;
     ResMode resMode;
@@ -127,10 +127,10 @@ typedef struct _CmdArg
     gchar *appname;
     guint8 captureMaxCnt;
     gboolean input_en;
-    gchar *rtsp_port;
-    gchar *captureDir;
-    gchar *rtsp_id;
-    gchar *rtsp_passwd;
+    const gchar *rtsp_port;
+    const gchar *captureDir;
+    const gchar *rtsp_id;
+    const gchar *rtsp_passwd;
     gboolean overlay_en;
     Resolution res[2] = {{1920,1080}, {1280,720}};
 } CmdArg;
