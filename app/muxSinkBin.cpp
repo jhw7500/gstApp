@@ -90,6 +90,11 @@ gboolean MuxSinkBin::splitNow(gpointer data, gboolean timer_en)
     return TRUE;
 }
 
+gint MuxSinkBin::getSplitSec()
+{
+    return muxSinkData.split_sec;
+}
+
 gchararray format_location(GstElement *sink, guint arg0, gpointer data)
 {
     MuxSinkData *info = (MuxSinkData *)data;
@@ -111,12 +116,12 @@ gchararray format_location(GstElement *sink, guint arg0, gpointer data)
         if(sec <= margin_sec) {
             datetime = g_date_time_add_seconds(datetime, -sec);
         }
-        else if(sec >= 60-margin_sec) {
-            datetime = g_date_time_add_seconds(datetime, 60-sec);
-        }
+        //else if(sec >= 60-margin_sec) {
+        //    datetime = g_date_time_add_seconds(datetime, 60-sec);
+        //}
     }
 #endif
-
+    info->split_sec = sec;
     date_str = g_date_time_format(datetime, "%Y%m%d_%H%M%S");
     gchararray file_name = g_strdup_printf("%s/%s_%s-ch%d.mp4", cmdArg.mntDir, cmdArg.ohtName, date_str, info->ch);
     
@@ -142,6 +147,7 @@ MuxSinkBin::MuxSinkBin()
     sinkVideoPad = NULL;
     be.bin = NULL;
     muxSinkData.start_f = 0;
+    muxSinkData.split_sec = 0;
 }
 
 MuxSinkBin::~MuxSinkBin()
@@ -176,13 +182,13 @@ gboolean MuxSinkBin::addBinAudioSinkPad()
 
 GstPad* MuxSinkBin::getBinVideoSinkPad()
 {
-    __LOG(LOG_INFO, "[GST][%s:%d] %s ch:%d", _FILE_, __LINE__, __FUNCTION__, muxSinkData.ch);
+    //__LOG(LOG_INFO, "[GST][%s:%d] %s ch:%d", _FILE_, __LINE__, __FUNCTION__, muxSinkData.ch);
     return sinkVideoPad;
 }
 
 GstPad* MuxSinkBin::getBinAudioSinkPad()
 {
-    __LOG(LOG_INFO, "[GST][%s:%d] %s ch:%d", _FILE_, __LINE__, __FUNCTION__, muxSinkData.ch);
+    //__LOG(LOG_INFO, "[GST][%s:%d] %s ch:%d", _FILE_, __LINE__, __FUNCTION__, muxSinkData.ch);
     return sinkAudioPad;
 }
 

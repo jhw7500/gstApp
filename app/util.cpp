@@ -163,30 +163,30 @@ gint cmd_parser(int *argc, char **argv[], gpointer data)
     cmdArg.overlay_en = FALSE;
 
     GOptionEntry entries[] = {
-        {"mode", 'm', 0, G_OPTION_ARG_INT, &cmdArg.mode, "mode select 0(normal), 1(test), default(0)", "INT"},
+        {"mode", 'M', 0, G_OPTION_ARG_INT, &cmdArg.mode, "mode select 0(normal), 1(test), default(0)", "INT"},
         {"debug", 'd', 0, G_OPTION_ARG_INT, &cmdArg.dbg_level, "debug level, default(5)", "INT"},
-        {"debug", 'l', 0, G_OPTION_ARG_INT, &cmdArg.log_level, "log level, default(6)", "INT"},
-        {"dot", NULL, 0, G_OPTION_ARG_STRING, &cmdArg.dotDir, "save dot representation of pipeline to FILE and exit, default(/tmp)", "STRING"},
+        {"log", 'l', 0, G_OPTION_ARG_INT, &cmdArg.log_level, "log level, default(6)", "INT"},
+        {"dot", 'T', 0, G_OPTION_ARG_STRING, &cmdArg.dotDir, "save dot representation of pipeline to FILE and exit, default(/tmp)", "STRING"},
         {"channel", 'n', 0, G_OPTION_ARG_INT, &cmdArg.ch_enable, "camera channel enable bit, default(0x0f)", "HEX"},
-        {"output", 'o', 0, G_OPTION_ARG_STRING, &cmdArg.mntDir, "save video & audio file to directory, default(/mnt/sd_cam)", "STRING"},
-        {"res", 'r', 0, G_OPTION_ARG_INT, &cmdArg.resMode, "resolution select FHD(0) and HD(1), default(FHD)", "INT"},
-        {"fmain", NULL, 0, G_OPTION_ARG_INT, &cmdArg.main_fps, "main frame per second, default(15)", "INT"},
-        {"frec", NULL, 0, G_OPTION_ARG_INT, &cmdArg.rec_fps, "record frame per second, default(15)", "INT"},
-        {"frtsp", NULL, 0, G_OPTION_ARG_INT, &cmdArg.rtsp_fps, "rtsp frame per second, default(15)", "INT"},
-        {"brec", NULL, 0, G_OPTION_ARG_INT, &cmdArg.rec_bitrate, "record Kbyte per second, default(4096)", "INT"},
-        {"brtsp", NULL, 0, G_OPTION_ARG_INT, &cmdArg.rtsp_bitrate, "rtsp Kbyte per second, default(1024)", "INT"},
-        {"oht", 'O', 0, G_OPTION_ARG_STRING, &cmdArg.ohtName, "oht name, default(APPNAME)", "STRING"},
+        {"output", 'O', 0, G_OPTION_ARG_STRING, &cmdArg.mntDir, "save video & audio file to directory, default(/mnt/sd_cam)", "STRING"},
+        {"res", 'e', 0, G_OPTION_ARG_INT, &cmdArg.resMode, "resolution select FHD(0) and HD(1), default(FHD)", "INT"},
+        {"fmain", 'm', 0, G_OPTION_ARG_INT, &cmdArg.main_fps, "main frame per second, default(15)", "INT"},
+        {"frec", 'f', 0, G_OPTION_ARG_INT, &cmdArg.rec_fps, "record frame per second, default(15)", "INT"},
+        {"frtsp", 'F', 0, G_OPTION_ARG_INT, &cmdArg.rtsp_fps, "rtsp frame per second, default(15)", "INT"},
+        {"brec", 'b', 0, G_OPTION_ARG_INT, &cmdArg.rec_bitrate, "record Kbyte per second, default(4096)", "INT"},
+        {"brtsp", 'B', 0, G_OPTION_ARG_INT, &cmdArg.rtsp_bitrate, "rtsp Kbyte per second, default(1024)", "INT"},
+        {"oht", 'o', 0, G_OPTION_ARG_STRING, &cmdArg.ohtName, "oht name, default(APPNAME)", "STRING"},
         {"delay", 'D', 0, G_OPTION_ARG_INT, &cmdArg.play_delay, "from pause to play delay, default(0)", "SECOND"},
-        {"fault", 'f', 0, G_OPTION_ARG_NONE, &cmdArg.fault, "no fault setup, default(FALSE)", "NONE"},
+        {"fault", 't', 0, G_OPTION_ARG_NONE, &cmdArg.fault, "no fault setup, default(FALSE)", "NONE"},
         {"duration", 's', 0, G_OPTION_ARG_INT, &cmdArg.duration, "recoding file split duration, default(1)", "MINUTE"},
-        {"ertsp", 't', 0, G_OPTION_ARG_INT, &cmdArg.rtsp_en, "rtsp streaming enable, default(1)", "INT"},
-        {"erec", 'e', 0, G_OPTION_ARG_INT, &cmdArg.rec_en, "video recording enable, default(1)", "INT"},
+        {"ertsp", 'r', 0, G_OPTION_ARG_INT, &cmdArg.rtsp_en, "rtsp streaming enable, default(1)", "INT"},
+        {"erec", 'R', 0, G_OPTION_ARG_INT, &cmdArg.rec_en, "video recording enable, default(1)", "INT"},
         {"eaudio", 'a', 0, G_OPTION_ARG_NONE, &cmdArg.audio_en, "audio recording enable, default(FALSE)", "NONE"},
         {"ecap", 'c', 0, G_OPTION_ARG_NONE, &cmdArg.capture_en, "video capturing enable, default(FALSE)", "NONE"},
         {"ein", 'i', 0, G_OPTION_ARG_NONE, &cmdArg.input_en, "terminal input enable, default(FALSE)", "NONE"},
         {"port", 'p', 0, G_OPTION_ARG_STRING, &cmdArg.rtsp_port, "rtsp port number, default(8554)", "STRING"},
-        {"id", NULL, 0, G_OPTION_ARG_STRING, &cmdArg.rtsp_id, "rtsp id, default(semes)", "STRING"},
-        {"passwd", NULL, 0, G_OPTION_ARG_STRING, &cmdArg.rtsp_passwd, "rtsp passwd, default(semes)", "STRING"},
+        {"id", 'I', 0, G_OPTION_ARG_STRING, &cmdArg.rtsp_id, "rtsp id, default(semes)", "STRING"},
+        {"passwd", 'P', 0, G_OPTION_ARG_STRING, &cmdArg.rtsp_passwd, "rtsp passwd, default(semes)", "STRING"},
         {"cmax", 'x', 0, G_OPTION_ARG_INT, &cmdArg.captureMaxCnt, "capture max count, default(3)", "INT"},
         {"eover", 'v', 0, G_OPTION_ARG_NONE, &cmdArg.overlay_en, "overlay enable, default(FALSE)", "NONE"},
         {NULL}
@@ -226,7 +226,7 @@ gint cmd_parser(int *argc, char **argv[], gpointer data)
     g_print("rec bitrate : %d\n", cmdArg.rec_bitrate);
     g_print("rtsp bitrate : %d\n", cmdArg.rtsp_bitrate);
     g_print("play delay : %d\n", cmdArg.play_delay);
-    g_print("fault : %s\n", cmdArg.fault? "TURE":"FALSE");
+    g_print("no fault : %s\n", cmdArg.fault? "TURE":"FALSE");
     g_print("duration : %d\n", cmdArg.duration);
     g_print("rtsp port : %s\n", cmdArg.rtsp_port);
     g_print("rtsp id : %s\n", cmdArg.rtsp_id);
@@ -482,6 +482,38 @@ gboolean my_bus_callback(GstBus *bus, GstMessage *message, gpointer data)
             break;
 
     }
+
+    return TRUE;
+}
+
+GstPadProbeReturn probe_function(GstPad *pad, GstPadProbeInfo *info, gpointer user_data) 
+{
+    GstElement *data = (GstElement *)user_data;
+    GstClockTime timestamp = GST_BUFFER_PTS(info->data);
+    gchar *name;
+    g_object_get(data, "name", &name, NULL);
+    g_message("%s[%s]Timestamp: %" GST_TIME_FORMAT "\n", name, gst_pad_get_direction(pad)==1? "SRC":"SINK", GST_TIME_ARGS(timestamp));
+
+    g_free(name);
+    return GST_PAD_PROBE_OK;
+}
+
+gboolean print_delay(GstPad *pad, GstObject *parent, GstBuffer *buffer)
+{
+    // 현재 시간 가져오기
+    static GstClockTime prev_time = GST_CLOCK_TIME_NONE;
+    GstClockTime current_time = GST_BUFFER_PTS(buffer);
+
+    if (prev_time != GST_CLOCK_TIME_NONE) {
+        // 이전 시간이 존재하면 현재 시간과의 차이 계산
+        GstClockTimeDiff delay = current_time - prev_time;
+
+        // 지연 출력
+        g_print("Delay: %" GST_TIME_FORMAT "\n", GST_TIME_ARGS(delay));
+    }
+
+    // 이전 시간 업데이트
+    prev_time = current_time;
 
     return TRUE;
 }

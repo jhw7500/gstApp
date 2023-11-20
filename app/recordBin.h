@@ -26,6 +26,7 @@ typedef struct _RecordElement
     GstElement *queue;
     GstElement *queue2;
     GstElement *convert;
+    GstElement *convert2;
     GstElement *parse;
     GstElement *bin;
     GstElement *sink;

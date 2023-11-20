@@ -169,6 +169,12 @@ static GstFlowReturn new_sample_handler(GstElement *sink, gpointer userData)
     }
     buffer = gst_sample_get_buffer(sample);
     gst_sample_unref(sample);
+    if(info->debug)
+    {
+        GstClockTime timestamp = GST_BUFFER_PTS(buffer);
+        g_message("Timestamp: %" GST_TIME_FORMAT "\n", GST_TIME_ARGS(timestamp));
+        info->debug = 0;
+    }
 
 #if 1
     if(info->appsrc == NULL)
@@ -227,6 +233,11 @@ gboolean RtspServerBin::setOverlayText(gchar *text)
     g_object_set(re.overlay, "text", text, NULL);
 
     return 1;
+}
+
+void RtspServerBin::setTimeStampDebug()
+{
+    rtspServerData.debug = TRUE;
 }
 
 gboolean RtspServerBin::getBitrate()
@@ -320,6 +331,7 @@ RtspServerBin::RtspServerBin()
     rtspServerData.caps = NULL;
     rtspServerData.appsrc = NULL;
     rtspServerData.start_f = FALSE;
+    rtspServerData.debug = FALSE;
 }
 
 RtspServerBin::~RtspServerBin()
@@ -347,6 +359,7 @@ gint RtspServerBin::init(guint8 num)
     re.queue2 = gst_element_factory_make(QUEUE_TYPE, "queue2");
     re.capsfilter = gst_element_factory_make("capsfilter", "capsfilter");
     re.convert = gst_element_factory_make("imxvideoconvert_g2d", "convert");
+    re.convert2 = gst_element_factory_make("imxvideoconvert_g2d", "convert2");
     re.parse = gst_element_factory_make("h264parse", "h264parse");
     re.enc = gst_element_factory_make("vpuenc_h264", "vpuenc_h264");
     re.rate = gst_element_factory_make("videorate", "videorate");
@@ -354,13 +367,13 @@ gint RtspServerBin::init(guint8 num)
     re.crop = gst_element_factory_make("videocrop", "crop");
     re.overlay = gst_element_factory_make("textoverlay", "overlay");
 
-    if (!re.bin || !re.queue || !re.capsfilter || !re.parse || !re.enc || !re.rate || !re.sink || !re.convert || !re.queue2 || !re.crop || !re.overlay)
+    if (!re.bin || !re.queue || !re.capsfilter || !re.parse || !re.enc || !re.rate || !re.sink || !re.convert || !re.queue2 || !re.crop || !re.overlay || !re.convert2)
     {
         __LOG(LOG_CRIT, "[GST][%s:%d] rtsp element create error", _FILE_, __LINE__);
         return -1;
     }
 
-    gst_bin_add_many(GST_BIN(re.bin), re.queue, re.rate, re.convert, re.enc, re.parse, re.queue2, re.sink, re.capsfilter, re.crop, re.overlay, NULL);
+    gst_bin_add_many(GST_BIN(re.bin), re.queue, re.rate, re.convert, re.enc, re.parse, re.queue2, re.sink, re.capsfilter, re.crop, re.overlay, re.convert2, NULL);
 
     if(!gst_bin_add(GST_BIN(pipeline), re.bin))
     {
@@ -395,6 +408,7 @@ gint RtspServerBin::init(guint8 num)
     g_object_set(re.overlay, "font-desc", DEFAULT_OVERLAY_FONT, NULL);
 
     g_object_set(re.enc, "bitrate", cmdArg.rtsp_bitrate, NULL);
+    g_object_set(re.enc, "gop-size", 15, NULL);
     g_object_set(re.queue, "max-size-time", GST_SECOND, "max-size-buffers", cmdArg.rtsp_fps, "leaky", LEAKY_DOWNSTREAM, NULL);
     g_object_set(re.queue2, "max-size-time", GST_SECOND, "max-size-buffers", cmdArg.rtsp_fps, "leaky", LEAKY_DOWNSTREAM, NULL);
     //g_object_set(re.capsfilter, "max-size-time", 5*GST_SECOND, "max-size-buffers", 60, "leaky", 1, NULL);

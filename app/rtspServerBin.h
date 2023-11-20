@@ -35,6 +35,7 @@ typedef struct _RtspServerData
     guint8 start_f;
     GstBuffer *buf;
     GstCaps *caps;
+    gboolean debug;
 } RtspServerData;
 
 typedef struct _RtspServerElement
@@ -44,6 +45,7 @@ typedef struct _RtspServerElement
     GstElement *queue;
     GstElement *queue2;
     GstElement *convert;
+    GstElement *convert2;
     GstElement *capsfilter;
     GstElement *parse;
     GstElement *bin;
@@ -68,6 +70,7 @@ public :
     gboolean getCaps();
     gboolean setOverlayText(gchar *text);
     gboolean getStartFlag();
+    void setTimeStampDebug();
 
 private :
 	

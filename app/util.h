@@ -23,6 +23,7 @@
 #include <stdio.h>
 #include "util.h"
 
+#define DEBUG_TIMESTAMP
 #define MAX_CHANNEL 4
 #define MAX_VIDEO_SRC 2
 
@@ -146,6 +147,8 @@ void log_once(gint opt, const gchar *message);
 extern guint charArrayToInt(gchar *arr);
 extern gboolean compareBuf(guint8 *cmp1, guint8 *cmp2, guint8 len);
 extern gboolean my_bus_callback(GstBus *bus, GstMessage *message, gpointer data);
+extern GstPadProbeReturn probe_function(GstPad *pad, GstPadProbeInfo *info, gpointer user_data);
+extern gboolean print_delay(GstPad *pad, GstObject *parent, GstBuffer *buffer);
 void mylog(gint opt, const gchar* _szfmt, ... );
 gint cmd_parser(int *argc, char **argv[], gpointer data);
 #define __LOG(opt, fmt, args...) do { mylog(opt, (char*)fmt, ##args); } while(0)

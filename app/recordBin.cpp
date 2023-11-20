@@ -132,8 +132,6 @@ RecordBin::~RecordBin()
 
 gint RecordBin::init(guint8 num)
 {
-    //GstPad *ghostPad;
-    GstPad *staticPad;
     gboolean ret;
     ch = num;
     //sinkPad = NULL;
@@ -147,16 +145,17 @@ gint RecordBin::init(guint8 num)
     re.enc = gst_element_factory_make("vpuenc_h264", "vpuenc_h264");
     re.rate = gst_element_factory_make("videorate", "videorate");
     re.convert = gst_element_factory_make("imxvideoconvert_g2d", "convert");
+    re.convert2 = gst_element_factory_make("imxvideoconvert_g2d", "convert2");
     re.crop = gst_element_factory_make("videocrop", "crop");
     re.overlay = gst_element_factory_make("textoverlay", "overlay");
 
-    if (!re.bin || !re.queue || !re.queue2 || !re.parse || !re.enc || !re.rate || !re.convert || !re.capsfilter || !re.crop || !re.overlay)
+    if (!re.bin || !re.queue || !re.queue2 || !re.parse || !re.enc || !re.rate || !re.convert || !re.capsfilter || !re.crop || !re.overlay || !re.convert2)
     {
         __LOG(LOG_CRIT, "[GST][%s:%d] record element create error", _FILE_, __LINE__);
         return -1;
     }
 
-    gst_bin_add_many(GST_BIN(re.bin), re.queue, re.rate, re.convert, re.capsfilter, re.enc, re.parse, re.queue2, re.crop, re.overlay, NULL);
+    gst_bin_add_many(GST_BIN(re.bin), re.queue, re.rate, re.convert, re.capsfilter, re.enc, re.parse, re.queue2, re.crop, re.overlay, re.convert2, NULL);
 
     if(!gst_bin_add(GST_BIN(pipeline), re.bin))
     {
@@ -190,23 +189,28 @@ gint RecordBin::init(guint8 num)
     g_object_set(re.overlay, "font-desc", DEFAULT_OVERLAY_FONT, NULL);
 
     g_object_set(re.enc, "bitrate", cmdArg.rec_bitrate, NULL);
+    g_object_set(re.enc, "gop-size", 15, NULL);
     //g_object_set(re.parse, "config-interval", -1, NULL);
     //g_object_set(re.rate, "max-rate", MAIN_FPS, "drop-only", FALSE, NULL);
     g_object_set(re.queue, "max-size-time", GST_SECOND, "max-size-buffers", cmdArg.rec_fps, "leaky", LEAKY_DOWNSTREAM, NULL);
     g_object_set(re.queue2, "max-size-time", GST_SECOND, "max-size-buffers", cmdArg.rec_fps, "leaky", LEAKY_DOWNSTREAM, NULL);
 
-    staticPad = gst_element_get_static_pad(re.queue, "sink");
-    sinkPad = gst_ghost_pad_new(g_strdup_printf("recordBin_sink_ch%d", ch), staticPad);
+    sinkPad = gst_ghost_pad_new(g_strdup_printf("recordBin_sink_ch%d", ch), gst_element_get_static_pad(re.queue, "sink"));
+
+    if(cmdArg.mode == TEST_MODE)
+    {
+        gst_pad_add_probe(gst_element_get_static_pad(re.enc, "src"), GST_PAD_PROBE_TYPE_BUFFER, (GstPadProbeCallback)probe_function, re.enc, NULL);
+        //gst_pad_add_probe(gst_element_get_static_pad(re.enc, "src"), GST_PAD_PROBE_TYPE_BUFFER, (GstPadProbeCallback)probe_function, re.enc, NULL);
+        gst_pad_add_probe(gst_element_get_static_pad(re.queue, "src"), GST_PAD_PROBE_TYPE_BUFFER, (GstPadProbeCallback)probe_function, re.queue, NULL);
+        gst_pad_add_probe(gst_element_get_static_pad(re.queue2, "src"), GST_PAD_PROBE_TYPE_BUFFER, (GstPadProbeCallback)probe_function, re.queue2, NULL);
+        //gst_pad_add_probe(gst_element_get_static_pad(re.rate, "src"), GST_PAD_PROBE_TYPE_BUFFER, (GstPadProbeCallback)probe_function, re.rate, NULL);
+        //gst_pad_add_probe(gst_element_get_static_pad(re.convert, "src"), GST_PAD_PROBE_TYPE_BUFFER, (GstPadProbeCallback)probe_function, re.convert, NULL);
+    }
 
     if(!gst_element_add_pad(re.bin, sinkPad))
         g_error("error");
 
-    gst_object_unref(staticPad);
-
-    staticPad = gst_element_get_static_pad(re.queue2, "src");
-    srcPad = gst_ghost_pad_new(g_strdup_printf("recordBin_src_ch%d", ch), staticPad);
-
-    gst_object_unref(staticPad);
+    srcPad = gst_ghost_pad_new(g_strdup_printf("recordBin_src_ch%d", ch), gst_element_get_static_pad(re.queue2, "src"));
 
 #if 1
     if(!gst_element_add_pad(re.bin, srcPad))

@@ -66,6 +66,11 @@ gint VideoBin::addBinRecordSrcPad(ChannelNum ch)
         return -1;
     }
 
+    if(cmdArg.mode == TEST_MODE)
+    {
+        gst_pad_add_probe(srcRecordPad, GST_PAD_PROBE_TYPE_BUFFER, (GstPadProbeCallback)probe_function, be.bin, NULL);
+    }
+
     return 0;
 }
 
@@ -180,8 +185,16 @@ gint VideoBin::init(CsiNum num)
     be.convert = gst_element_factory_make("imxvideoconvert_g2d", "convert");
     be.capsfilter = gst_element_factory_make("capsfilter", "caps");
     be.teeCrop = gst_element_factory_make("tee", "teeCrop");
-
     g_object_set(be.src, "do-timestamp", TRUE, NULL);
+
+    if(cmdArg.mode == TEST_MODE)
+    {
+        //GstPad *srcpad = gst_element_get_static_pad(be.src, "src");
+        //gst_pad_add_probe(srcpad, GST_PAD_PROBE_TYPE_BUFFER, (GstPadProbeCallback)probe_function, be.src, NULL);
+        //gst_pad_add_probe(srcpad, GST_PAD_PROBE_TYPE_BUFFER, (GstPadProbeCallback)probe_function, be.capsfilter, NULL);
+        //gst_object_unref(srcpad);
+    }
+
 
     if (csi == 0)
     {
