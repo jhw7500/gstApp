@@ -143,6 +143,7 @@ gint CaptureBin::setFilePath()
 
 gint CaptureBin::init(guint8 num)
 {
+    gboolean ret = FALSE;
     GstPad *staticPad;
     ch = num;
     //sinkPad = NULL;
@@ -159,25 +160,24 @@ gint CaptureBin::init(guint8 num)
     be.sink = gst_element_factory_make("appsink", "appsink");
     be.crop = gst_element_factory_make("videocrop", "crop");
 
-    if (!be.bin || !be.queue || !be.capsfilter || !be.parse || !be.enc || !be.rate || !be.sink || !be.convert || !be.queue2 || !be.crop)
-    {
+    if (!be.bin || !be.queue || !be.capsfilter || !be.parse || !be.enc || !be.rate || !be.sink || !be.convert || !be.queue2 || !be.crop) {
         __LOG(LOG_CRIT, "[GST][%s:%d] capture element create error", _FILE_, __LINE__);
-        return -1;
+        return ret;
     }
 
     gst_bin_add_many(GST_BIN(be.bin), be.queue, be.rate, be.convert, be.enc, be.parse, be.queue2, be.sink, be.capsfilter, be.crop, NULL);
 
-    if(!gst_bin_add(GST_BIN(pipeline), be.bin))
-    {
+    ret = gst_bin_add(GST_BIN(pipeline), be.bin);
+    if(!ret) {
         __LOG(LOG_CRIT, "[GST][%s:%d] capture bin add error in pipeline", _FILE_, __LINE__);
-        return -1;
+        return ret;
     }
 
-    if (!gst_element_link_many(be.queue, be.crop, be.convert, be.enc, be.queue2, be.sink, NULL))
+    ret = gst_element_link_many(be.queue, be.crop, be.convert, be.enc, be.queue2, be.sink, NULL);
     //if (!gst_element_link_many(be.queue, be.rate, be.convert, be.capsfilter, be.enc, be.parse, be.queue2, be.sink, NULL))
-    {
+    if (!ret) {
         __LOG(LOG_CRIT, "[GST][%s:%d] capture link err", _FILE_, __LINE__);
-        return -1;
+        return ret;
     }
 
     GstCaps *caps = gst_caps_new_simple("video/x-raw", "framerate", GST_TYPE_FRACTION, cmdArg.rtsp_fps, 1, NULL);
@@ -208,10 +208,13 @@ gint CaptureBin::init(guint8 num)
     staticPad = gst_element_get_static_pad(be.queue, "sink");
     sinkPad = gst_ghost_pad_new(g_strdup_printf("captureBin_sink_ch%d", ch), staticPad);
 
-    if(!gst_element_add_pad(be.bin, sinkPad))
-        g_error("error");
+    ret = gst_element_add_pad(be.bin, sinkPad);
+    if(!ret) {
+        __LOG(LOG_CRIT, "[GST][%s:%d] capture pad add error in bin", _FILE_, __LINE__);
+        return ret;
+    }
 
     gst_object_unref(staticPad);
 
-    return 1;
+    return ret;
 }

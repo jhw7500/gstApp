@@ -52,6 +52,7 @@ typedef struct _RtspServerElement
     GstElement *sink;
     GstElement *crop;
     GstElement *overlay;
+    GstElement *compositor;
 } RtspServerElement;
 
 class RtspServerBin

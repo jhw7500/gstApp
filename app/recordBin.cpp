@@ -132,7 +132,7 @@ RecordBin::~RecordBin()
 
 gint RecordBin::init(guint8 num)
 {
-    gboolean ret;
+    gboolean ret = FALSE;
     ch = num;
     //sinkPad = NULL;
     __LOG(LOG_NOTICE, "[GST][%s:%d] %s ch : %d", _FILE_, __LINE__, __FUNCTION__, ch);
@@ -149,28 +149,28 @@ gint RecordBin::init(guint8 num)
     re.crop = gst_element_factory_make("videocrop", "crop");
     re.overlay = gst_element_factory_make("textoverlay", "overlay");
 
-    if (!re.bin || !re.queue || !re.queue2 || !re.parse || !re.enc || !re.rate || !re.convert || !re.capsfilter || !re.crop || !re.overlay || !re.convert2)
-    {
+    if (!re.bin || !re.queue || !re.queue2 || !re.parse || !re.enc || !re.rate || !re.convert || !re.capsfilter || !re.crop || !re.overlay || !re.convert2) {
         __LOG(LOG_CRIT, "[GST][%s:%d] record element create error", _FILE_, __LINE__);
-        return -1;
+        return ret;
     }
 
     gst_bin_add_many(GST_BIN(re.bin), re.queue, re.rate, re.convert, re.capsfilter, re.enc, re.parse, re.queue2, re.crop, re.overlay, re.convert2, NULL);
-
-    if(!gst_bin_add(GST_BIN(pipeline), re.bin))
-    {
+    ret = gst_bin_add(GST_BIN(pipeline), re.bin);
+    if(!ret) {
         __LOG(LOG_CRIT, "[GST][%s:%d] record bin add error in pipeline", _FILE_, __LINE__);
-        return -1;
+        return ret;
     }
 
-    if(cmdArg.mode) ret = gst_element_link_many(re.queue, re.crop, re.convert, re.enc, re.parse, re.queue2, NULL);
-    else if(cmdArg.overlay_en) ret = gst_element_link_many(re.queue, re.crop, re.overlay, re.rate, re.capsfilter, re.convert, re.enc, re.parse, re.queue2, NULL);
-    else ret = gst_element_link_many(re.queue, re.crop, re.rate, re.capsfilter, re.convert, re.enc, re.parse, re.queue2, NULL);
-
-    if (!ret)
-    {
+#ifdef CHANNEL_EACH_CROP
+    if(cmdArg.overlay_en) ret = gst_element_link_many(re.queue, re.crop, re.overlay, re.convert, re.rate, re.capsfilter, re.enc, re.parse, re.queue2, NULL);
+    else ret = gst_element_link_many(re.queue, re.crop, re.convert, re.rate, re.capsfilter, re.enc, re.parse, re.queue2, NULL);
+    //if(cmdArg.mode) ret = gst_element_link_many(re.queue, re.crop, re.convert, re.enc, re.parse, re.queue2, NULL);
+#else
+    ret = gst_element_link_many(re.queue, re.rate, re.capsfilter, re.convert, re.enc, re.parse, re.queue2, NULL);
+#endif
+    if (!ret) {
         __LOG(LOG_CRIT, "[GST][%s:%d] record link err", _FILE_, __LINE__);
-        return -1;
+        return ret;
     }
 
     GstCaps *caps = gst_caps_new_simple("video/x-raw", "framerate", GST_TYPE_FRACTION, cmdArg.rec_fps, 1, NULL);
@@ -197,7 +197,7 @@ gint RecordBin::init(guint8 num)
 
     sinkPad = gst_ghost_pad_new(g_strdup_printf("recordBin_sink_ch%d", ch), gst_element_get_static_pad(re.queue, "sink"));
 
-    if(cmdArg.mode == TEST_MODE)
+    if(cmdArg.testMode == TEST_MODE)
     {
         gst_pad_add_probe(gst_element_get_static_pad(re.enc, "src"), GST_PAD_PROBE_TYPE_BUFFER, (GstPadProbeCallback)probe_function, re.enc, NULL);
         //gst_pad_add_probe(gst_element_get_static_pad(re.enc, "src"), GST_PAD_PROBE_TYPE_BUFFER, (GstPadProbeCallback)probe_function, re.enc, NULL);
@@ -240,5 +240,5 @@ gint RecordBin::init(guint8 num)
 
 #endif
 
-    return 0;
+    return ret;
 }

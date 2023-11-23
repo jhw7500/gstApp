@@ -350,7 +350,7 @@ gint RtspServerBin::init(guint8 num)
 {
     GstPad *staticPad;
     ch = num;
-    gboolean ret;
+    gboolean ret = FALSE;
     //sinkPad = NULL;
     __LOG(LOG_NOTICE, "[GST][%s:%d] %s ch : %d", _FILE_, __LINE__, __FUNCTION__, ch);
 
@@ -366,34 +366,39 @@ gint RtspServerBin::init(guint8 num)
     re.sink = gst_element_factory_make("appsink", "appsink");
     re.crop = gst_element_factory_make("videocrop", "crop");
     re.overlay = gst_element_factory_make("textoverlay", "overlay");
+    re.compositor = gst_element_factory_make("imxcompositor_g2d", "compositor");
 
-    if (!re.bin || !re.queue || !re.capsfilter || !re.parse || !re.enc || !re.rate || !re.sink || !re.convert || !re.queue2 || !re.crop || !re.overlay || !re.convert2)
-    {
+    if (!re.bin || !re.queue || !re.capsfilter || !re.parse || !re.enc || !re.rate || !re.sink || !re.convert || !re.queue2 || !re.crop \
+        || !re.overlay || !re.convert2 || !re.compositor) {
         __LOG(LOG_CRIT, "[GST][%s:%d] rtsp element create error", _FILE_, __LINE__);
-        return -1;
+        return ret;
     }
 
-    gst_bin_add_many(GST_BIN(re.bin), re.queue, re.rate, re.convert, re.enc, re.parse, re.queue2, re.sink, re.capsfilter, re.crop, re.overlay, re.convert2, NULL);
+    gst_bin_add_many(GST_BIN(re.bin), re.queue, re.rate, re.convert, re.enc, re.parse, re.queue2, re.sink, re.capsfilter, re.crop, re.overlay, \
+        re.convert2, re.compositor, NULL);
 
-    if(!gst_bin_add(GST_BIN(pipeline), re.bin))
-    {
+    ret = gst_bin_add(GST_BIN(pipeline), re.bin);
+    if(!ret) {
         __LOG(LOG_CRIT, "[GST][%s:%d] rtsp bin add error in pipeline", _FILE_, __LINE__);
-        return -1;
-
+        return ret;
     }
 
-    if(cmdArg.mode) ret = gst_element_link_many(re.queue, re.crop, re.convert, re.enc, re.parse, re.queue2, re.sink, NULL);
-    else if(cmdArg.overlay_en) ret = gst_element_link_many(re.queue, re.crop, re.overlay, re.rate, re.capsfilter, re.convert, re.enc, re.parse, re.queue2, re.sink, NULL);
-    else ret = gst_element_link_many(re.queue, re.crop, re.rate, re.capsfilter, re.convert, re.enc, re.parse, re.queue2, re.sink, NULL);
-
-    if (!ret)
-    {
+#ifdef CHANNEL_EACH_CROP
+    if(cmdArg.overlay_en) ret = gst_element_link_many(re.queue, re.crop, re.overlay, re.convert, re.rate, re.capsfilter, re.enc, re.parse, re.queue2, re.sink, NULL);
+    else ret = gst_element_link_many(re.queue, re.crop, re.convert, re.rate, re.capsfilter, re.enc, re.parse, re.queue2, re.sink, NULL);
+    //if(cmdArg.mode) ret = gst_element_link_many(re.queue, re.crop, re.convert, re.enc, re.parse, re.queue2, re.sink, NULL);
+#else
+    ret = gst_element_link_many(re.queue, re.rate, re.capsfilter, re.convert, re.enc, re.parse, re.queue2, NULL);
+#endif
+    if (!ret) {
         __LOG(LOG_CRIT, "[GST][%s:%d] rtsp link err", _FILE_, __LINE__);
-        return -1;
+        return ret;
     }
+
+    //g_object_set(re.convert, "composition-meta-enable", TRUE, NULL);
+    //g_object_set(re.convert, "videocrop-meta-enable", TRUE, NULL);
 
     GstCaps *caps = gst_caps_new_simple("video/x-raw", "framerate", GST_TYPE_FRACTION, cmdArg.rtsp_fps, 1, NULL);
-
     g_object_set(re.capsfilter, "caps", caps, NULL);
     gst_caps_unref(caps);
 
@@ -424,8 +429,11 @@ gint RtspServerBin::init(guint8 num)
     staticPad = gst_element_get_static_pad(re.queue, "sink");
     sinkPad = gst_ghost_pad_new(g_strdup_printf("rtspServerBin_sink_ch%d", ch), staticPad);
 
-    if(!gst_element_add_pad(re.bin, sinkPad))
-        g_error("error");
+    ret = gst_element_add_pad(re.bin, sinkPad);
+    if(!ret) {
+        __LOG(LOG_CRIT, "[GST][%s:%d] rtsp pad add err", _FILE_, __LINE__);
+        return ret;
+    }
 
     gst_object_unref(staticPad);
 
@@ -457,7 +465,7 @@ gint RtspServerBin::init(guint8 num)
     
     g_free(point);
 
-    return 1;
+    return ret;
 }
 
 #if 1
@@ -469,7 +477,8 @@ void rtspStop()
 
 gint rtspStart()
 {
-    if(rtspServer) return 0;
+    gboolean ret = FALSE;
+    if(rtspServer) return ret;
 
     __LOG(LOG_NOTICE, "[RTSP][%s:%d] %s", _FILE_, __LINE__, __FUNCTION__);
     rtspServer = gst_rtsp_server_new ();
@@ -495,12 +504,12 @@ gint rtspStart()
     g_object_unref (auth);
     //g_timeout_add_seconds (2, (GSourceFunc) timeout, rtspServer);
 
-
-    if (gst_rtsp_server_attach (rtspServer, NULL) == 0) {
+    ret = gst_rtsp_server_attach (rtspServer, NULL);
+    if (!ret) {
         __LOG(LOG_CRIT, "[RTSP][%s:%d] rtsp server attach failed", _FILE_, __LINE__);
-        return -1;
+        return ret;
     }
 
-    return 1;
+    return ret;
 }
 #endif

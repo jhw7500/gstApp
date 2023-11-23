@@ -20,16 +20,23 @@
 
 #include "util.h"
 
+typedef struct _VideoData
+{
+    guint8 csi;
+} VideoData;
+
 typedef struct _VideoElement
 {
     GstElement *src;
     GstElement *teeCrop;
     GstElement *capsfilter;
     GstElement *convert;
+    GstElement *convert2[MAX_CHANNEL/2];
     GstElement *crop[MAX_CHANNEL/2];
     GstElement *tee[MAX_CHANNEL/2];
     GstElement *overlay[MAX_CHANNEL/2];
     GstElement *queue[MAX_CHANNEL/2];
+    GstElement *queue_main;
     GstElement *bin;
 } VideoElement;
 

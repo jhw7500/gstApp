@@ -16,6 +16,13 @@
 
 #include "videoBin.h"
 
+static void prepare_format(GstElement *object, gint arg0, GstCaps *caps, gpointer data)
+{
+    guint8 *csi = (guint8 *)data;
+    __LOG(LOG_NOTICE, "[GST][%s:%d] %s [%d]", _FILE_, __LINE__, __FUNCTION__, *csi);
+    __LOG(LOG_NOTICE, "[GST][%s:%d] get caps : %s", _FILE_, __LINE__, gst_caps_to_string(caps));
+}
+
 VideoBin* VideoBin::getInstance()
 {
 	static VideoBin instance;
@@ -39,10 +46,14 @@ GstPad* VideoBin::getBinCaptureSrcPad(ChannelNum ch)
 
 gint VideoBin::addBinRtspSrcPad(ChannelNum ch)
 {
-    if(be.crop[ch%2] == NULL)
+    if(be.crop[ch%2] == NULL) {
+        __LOG(LOG_NOTICE, "[GST][%s:%d] no crop rtsp pad[%d]", _FILE_, __LINE__, ch);
         srcRtspPad = gst_ghost_pad_new(g_strdup_printf("videoBin_rtsp_src_ch%d", ch%2), gst_element_get_request_pad(be.teeCrop, "src_%u"));
-    else
+    }
+    else {
+        __LOG(LOG_NOTICE, "[GST][%s:%d] crop rtsp pad[%d]", _FILE_, __LINE__, ch);
         srcRtspPad = gst_ghost_pad_new(g_strdup_printf("videoBin_rtsp_src_ch%d", ch%2), gst_element_get_request_pad(be.tee[ch%2], "src_%u"));
+    }
 
     if (!gst_element_add_pad(be.bin, srcRtspPad))
     {
@@ -55,10 +66,14 @@ gint VideoBin::addBinRtspSrcPad(ChannelNum ch)
 
 gint VideoBin::addBinRecordSrcPad(ChannelNum ch)
 {
-    if(be.crop[ch%2] == NULL)
+    if(be.crop[ch%2] == NULL) {
+        __LOG(LOG_NOTICE, "[GST][%s:%d] no crop record pad[%d]", _FILE_, __LINE__, ch);
         srcRecordPad = gst_ghost_pad_new(g_strdup_printf("videoBin_record_src_ch%d", ch%2), gst_element_get_request_pad(be.teeCrop, "src_%u"));
-    else
+    }
+    else {
+        __LOG(LOG_NOTICE, "[GST][%s:%d] crop record pad[%d]", _FILE_, __LINE__, ch);
         srcRecordPad = gst_ghost_pad_new(g_strdup_printf("videoBin_record_src_ch%d", ch%2), gst_element_get_request_pad(be.tee[ch%2], "src_%u"));
+    }
 
     if (!gst_element_add_pad(be.bin, srcRecordPad))
     {
@@ -66,7 +81,7 @@ gint VideoBin::addBinRecordSrcPad(ChannelNum ch)
         return -1;
     }
 
-    if(cmdArg.mode == TEST_MODE)
+    if(cmdArg.testMode == TEST_MODE)
     {
         gst_pad_add_probe(srcRecordPad, GST_PAD_PROBE_TYPE_BUFFER, (GstPadProbeCallback)probe_function, be.bin, NULL);
     }
@@ -107,22 +122,24 @@ VideoBin::~VideoBin()
 
 gint VideoBin::addCrop(CropDir dir)
 {
+    gboolean ret = FALSE;
     //g_print("csi:%d, dir:%d\n", csi, dir);
-    
+    __LOG(LOG_NOTICE, "[GST][%s:%d] video crop csi : %d, dir : %d", _FILE_, __LINE__, csi, dir);
+
     be.crop[dir] = gst_element_factory_make("videocrop", g_strdup_printf("crop%d", dir));
     be.tee[dir] = gst_element_factory_make("tee", g_strdup_printf("tee%d", dir));
     be.overlay[dir] = gst_element_factory_make("timeoverlay", g_strdup_printf("overaly%d", dir));
     be.queue[dir] = gst_element_factory_make(QUEUE_TYPE, g_strdup_printf("queue%d", dir));
+    be.convert2[dir] = gst_element_factory_make("imxvideoconvert_g2d", g_strdup_printf("convert%d", dir));
 
     if (dir % 2 == 0)
         g_object_set(be.crop[dir], "top", 0, "bottom", 0, "left", 0, "right", cmdArg.res[cmdArg.resMode].width, NULL);
     else
         g_object_set(be.crop[dir], "top", 0, "bottom", 0, "left", cmdArg.res[cmdArg.resMode].width, "right", 0, NULL);
 
-    if (!be.crop[dir] || !be.tee[dir] || !be.overlay[dir] || !be.queue[dir])
-    {
+    if (!be.crop[dir] || !be.tee[dir] || !be.overlay[dir] || !be.queue[dir] || !be.convert2[dir]) {
         __LOG(LOG_CRIT, "[GST][%s:%d] video crop [%d] create error", _FILE_, __LINE__, dir);
-        return -1;
+        return ret;
     }
 
     g_object_set(be.overlay[dir], "valignment", 2, NULL);
@@ -133,6 +150,7 @@ gint VideoBin::addCrop(CropDir dir)
     g_object_set(be.overlay[dir], "datetime-epoch", g_date_time_new_now_local(), NULL);
     g_object_set(be.queue[dir], "max-size-time", GST_SECOND, "max-size-buffers", cmdArg.main_fps, "leaky", 1, NULL);
 
+#if 0
     GstCaps *caps = gst_caps_new_simple("video/x-raw",
                                         "format", G_TYPE_STRING, "NV12",
                                         "width", G_TYPE_INT, cmdArg.res[cmdArg.resMode].width*2,
@@ -142,13 +160,16 @@ gint VideoBin::addCrop(CropDir dir)
 
     g_object_set(be.capsfilter, "caps", caps, NULL);
     gst_caps_unref(caps);
+#endif
 
-    gst_bin_add_many(GST_BIN(be.bin), be.crop[dir], be.tee[dir], be.overlay[dir], be.queue[dir], NULL);
-    if (!gst_element_link_many(be.teeCrop, be.queue[dir], be.crop[dir], be.tee[dir], NULL))
-    //if (!gst_element_link_many(ve.teeCrop, ve.crop[dir], ve.overlay[dir], ve.tee[dir], NULL))
-    {
+    gst_bin_add_many(GST_BIN(be.bin), be.crop[dir], be.tee[dir], be.overlay[dir], be.queue[dir], be.convert2[dir], NULL);
+    
+    if(cmdArg.overlay_en) ret = gst_element_link_many(be.teeCrop, be.crop[dir], be.overlay[dir], be.convert2[dir], be.tee[dir], NULL);
+    else ret = gst_element_link_many(be.teeCrop, be.crop[dir], be.convert2[dir], be.tee[dir], NULL);
+
+    if (!ret) {
         __LOG(LOG_CRIT, "[GST][%s:%d] crop [%d] link err", _FILE_, __LINE__, dir);
-        return -1;
+        return ret;
     }
 
 #if 0
@@ -165,17 +186,18 @@ gint VideoBin::addCrop(CropDir dir)
         g_message("videoBin_rtsp_src_ch%d", ch);
 #endif
 
-    return 0;
+    return ret;
 }
 
 gint VideoBin::init(CsiNum num)
 {
+    gboolean ret = FALSE;
     csi = num;
 
     if(be.bin != NULL)
     {
         //__LOG(LOG_NOTICE, "[GST][%s:%d] %s(%d) already init", _FILE_, __LINE__, __FUNCTION__, csi);
-        return 0;
+        return ret;
     }
 
     //__LOG(LOG_NOTICE, "[GST][%s:%d] %s[%d]", _FILE_, __LINE__, __FUNCTION__, csi);
@@ -185,16 +207,20 @@ gint VideoBin::init(CsiNum num)
     be.convert = gst_element_factory_make("imxvideoconvert_g2d", "convert");
     be.capsfilter = gst_element_factory_make("capsfilter", "caps");
     be.teeCrop = gst_element_factory_make("tee", "teeCrop");
-    g_object_set(be.src, "do-timestamp", TRUE, NULL);
+    be.queue_main = gst_element_factory_make(QUEUE_TYPE, "queue_main");
 
-    if(cmdArg.mode == TEST_MODE)
+    g_object_set(be.src, "io-mode", cmdArg.ioMode, NULL);   //0:auto, 1:rw, 2:mmap, 3:userptr, 4:dmabuf, 5:dmabuf-import
+    g_object_set(be.src, "do-timestamp", TRUE, NULL);
+    g_signal_connect(be.src, "prepare-format", G_CALLBACK(prepare_format), &csi);
+    g_object_set(be.queue_main, "max-size-time", GST_SECOND, "max-size-buffers", cmdArg.main_fps, "leaky", LEAKY_DOWNSTREAM, NULL);
+
+    if(cmdArg.testMode == TEST_MODE)
     {
         //GstPad *srcpad = gst_element_get_static_pad(be.src, "src");
         //gst_pad_add_probe(srcpad, GST_PAD_PROBE_TYPE_BUFFER, (GstPadProbeCallback)probe_function, be.src, NULL);
         //gst_pad_add_probe(srcpad, GST_PAD_PROBE_TYPE_BUFFER, (GstPadProbeCallback)probe_function, be.capsfilter, NULL);
         //gst_object_unref(srcpad);
     }
-
 
     if (csi == 0)
     {
@@ -220,23 +246,24 @@ gint VideoBin::init(CsiNum num)
     g_object_set(be.capsfilter, "caps", caps, NULL);
     gst_caps_unref(caps);
 
-    if (!be.bin || !be.src || !be.capsfilter || !be.teeCrop || !be.convert)
+    if (!be.bin || !be.src || !be.capsfilter || !be.teeCrop || !be.convert || !be.queue_main)
     {
         __LOG(LOG_CRIT, "[GST][%s:%d] video main element create error", _FILE_, __LINE__);
-        return -1;
+        return ret;
     }
-    gst_bin_add_many(GST_BIN(be.bin), be.src, be.convert, be.capsfilter, be.teeCrop, NULL);
-    if (!gst_element_link_many(be.src, be.capsfilter, be.convert, be.teeCrop, NULL))
+    gst_bin_add_many(GST_BIN(be.bin), be.src, be.convert, be.capsfilter, be.teeCrop, be.queue_main, NULL);
+    ret = gst_element_link_many(be.src, be.capsfilter, be.convert, be.teeCrop, NULL);
+    if (!ret)
     {
         __LOG(LOG_CRIT, "[GST][%s:%d] video main link err", _FILE_, __LINE__);
-        return -1;
+        return ret;
     }
-
-    if (!gst_bin_add(GST_BIN(pipeline), be.bin))
+    ret = gst_bin_add(GST_BIN(pipeline), be.bin);
+    if (!ret)
     {
         __LOG(LOG_CRIT, "[GST][%s:%d] video bin add error in pipeline", _FILE_, __LINE__);
-        return -1;
+        return ret;
     }
 
-    return 1;
+    return ret;
 }

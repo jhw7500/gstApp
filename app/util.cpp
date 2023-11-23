@@ -136,7 +136,8 @@ gint cmd_parser(int *argc, char **argv[], gpointer data)
     GError *err = NULL;
     cmdArg.ohtName = cmdArg.appname;
     cmdArg.ch_enable = 0x0f;
-    cmdArg.mode = NORMAL_MODE;
+    cmdArg.ioMode = AUTO_MODE;
+    cmdArg.testMode = NORMAL_MODE;
     cmdArg.resMode = ResFHD;
     cmdArg.log_level = DEFAULT_LOG_LEVEL;
     cmdArg.dbg_level = DEFAULT_DBG_LEVEL;
@@ -161,26 +162,28 @@ gint cmd_parser(int *argc, char **argv[], gpointer data)
     cmdArg.rtsp_id = DEFAULT_RTSP_ID;
     cmdArg.rtsp_passwd = DEFAULT_RTSP_PASSWD;
     cmdArg.overlay_en = FALSE;
+    cmdArg.split_margin_sec = DEFAULT_SPLIT_MARGIN_SEC;
 
     GOptionEntry entries[] = {
-        {"mode", 'M', 0, G_OPTION_ARG_INT, &cmdArg.mode, "mode select 0(normal), 1(test), default(0)", "INT"},
+        {"mode", 'm', 0, G_OPTION_ARG_INT, &cmdArg.ioMode, "io mode select 0(auto), 1(rw), 2(mmap), 3(userptr), 4(dmabuf), 5(dmabuf-import), default(0)", "INT"},
+        {"test", 't', 0, G_OPTION_ARG_INT, &cmdArg.testMode, "test mode select 0(normal), 1(test), default(0)", "INT"},
         {"debug", 'd', 0, G_OPTION_ARG_INT, &cmdArg.dbg_level, "debug level, default(5)", "INT"},
         {"log", 'l', 0, G_OPTION_ARG_INT, &cmdArg.log_level, "log level, default(6)", "INT"},
         {"dot", 'T', 0, G_OPTION_ARG_STRING, &cmdArg.dotDir, "save dot representation of pipeline to FILE and exit, default(/tmp)", "STRING"},
         {"channel", 'n', 0, G_OPTION_ARG_INT, &cmdArg.ch_enable, "camera channel enable bit, default(0x0f)", "HEX"},
         {"output", 'O', 0, G_OPTION_ARG_STRING, &cmdArg.mntDir, "save video & audio file to directory, default(/mnt/sd_cam)", "STRING"},
         {"res", 'e', 0, G_OPTION_ARG_INT, &cmdArg.resMode, "resolution select FHD(0) and HD(1), default(FHD)", "INT"},
-        {"fmain", 'm', 0, G_OPTION_ARG_INT, &cmdArg.main_fps, "main frame per second, default(15)", "INT"},
+        {"fmain", 'M', 0, G_OPTION_ARG_INT, &cmdArg.main_fps, "main frame per second, default(15)", "INT"},
         {"frec", 'f', 0, G_OPTION_ARG_INT, &cmdArg.rec_fps, "record frame per second, default(15)", "INT"},
         {"frtsp", 'F', 0, G_OPTION_ARG_INT, &cmdArg.rtsp_fps, "rtsp frame per second, default(15)", "INT"},
         {"brec", 'b', 0, G_OPTION_ARG_INT, &cmdArg.rec_bitrate, "record Kbyte per second, default(4096)", "INT"},
         {"brtsp", 'B', 0, G_OPTION_ARG_INT, &cmdArg.rtsp_bitrate, "rtsp Kbyte per second, default(1024)", "INT"},
         {"oht", 'o', 0, G_OPTION_ARG_STRING, &cmdArg.ohtName, "oht name, default(APPNAME)", "STRING"},
         {"delay", 'D', 0, G_OPTION_ARG_INT, &cmdArg.play_delay, "from pause to play delay, default(0)", "SECOND"},
-        {"fault", 't', 0, G_OPTION_ARG_NONE, &cmdArg.fault, "no fault setup, default(FALSE)", "NONE"},
+        {"fault", NULL, 0, G_OPTION_ARG_NONE, &cmdArg.fault, "no fault setup, default(FALSE)", "NONE"},
         {"duration", 's', 0, G_OPTION_ARG_INT, &cmdArg.duration, "recoding file split duration, default(1)", "MINUTE"},
-        {"ertsp", 'r', 0, G_OPTION_ARG_INT, &cmdArg.rtsp_en, "rtsp streaming enable, default(1)", "INT"},
-        {"erec", 'R', 0, G_OPTION_ARG_INT, &cmdArg.rec_en, "video recording enable, default(1)", "INT"},
+        {"erec", 'r', 0, G_OPTION_ARG_INT, &cmdArg.rec_en, "video recording enable, default(1)", "INT"},
+        {"ertsp", 'R', 0, G_OPTION_ARG_INT, &cmdArg.rtsp_en, "rtsp streaming enable, default(1)", "INT"},
         {"eaudio", 'a', 0, G_OPTION_ARG_NONE, &cmdArg.audio_en, "audio recording enable, default(FALSE)", "NONE"},
         {"ecap", 'c', 0, G_OPTION_ARG_NONE, &cmdArg.capture_en, "video capturing enable, default(FALSE)", "NONE"},
         {"ein", 'i', 0, G_OPTION_ARG_NONE, &cmdArg.input_en, "terminal input enable, default(FALSE)", "NONE"},
@@ -189,6 +192,7 @@ gint cmd_parser(int *argc, char **argv[], gpointer data)
         {"passwd", 'P', 0, G_OPTION_ARG_STRING, &cmdArg.rtsp_passwd, "rtsp passwd, default(semes)", "STRING"},
         {"cmax", 'x', 0, G_OPTION_ARG_INT, &cmdArg.captureMaxCnt, "capture max count, default(3)", "INT"},
         {"eover", 'v', 0, G_OPTION_ARG_NONE, &cmdArg.overlay_en, "overlay enable, default(FALSE)", "NONE"},
+        {"split", 'S', 0, G_OPTION_ARG_INT, &cmdArg.split_margin_sec, "split margin sec, default(3)", "INT"},
         {NULL}
     };
 
@@ -204,7 +208,8 @@ gint cmd_parser(int *argc, char **argv[], gpointer data)
     }
 
     g_print("oht name : %s\n", cmdArg.ohtName);
-    g_print("mode : %s\n", cmdArg.mode? "test":"normal");
+    g_print("io mode : %d\n", cmdArg.ioMode);
+    g_print("test mode : %s\n", cmdArg.testMode? "test":"normal");
     g_print("log_level : %d\n", cmdArg.log_level);
     g_print("debug_level : %d\n", cmdArg.dbg_level);
     g_print("mount directory : %s\n", cmdArg.mntDir);
@@ -232,6 +237,7 @@ gint cmd_parser(int *argc, char **argv[], gpointer data)
     g_print("rtsp id : %s\n", cmdArg.rtsp_id);
     g_print("rtsp passwd : %s\n", cmdArg.rtsp_passwd);
     g_print("overlay enable : %s\n", cmdArg.overlay_en? "TURE":"FALSE");
+    g_print("split margin sec : %d\n", cmdArg.split_margin_sec);
 
     return 1;
 }

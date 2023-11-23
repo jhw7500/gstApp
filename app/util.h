@@ -23,6 +23,7 @@
 #include <stdio.h>
 #include "util.h"
 
+#define CHANNEL_EACH_CROP
 #define DEBUG_TIMESTAMP
 #define MAX_CHANNEL 4
 #define MAX_VIDEO_SRC 2
@@ -47,6 +48,7 @@
 
 #define DEFAULT_PLAY_DELAY  0
 #define DEFAULT_CAPTURE_MAX_CNT 3
+#define DEFAULT_SPLIT_MARGIN_SEC    3
 #define DEFAULT_OVERLAY_FONT "Times New Roman Italic, 12"
 
 #define JHW_TESTx
@@ -95,7 +97,17 @@ typedef enum
 {
     NORMAL_MODE = 0,
     TEST_MODE = 1
-} gstMode;
+} TestMode;
+
+typedef enum
+{
+    AUTO_MODE = 0,
+    RW_MODE = 1,
+    MMAP_MODE =2,
+    USERPTR_MODE =3,
+    DMABUF_MODE = 4,
+    DMABUF_IMPORT_MODE = 5
+} IoMode;
 
 typedef struct _Resolution
 {
@@ -105,7 +117,8 @@ typedef struct _Resolution
 
 typedef struct _CmdArg
 {
-    gstMode mode;
+    TestMode testMode;
+    IoMode ioMode;
     gint log_level;
     gint dbg_level;
     const gchar *dotDir;
@@ -127,6 +140,7 @@ typedef struct _CmdArg
     gboolean audio_en;
     gchar *appname;
     guint8 captureMaxCnt;
+    gint split_margin_sec;
     gboolean input_en;
     const gchar *rtsp_port;
     const gchar *captureDir;

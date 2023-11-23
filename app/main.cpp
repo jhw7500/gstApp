@@ -413,6 +413,7 @@ static gboolean splitCheck(gpointer data, guint8 startSec)
     GDateTime *datetime = g_date_time_new_now_local();
     gint min = g_date_time_get_minute(datetime);
     gint sec = g_date_time_get_second(datetime);
+    gboolean force_split_f = FALSE;
     //gint microsec = g_date_time_get_microsecond(datetime);
     g_date_time_unref(datetime);
 
@@ -454,16 +455,19 @@ static gboolean splitCheck(gpointer data, guint8 startSec)
             for(i=0; i<MAX_CHANNEL; i++)
             {
                 if(muxSinkBin[i].getBinVideoSinkPad()) {
-                    if(muxSinkBin[i].getSplitSec() > secMax)
+                    gint splitSec = muxSinkBin[i].getSplitSec();
+                    if(splitSec > secMax)
                         secMax = muxSinkBin[i].getSplitSec();
-                    if(muxSinkBin[i].getSplitSec() < secMin)
+                    if(splitSec < secMin)
                         secMin = muxSinkBin[i].getSplitSec();
+                    if(splitSec > cmdArg.split_margin_sec)
+                        force_split_f = TRUE;
                 }
             }
 
-            if(secMax != secMin)
+            if(secMax - secMin > 1 || force_split_f)
             {
-                __LOG(LOG_ERR, "[GST][%s:%d] split sec max:%d min:%d", _FILE_, __LINE__, secMax, secMin);
+                __LOG(LOG_ERR, "[GST][%s:%d] split time check error : max:%d, min:%d force_split_f:%d", _FILE_, __LINE__, secMax, secMin, force_split_f);
                 for(i=0; i<MAX_CHANNEL; i++)
                     if(muxSinkBin[i].getBinVideoSinkPad()) muxSinkBin[i].splitNow(NULL, FALSE);
             }
@@ -476,7 +480,7 @@ static gboolean splitCheck(gpointer data, guint8 startSec)
     }
 
     return start_flag;
-}
+} 
 
 static void splitLoop(gpointer data)
 {
@@ -490,7 +494,7 @@ static void splitLoop(gpointer data)
             //break;
         splitCheck(data, 0);
 
-        g_usleep(10000);
+        g_usleep(1000);
     }
     __LOG(LOG_NOTICE, "[GST][%s:%d] %s break", _FILE_, __LINE__, __FUNCTION__);
 }
@@ -609,7 +613,10 @@ gint main(gint argc, gchar *argv[])
         chNum = (ChannelNum)i;
         __LOG(LOG_NOTICE, "[GST][%s:%d] ch[%d] enable", _FILE_, __LINE__, chNum);
         videoBin[chNum/2].init((CsiNum)(chNum/2));
-        //videoBin[chNum/2].addCrop((CropDir)(chNum%2));
+//#if !defined(CHANNEL_EACH_CROP)
+#ifndef CHANNEL_EACH_CROP
+        videoBin[chNum/2].addCrop((CropDir)(chNum%2));
+#endif
         if(cmdArg.rec_en)
         {
             videoBin[chNum/2].addBinRecordSrcPad(chNum);

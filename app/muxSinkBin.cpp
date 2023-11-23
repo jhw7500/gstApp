@@ -101,8 +101,7 @@ gchararray format_location(GstElement *sink, guint arg0, gpointer data)
     GDateTime *datetime = g_date_time_new_now_local();
     gint sec = g_date_time_get_second(datetime);
     gchar *date_str;
-    gint margin_sec = 3;
-
+    
 #if 1
     if(info->start_f == 0)
     {
@@ -113,7 +112,7 @@ gchararray format_location(GstElement *sink, guint arg0, gpointer data)
     }
     else
     {
-        if(sec <= margin_sec) {
+        if(sec <= cmdArg.split_margin_sec) {
             datetime = g_date_time_add_seconds(datetime, -sec);
         }
         //else if(sec >= 60-margin_sec) {
@@ -194,8 +193,10 @@ GstPad* MuxSinkBin::getBinAudioSinkPad()
 
 gint MuxSinkBin::init(guint8 num)
 {
+    gboolean ret = FALSE;
     muxSinkData.ch = num;
     muxSinkData.start_f = 0;
+
     be.bin = gst_bin_new(g_strdup_printf("muxSinkBin%d", muxSinkData.ch));
     //me.sink = gst_element_factory_make("splitmuxsink", "splitmuxsink");
     __LOG(LOG_NOTICE, "[GST][%s:%d] %s ch:%d", _FILE_, __LINE__, __FUNCTION__, muxSinkData.ch);
@@ -213,19 +214,21 @@ gint MuxSinkBin::init(guint8 num)
     g_signal_connect(be.sink, "muxer-added", G_CALLBACK(muxer_added), NULL);
     g_signal_connect(be.sink, "sink-added", G_CALLBACK(sink_added), NULL);
 
-    if (!be.bin || !be.sink)
-    {
+    if (!be.bin || !be.sink) {
         __LOG(LOG_CRIT, "[GST][%s:%d] mux element create error", _FILE_, __LINE__);
-        return -1;
+        return ret;
+    }
+    
+    ret = gst_bin_add(GST_BIN(be.bin), be.sink);
+    if(!ret) {
+        __LOG(LOG_CRIT, "[GST][%s:%d] mux add error in bin", _FILE_, __LINE__);
+        return ret;
     }
 
-    if(!gst_bin_add(GST_BIN(be.bin), be.sink))
-        g_error("error");
-
-    if(!gst_bin_add(GST_BIN(pipeline), be.bin))
-    {
+    ret =gst_bin_add(GST_BIN(pipeline), be.bin);
+    if(!ret) {
         __LOG(LOG_CRIT, "[GST][%s:%d] mux add error in pipeline", _FILE_, __LINE__);
-        return -1;
+        return ret;
     }
 
     //if(!gst_element_add_pad(me.bin, gst_ghost_pad_new(g_strdup_printf("muxBinSink_audio_ch%d", ch), gst_element_get_request_pad(me.sink, "audio_%u"))))
@@ -234,5 +237,5 @@ gint MuxSinkBin::init(guint8 num)
     //if(!gst_element_add_pad(me.bin, gst_ghost_pad_new(g_strdup_printf("muxBinSink_video_ch%d", ch), gst_element_get_request_pad(me.sink, "video_aux_%u"))))
         //g_error("error");
 
-    return 0;
+    return ret;
 }

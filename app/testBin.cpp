@@ -91,16 +91,19 @@ gint TestBin::addElement(const gchar* firstStr, ...)
 
 gint TestBin::init()
 {
-    if(be.bin) return 0;
+    gboolean ret = FALSE;
+    
+    if(be.bin) return ret;
 
     ptr = 0;
     be.bin = gst_bin_new("TestBin");
     __LOG(LOG_NOTICE, "[GST][%s:%d] %s", _FILE_, __LINE__, __FUNCTION__);
-    if(!gst_bin_add(GST_BIN(pipeline), be.bin))
-    {
+
+    ret = gst_bin_add(GST_BIN(pipeline), be.bin);
+    if(!ret) {
         __LOG(LOG_CRIT, "[GST][%s:%d] Test bin add error in pipeline", _FILE_, __LINE__);
-        return -1;
+        return ret;
     }
 
-    return 1;
+    return ret;
 }
