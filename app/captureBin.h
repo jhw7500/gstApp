@@ -36,7 +36,6 @@ typedef struct _CaptureElement
     GstElement *queue;
     GstElement *queue2;
     GstElement *convert;
-    GstElement *capsfilter;
     GstElement *parse;
     GstElement *bin;
     GstElement *sink;

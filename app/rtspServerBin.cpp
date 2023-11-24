@@ -228,11 +228,9 @@ gboolean RtspServerBin::getStartFlag()
     return rtspServerData.start_f;
 }
 
-gboolean RtspServerBin::setOverlayText(gchar *text)
+void RtspServerBin::setOverlayText(gchar *text)
 {
     g_object_set(re.overlay, "text", text, NULL);
-
-    return 1;
 }
 
 void RtspServerBin::setTimeStampDebug()
@@ -240,17 +238,15 @@ void RtspServerBin::setTimeStampDebug()
     rtspServerData.debug = TRUE;
 }
 
-gboolean RtspServerBin::getBitrate()
+void RtspServerBin::getBitrate()
 {
     gint bps;
 
     g_object_get(re.enc, "bitrate", &bps, NULL);
     __LOG(LOG_NOTICE, "[GST][%s:%d] ch%d get bitrate : %d", _FILE_, __LINE__, ch, bps);
-
-    return 1;
 }
 
-gboolean RtspServerBin::setBitrate(guint16 data)
+void RtspServerBin::setBitrate(guint16 data)
 {
     gint bps;
 
@@ -258,11 +254,9 @@ gboolean RtspServerBin::setBitrate(guint16 data)
     g_object_get(re.enc, "bitrate", &bps, NULL);
     __LOG(LOG_NOTICE, "[GST][%s:%d] ch%d set bitrate : %d", _FILE_, __LINE__, ch, bps);
     rtspServerData.caps = NULL;
-
-    return 1;
 }
 
-gboolean RtspServerBin::getFps()
+void RtspServerBin::getFps()
 {
     //gint fps;
     GstCaps *caps;
@@ -271,11 +265,9 @@ gboolean RtspServerBin::getFps()
     __LOG(LOG_NOTICE, "[GST][%s:%d] ch%d get fps : %s", _FILE_, __LINE__, ch, gst_caps_to_string(caps));
 
     gst_caps_unref(caps);
-
-    return 1;
 }
 
-gboolean RtspServerBin::setFps(guint16 data)
+void RtspServerBin::setFps(guint16 data)
 {
     //gint fps;
     GstCaps *caps;
@@ -298,23 +290,57 @@ gboolean RtspServerBin::setFps(guint16 data)
     rtspServerData.caps = NULL;
 
     gst_caps_unref(caps);
-
-    return 1;
 }
 
-gboolean RtspServerBin::getCaps()
+void RtspServerBin::getCaps()
 {
     GstCaps *caps;
 
-    if(rtspServerData.appsrc == NULL) return 0;
+    if(rtspServerData.appsrc == NULL) return;
 
     g_object_get(rtspServerData.appsrc, "caps", &caps, NULL);
     //g_object_get(info->appsrc, "caps", &caps, NULL);
     __LOG(LOG_NOTICE, "[GST][%s:%d] ch%d get caps : %s", _FILE_, __LINE__, ch, gst_caps_to_string(caps));
 
     gst_caps_unref(caps);
+}
 
-    return 1;
+void RtspServerBin::setRotation(guint16 data)
+{
+    gint rotation;
+
+    //g_object_get(re.enc, "bitrate", &bps, NULL);
+    //__LOG(LOG_NOTICE, "[GST][%s:%d] ch%d get bitrate : %d", _FILE_, __LINE__, ch, bps);
+    g_object_set(re.convert, "rotation", data, NULL);
+    g_object_get(re.convert, "rotation", &rotation, NULL);
+    __LOG(LOG_NOTICE, "[GST][%s:%d] ch%d set rotation : %d", _FILE_, __LINE__, ch, rotation);
+}
+
+void RtspServerBin::getRotation()
+{
+    gint rotation;
+
+    g_object_get(re.convert, "rotation", &rotation, NULL);
+    __LOG(LOG_NOTICE, "[GST][%s:%d] ch%d get rotation : %d", _FILE_, __LINE__, ch, rotation);
+}
+
+void RtspServerBin::setGop(guint16 data)
+{
+    gint gop;
+
+    //g_object_get(re.enc, "bitrate", &bps, NULL);
+    //__LOG(LOG_NOTICE, "[GST][%s:%d] ch%d get bitrate : %d", _FILE_, __LINE__, ch, bps);
+    g_object_set(re.enc, "gop-size", data, NULL);
+    g_object_get(re.enc, "gop-size", &gop, NULL);
+    __LOG(LOG_NOTICE, "[GST][%s:%d] ch%d set gop_size : %d", _FILE_, __LINE__, ch, gop);
+}
+
+void RtspServerBin::getGop()
+{
+    gint gop;
+
+    g_object_get(re.enc, "gop-size", &gop, NULL);
+    __LOG(LOG_NOTICE, "[GST][%s:%d] ch%d get gop_size : %d", _FILE_, __LINE__, ch, gop);
 }
 
 RtspServerBin* RtspServerBin::getInstance()
@@ -397,8 +423,9 @@ gint RtspServerBin::init(guint8 num)
 
     //g_object_set(re.convert, "composition-meta-enable", TRUE, NULL);
     //g_object_set(re.convert, "videocrop-meta-enable", TRUE, NULL);
+    g_object_set(re.convert, "rotation", cmdArg.rtspRotationMode[ch], NULL);
 
-    GstCaps *caps = gst_caps_new_simple("video/x-raw", "framerate", GST_TYPE_FRACTION, cmdArg.rtsp_fps, 1, NULL);
+    GstCaps *caps = gst_caps_new_simple("video/x-raw", "framerate", GST_TYPE_FRACTION, cmdArg.fps[STREAM_RTSP], 1, NULL);
     g_object_set(re.capsfilter, "caps", caps, NULL);
     gst_caps_unref(caps);
 
@@ -412,12 +439,12 @@ gint RtspServerBin::init(guint8 num)
     g_object_set(re.overlay, "halignment", 0, NULL);
     g_object_set(re.overlay, "font-desc", DEFAULT_OVERLAY_FONT, NULL);
 
-    g_object_set(re.enc, "bitrate", cmdArg.rtsp_bitrate, NULL);
-    g_object_set(re.enc, "gop-size", 15, NULL);
-    g_object_set(re.queue, "max-size-time", GST_SECOND, "max-size-buffers", cmdArg.rtsp_fps, "leaky", LEAKY_DOWNSTREAM, NULL);
-    g_object_set(re.queue2, "max-size-time", GST_SECOND, "max-size-buffers", cmdArg.rtsp_fps, "leaky", LEAKY_DOWNSTREAM, NULL);
+    g_object_set(re.enc, "bitrate", cmdArg.bps[STREAM_RTSP], NULL);
+    g_object_set(re.enc, "gop-size", cmdArg.gop[STREAM_RTSP], NULL);
+    g_object_set(re.queue, "max-size-time", GST_SECOND, "max-size-buffers", cmdArg.fps[STREAM_RTSP], "leaky", LEAKY_DOWNSTREAM, NULL);
+    g_object_set(re.queue2, "max-size-time", GST_SECOND, "max-size-buffers", cmdArg.fps[STREAM_RTSP], "leaky", LEAKY_DOWNSTREAM, NULL);
     //g_object_set(re.capsfilter, "max-size-time", 5*GST_SECOND, "max-size-buffers", 60, "leaky", 1, NULL);
-    g_object_set(re.sink, "max-buffers", cmdArg.rtsp_fps, NULL);
+    g_object_set(re.sink, "max-buffers", cmdArg.fps[STREAM_RTSP], NULL);
     g_object_set(re.sink, "drop", TRUE, NULL);
     //g_object_set(pipe->sink, "max-lateness", 1*GST_SECOND, NULL);
     //g_object_set(pipe->sink, "render-delay", 100*GST_MSECOND, NULL);

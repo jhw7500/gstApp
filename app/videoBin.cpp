@@ -23,6 +23,23 @@ static void prepare_format(GstElement *object, gint arg0, GstCaps *caps, gpointe
     __LOG(LOG_NOTICE, "[GST][%s:%d] get caps : %s", _FILE_, __LINE__, gst_caps_to_string(caps));
 }
 
+void VideoBin::getIoMode()
+{
+    gint ioMode;
+
+    g_object_get(be.src, "io-mode", &ioMode, NULL);
+    __LOG(LOG_NOTICE, "[GST][%s:%d] csi%d get io-mode : %d", _FILE_, __LINE__, csi, ioMode);
+}
+
+void VideoBin::setIoMode(guint16 data)
+{
+    gint ioMode;
+
+    g_object_set(be.src, "io-mode", data, NULL);
+    g_object_get(be.src, "io-mode", &ioMode, NULL);
+    __LOG(LOG_NOTICE, "[GST][%s:%d] csi%d set io-mode : %d", _FILE_, __LINE__, csi, ioMode);
+}
+
 VideoBin* VideoBin::getInstance()
 {
 	static VideoBin instance;
@@ -209,6 +226,7 @@ gint VideoBin::init(CsiNum num)
     be.teeCrop = gst_element_factory_make("tee", "teeCrop");
     be.queue_main = gst_element_factory_make(QUEUE_TYPE, "queue_main");
 
+    g_object_set(be.convert, "rotation", cmdArg.csiRotationMode[csi], NULL);
     g_object_set(be.src, "io-mode", cmdArg.ioMode, NULL);   //0:auto, 1:rw, 2:mmap, 3:userptr, 4:dmabuf, 5:dmabuf-import
     g_object_set(be.src, "do-timestamp", TRUE, NULL);
     g_signal_connect(be.src, "prepare-format", G_CALLBACK(prepare_format), &csi);

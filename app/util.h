@@ -30,9 +30,10 @@
 
 #define DEFAULT_RECORD_BITRATE  4096
 #define DEFAULT_RTSP_BITRATE    1024
-#define DEFAULT_MAIN_FPS 15
+#define DEFAULT_MAIN_FPS    15
 #define DEFAULT_RECORD_FPS  15
-#define DEFAULT_RTSP_FPS 15
+#define DEFAULT_RTSP_FPS    15
+#define DEFAULT_GOP_SIZE    15
 #define DEFUALT_DURATION    1
 #define DEFAULT_DBG_LEVEL   5
 #define DEFAULT_LOG_LEVEL   6
@@ -46,7 +47,7 @@
 #define LEAKY_UPSTREAM      1
 #define LEAKY_DOWNSTREAM    2
 
-#define DEFAULT_PLAY_DELAY  0
+#define DEFAULT_PLAY_DELAY  3
 #define DEFAULT_CAPTURE_MAX_CNT 3
 #define DEFAULT_SPLIT_MARGIN_SEC    3
 #define DEFAULT_OVERLAY_FONT "Times New Roman Italic, 12"
@@ -69,7 +70,7 @@ typedef enum
 
 typedef enum
 {
-    STREAM_RECORD = 0,
+    STREAM_REC = 0,
     STREAM_RTSP = 1
 } StreamMode;
 
@@ -109,6 +110,16 @@ typedef enum
     DMABUF_IMPORT_MODE = 5
 } IoMode;
 
+typedef enum
+{
+    NONE_MODE = 0,
+    ROTATE_90_MODE = 1,
+    ROTATE_180_MODE =2,
+    ROTATE_270_MODE =3,
+    HORIZONTAL_FLIP_MODE = 4,
+    VERTICAL_FLIP_MODE = 5
+} RotationMode;
+
 typedef struct _Resolution
 {
     guint16 width;
@@ -119,6 +130,13 @@ typedef struct _CmdArg
 {
     TestMode testMode;
     IoMode ioMode;
+    RotationMode csiRotationMode[MAX_CHANNEL/2];
+    RotationMode recRotationMode[MAX_CHANNEL];
+    RotationMode rtspRotationMode[MAX_CHANNEL];
+    gint fps[MAX_CHANNEL/2];
+    gint bps[MAX_CHANNEL/2];
+    gboolean stream_en[MAX_CHANNEL/2];
+    gint gop[MAX_CHANNEL/2];
     gint log_level;
     gint dbg_level;
     const gchar *dotDir;
@@ -127,15 +145,9 @@ typedef struct _CmdArg
     gint ch_enable;
     ResMode resMode;
     gint main_fps;
-    gint rec_fps;
-    gint rtsp_fps;
-    gint rec_bitrate;
-    gint rtsp_bitrate;
     gint play_delay;
     gboolean fault;
     gint duration;
-    gboolean rtsp_en;
-    gboolean rec_en;
     gboolean capture_en;
     gboolean audio_en;
     gchar *appname;

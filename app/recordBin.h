@@ -45,11 +45,15 @@ public :
 	gint destroy() ;
     GstPad* getBinSinkPad();
     GstPad* getBinSrcPad();
-    gboolean setBitrate(guint16 data);
-    gboolean getBitrate();
-    gboolean setFps(guint16 data);
-    gboolean getFps();
-    gboolean setOverlayText(gchar *text);
+    void setBitrate(guint16 data);
+    void getBitrate();
+    void setFps(guint16 data);
+    void getFps();
+    void setOverlayText(gchar *text);
+    void setRotation(guint16 data);
+    void getRotation();
+    void setGop(guint16 data);
+    void getGop();
 
 private :
 	

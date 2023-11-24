@@ -152,7 +152,6 @@ gint CaptureBin::init(guint8 num)
     be.bin = gst_bin_new(g_strdup_printf("captureBin%d", ch));
     be.queue = gst_element_factory_make(QUEUE_TYPE, "queue");
     be.queue2 = gst_element_factory_make(QUEUE_TYPE, "queue2");
-    be.capsfilter = gst_element_factory_make("capsfilter", "capsfilter");
     be.convert = gst_element_factory_make("imxvideoconvert_g2d", "convert");
     be.parse = gst_element_factory_make("h264parse", "h264parse");
     be.enc = gst_element_factory_make("jpegenc", "jpegenc");
@@ -160,12 +159,12 @@ gint CaptureBin::init(guint8 num)
     be.sink = gst_element_factory_make("appsink", "appsink");
     be.crop = gst_element_factory_make("videocrop", "crop");
 
-    if (!be.bin || !be.queue || !be.capsfilter || !be.parse || !be.enc || !be.rate || !be.sink || !be.convert || !be.queue2 || !be.crop) {
+    if (!be.bin || !be.queue || !be.parse || !be.enc || !be.rate || !be.sink || !be.convert || !be.queue2 || !be.crop) {
         __LOG(LOG_CRIT, "[GST][%s:%d] capture element create error", _FILE_, __LINE__);
         return ret;
     }
 
-    gst_bin_add_many(GST_BIN(be.bin), be.queue, be.rate, be.convert, be.enc, be.parse, be.queue2, be.sink, be.capsfilter, be.crop, NULL);
+    gst_bin_add_many(GST_BIN(be.bin), be.queue, be.rate, be.convert, be.enc, be.parse, be.queue2, be.sink, be.crop, NULL);
 
     ret = gst_bin_add(GST_BIN(pipeline), be.bin);
     if(!ret) {
@@ -180,11 +179,6 @@ gint CaptureBin::init(guint8 num)
         return ret;
     }
 
-    GstCaps *caps = gst_caps_new_simple("video/x-raw", "framerate", GST_TYPE_FRACTION, cmdArg.rtsp_fps, 1, NULL);
-
-    g_object_set(be.capsfilter, "caps", caps, NULL);
-    gst_caps_unref(caps);
-
     if (ch % 2 == 0)
         g_object_set(be.crop, "top", 0, "bottom", 0, "left", cmdArg.res[cmdArg.resMode].width, "right", 0, NULL);
     else
@@ -193,10 +187,10 @@ gint CaptureBin::init(guint8 num)
     //if(cmdArg.rtsp_fps >= 25) g_object_set(re.rate, "max-rate", cmdArg.rtsp_fps, "drop-only", TRUE, NULL);
 
     //g_object_set(re.enc, "bitrate", cmdArg.rtsp_bitrate, NULL);
-    g_object_set(be.queue, "max-size-time", GST_SECOND, "max-size-buffers", cmdArg.rtsp_fps, "leaky", LEAKY_DOWNSTREAM, NULL);
-    g_object_set(be.queue2, "max-size-time", GST_SECOND, "max-size-buffers", cmdArg.rtsp_fps, "leaky", LEAKY_DOWNSTREAM, NULL);
+    g_object_set(be.queue, "max-size-time", GST_SECOND, "max-size-buffers", DEFAULT_MAIN_FPS, "leaky", LEAKY_DOWNSTREAM, NULL);
+    g_object_set(be.queue2, "max-size-time", GST_SECOND, "max-size-buffers", DEFAULT_MAIN_FPS, "leaky", LEAKY_DOWNSTREAM, NULL);
     //g_object_set(re.capsfilter, "max-size-time", 5*GST_SECOND, "max-size-buffers", 60, "leaky", 1, NULL);
-    g_object_set(be.sink, "max-buffers", cmdArg.rtsp_fps, NULL);
+    g_object_set(be.sink, "max-buffers", DEFAULT_MAIN_FPS, NULL);
     g_object_set(be.sink, "drop", TRUE, NULL);
     //g_object_set(pipe->sink, "max-lateness", 1*GST_SECOND, NULL);
     //g_object_set(pipe->sink, "render-delay", 100*GST_MSECOND, NULL);

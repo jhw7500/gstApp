@@ -64,14 +64,18 @@ public :
 	gint init(guint8 num) ;
 	gint destroy() ;
     GstPad* getBinSinkPad();
-    gboolean getBitrate();
-    gboolean setBitrate(guint16 data);
-    gboolean getFps();
-    gboolean setFps(guint16 data);
-    gboolean getCaps();
-    gboolean setOverlayText(gchar *text);
     gboolean getStartFlag();
+    void getBitrate();
+    void setBitrate(guint16 data);
+    void getFps();
+    void setFps(guint16 data);
+    void getCaps();
+    void setOverlayText(gchar *text);
+    void setRotation(guint16 data);
+    void getRotation();
     void setTimeStampDebug();
+    void setGop(guint16 data);
+    void getGop();
 
 private :
 	

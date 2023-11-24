@@ -55,6 +55,8 @@ public :
     GstPad* getBinRtspSrcPad(ChannelNum ch);
     GstPad* getBinRecordSrcPad(ChannelNum ch);
     GstPad* getBinCaptureSrcPad(ChannelNum ch);
+    void getIoMode();
+    void setIoMode(guint16 data);
 
 private :
 	

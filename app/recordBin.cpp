@@ -36,14 +36,12 @@ GstPad* RecordBin::getBinSinkPad()
     return sinkPad;
 }
 
-gboolean RecordBin::setOverlayText(gchar *text)
+void RecordBin::setOverlayText(gchar *text)
 {
     g_object_set(re.overlay, "text", text, NULL);
-
-    return 1;
 }
 
-gboolean RecordBin::getBitrate()
+void RecordBin::getBitrate()
 {
     gint bps;
 
@@ -51,11 +49,9 @@ gboolean RecordBin::getBitrate()
     //__LOG(LOG_NOTICE, "[GST][%s:%d] ch%d get bitrate : %d", _FILE_, __LINE__, ch, bps);
     g_object_get(re.enc, "bitrate", &bps, NULL);
     __LOG(LOG_NOTICE, "[GST][%s:%d] ch%d get bitrate : %d", _FILE_, __LINE__, ch, bps);
-
-    return 1;
 }
 
-gboolean RecordBin::setBitrate(guint16 data)
+void RecordBin::setBitrate(guint16 data)
 {
     gint bps;
 
@@ -64,11 +60,9 @@ gboolean RecordBin::setBitrate(guint16 data)
     g_object_set(re.enc, "bitrate", data, NULL);
     g_object_get(re.enc, "bitrate", &bps, NULL);
     __LOG(LOG_NOTICE, "[GST][%s:%d] ch%d set bitrate : %d", _FILE_, __LINE__, ch, bps);
-
-    return 1;
 }
 
-gboolean RecordBin::getFps()
+void RecordBin::getFps()
 {
     //gint fps;
     GstCaps *caps;
@@ -81,11 +75,9 @@ gboolean RecordBin::getFps()
 
     gst_caps_unref(caps);
     g_free(caps_str);
-
-    return 1;
 }
 
-gboolean RecordBin::setFps(guint16 data)
+void RecordBin::setFps(guint16 data)
 {
     //gint fps;
     GstCaps *caps;
@@ -110,8 +102,44 @@ gboolean RecordBin::setFps(guint16 data)
 
     gst_caps_unref(caps);
     g_free(caps_str);
+}
 
-    return 1;
+void RecordBin::setRotation(guint16 data)
+{
+    gint rotation;
+
+    //g_object_get(re.enc, "bitrate", &bps, NULL);
+    //__LOG(LOG_NOTICE, "[GST][%s:%d] ch%d get bitrate : %d", _FILE_, __LINE__, ch, bps);
+    g_object_set(re.convert, "rotation", data, NULL);
+    g_object_get(re.convert, "rotation", &rotation, NULL);
+    __LOG(LOG_NOTICE, "[GST][%s:%d] ch%d set rotation : %d", _FILE_, __LINE__, ch, rotation);
+}
+
+void RecordBin::getRotation()
+{
+    gint rotation;
+
+    g_object_get(re.convert, "rotation", &rotation, NULL);
+    __LOG(LOG_NOTICE, "[GST][%s:%d] ch%d get rotation : %d", _FILE_, __LINE__, ch, rotation);
+}
+
+void RecordBin::setGop(guint16 data)
+{
+    gint gop;
+
+    //g_object_get(re.enc, "bitrate", &bps, NULL);
+    //__LOG(LOG_NOTICE, "[GST][%s:%d] ch%d get bitrate : %d", _FILE_, __LINE__, ch, bps);
+    g_object_set(re.enc, "gop-size", data, NULL);
+    g_object_get(re.enc, "gop-size", &gop, NULL);
+    __LOG(LOG_NOTICE, "[GST][%s:%d] ch%d set gop_size : %d", _FILE_, __LINE__, ch, gop);
+}
+
+void RecordBin::getGop()
+{
+    gint gop;
+
+    g_object_get(re.enc, "gop-size", &gop, NULL);
+    __LOG(LOG_NOTICE, "[GST][%s:%d] ch%d get gop_size : %d", _FILE_, __LINE__, ch, gop);
 }
 
 RecordBin::RecordBin()
@@ -173,8 +201,9 @@ gint RecordBin::init(guint8 num)
         return ret;
     }
 
-    GstCaps *caps = gst_caps_new_simple("video/x-raw", "framerate", GST_TYPE_FRACTION, cmdArg.rec_fps, 1, NULL);
+    g_object_set(re.convert, "rotation", cmdArg.recRotationMode[ch], NULL);
 
+    GstCaps *caps = gst_caps_new_simple("video/x-raw", "framerate", GST_TYPE_FRACTION, cmdArg.fps[STREAM_REC], 1, NULL);
     g_object_set(re.capsfilter, "caps", caps, NULL);
     gst_caps_unref(caps);
 
@@ -188,12 +217,12 @@ gint RecordBin::init(guint8 num)
     g_object_set(re.overlay, "halignment", 0, NULL);
     g_object_set(re.overlay, "font-desc", DEFAULT_OVERLAY_FONT, NULL);
 
-    g_object_set(re.enc, "bitrate", cmdArg.rec_bitrate, NULL);
-    g_object_set(re.enc, "gop-size", 15, NULL);
+    g_object_set(re.enc, "bitrate", cmdArg.bps[STREAM_REC], NULL);
+    g_object_set(re.enc, "gop-size", cmdArg.gop[STREAM_REC], NULL);
     //g_object_set(re.parse, "config-interval", -1, NULL);
     //g_object_set(re.rate, "max-rate", MAIN_FPS, "drop-only", FALSE, NULL);
-    g_object_set(re.queue, "max-size-time", GST_SECOND, "max-size-buffers", cmdArg.rec_fps, "leaky", LEAKY_DOWNSTREAM, NULL);
-    g_object_set(re.queue2, "max-size-time", GST_SECOND, "max-size-buffers", cmdArg.rec_fps, "leaky", LEAKY_DOWNSTREAM, NULL);
+    g_object_set(re.queue, "max-size-time", GST_SECOND, "max-size-buffers", cmdArg.fps[STREAM_REC], "leaky", LEAKY_DOWNSTREAM, NULL);
+    g_object_set(re.queue2, "max-size-time", GST_SECOND, "max-size-buffers", cmdArg.fps[STREAM_REC], "leaky", LEAKY_DOWNSTREAM, NULL);
 
     sinkPad = gst_ghost_pad_new(g_strdup_printf("recordBin_sink_ch%d", ch), gst_element_get_static_pad(re.queue, "sink"));
 
