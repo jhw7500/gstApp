@@ -19,6 +19,7 @@
 #include "rtspServerBin.h"
 #include "captureBin.h"
 #include "parser.h"
+#include "aes.h"
 #include <glib-unix.h>
 #include <fcntl.h>
 //#include <signal.h>
@@ -166,6 +167,8 @@ static void check_terminal_input(gpointer arg)  //(gpointer arg0, gpointer arg1,
     gchar buffer[64];
 
     gint flags = fcntl(STDIN_FILENO, F_GETFL, 0);
+    ParserClass* parser = ParserClass::getInstance();
+
     fcntl(STDIN_FILENO, F_SETFL, flags | O_NONBLOCK);
 
     __LOG(LOG_NOTICE, "[TERMINAL][%s:%d] %s start", _FILE_, __LINE__, __FUNCTION__);
@@ -183,7 +186,7 @@ static void check_terminal_input(gpointer arg)  //(gpointer arg0, gpointer arg1,
         {
             buffer[bytesRead] = '\0';
             g_print("Input: %s", buffer);
-            cmd_parser(buffer, arg);
+            parser->cmd_parser(buffer, arg);
         }
         
     } while(1);
@@ -199,7 +202,7 @@ static gboolean splitCheck(gpointer data, guint8 startSec)
     static gboolean start_flag = 0;
     static gint target_min = -1;
     guint8 i;
-    gint secMax=0, secMin=59;
+    gint splitMax=0, splitMin=59999;
     GDateTime *datetime = g_date_time_new_now_local();
     gint min = g_date_time_get_minute(datetime);
     gint sec = g_date_time_get_second(datetime);
@@ -246,19 +249,21 @@ static gboolean splitCheck(gpointer data, guint8 startSec)
             {
                 if(muxSinkBin[i].getBinVideoSinkPad())
                 {
-                    gint splitSec = muxSinkBin[i].getSplitSec();
-                    if(splitSec > secMax)
-                        secMax = muxSinkBin[i].getSplitSec();
-                    if(splitSec < secMin)
-                        secMin = muxSinkBin[i].getSplitSec();
-                    if(splitSec > cmdArg.split_margin_sec)
+                    gint splitMsec = muxSinkBin[i].getSplitMsec();
+                    __LOG(LOG_INFO, "[GST][%s:%d] splitMsec[%d] : %d", _FILE_, __LINE__, i, splitMsec);
+                    if(splitMsec > splitMax)
+                        splitMax = muxSinkBin[i].getSplitMsec();
+                    if(splitMsec < splitMin)
+                        splitMin = muxSinkBin[i].getSplitMsec();
+                    if(splitMsec > 2000)
                         force_split_f = TRUE;
                 }
             }
+            __LOG(LOG_INFO, "[GST][%s:%d] splitMax : %d, splitMin : %d", _FILE_, __LINE__, splitMax, splitMin);
 
-            if(secMax - secMin > 1 || force_split_f)
+            if(splitMax - splitMin > cmdArg.split_margin_msec || force_split_f)
             {
-                __LOG(LOG_ERR, "[GST][%s:%d] split time check error : max:%d, min:%d force_split_f:%d", _FILE_, __LINE__, secMax, secMin, force_split_f);
+                __LOG(LOG_ERR, "[GST][%s:%d] split time check error : max:%d, min:%d force_split_f:%d", _FILE_, __LINE__, splitMax, splitMin, force_split_f);
                 __LOG(LOG_NOTICE, "[GST][%s:%d] split now", _FILE_, __LINE__);
                 for(i=0; i<MAX_CHANNEL; i++)
                     if(muxSinkBin[i].getBinVideoSinkPad()) muxSinkBin[i].splitNow(NULL, FALSE);
@@ -334,6 +339,29 @@ static gboolean setSRT(gpointer arg)
     return TRUE;
 }
 
+gint getPasswdWithAES(void)
+{
+	gint ret = 0;
+	gchar passwd[1024] = { 0, };
+    const gchar *path = DEFAULT_PASSWD_PATH;
+	//info->encrypt.id = strdup(DEFAULT_ENCRYPT_ID);
+	if(encrypt_get_passwd(path, passwd) < 0)
+	{
+		/* create */
+		ret = encrypt_change_passwd(path, NULL, DEFAULT_RTSP_PASSWD);
+		if(ret < 0) {
+			__LOG(LOG_ERR, "[CFG][%s:%d] Error change passwd .. ", _FILE_, __LINE__);
+		}
+		cmdArg.rtsp_passwd = strdup(DEFAULT_RTSP_PASSWD);
+	}
+	else
+		cmdArg.rtsp_passwd = strdup(passwd);
+
+	__LOG(LOG_NOTICE, "[CFG][%s:%d] id : %s, passwd : %s", _FILE_, __LINE__, cmdArg.rtsp_id, cmdArg.rtsp_passwd);
+
+	return ret;
+}
+
 gint main(gint argc, gchar *argv[]) 
 {
     atexit(cleanup);
@@ -350,14 +378,16 @@ gint main(gint argc, gchar *argv[])
         nano_str="";
     printf("This program i linked against Gstreamer %d.%d.%d %s\n", major, minor, micro, nano_str);
 
+    ParserClass* parser = ParserClass::getInstance();
     cmdArg.appname = CHARNEXT(argv[0], '/');
-    init_arg();
+    parser->init_arg();
     //attachInterruptHandlers();
-    json_parser(DEFAULT_PATH_JSON);
-    if(arg_parser(&argc, &argv, &cmdArg) < 0)
+    parser->json_parser(DEFAULT_PATH_JSON);
+    if(parser->arg_parser(&argc, &argv, &cmdArg) < 0)
         return -1;
-        
-    print_option();
+    
+    getPasswdWithAES();
+    parser->print_option();
     //MuxBin* muxBin = MuxBin::getInstance();
     GstBus *bus;
     VideoBin videoBin[MAX_VIDEO_SRC];

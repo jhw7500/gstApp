@@ -14,6 +14,7 @@
 #ifndef _AES_H_
 #define _AES_H_
 
+#define DEFAULT_PASSWD_PATH "/root/shared_v/.passwd"
 typedef unsigned int            UINT;
 typedef unsigned char           BYTE;
 typedef unsigned char*          LPBYTE;
@@ -25,7 +26,7 @@ typedef const unsigned char*    LPCBYTE;
 
 VOID AES_ECB_Encrypt(LPCBYTE Input, LPCBYTE Key, LPBYTE Output, int Length);
 VOID AES_ECB_Decrypt(LPCBYTE Input, LPCBYTE Key, LPBYTE Output, int Length);
-int encrypt_get_passwd(char *filename, char *passwd);
-int encrypt_change_passwd(char *filename, char *cur_passwd, const char *change_passwd);
+int encrypt_get_passwd(const char *filename, char *passwd);
+int encrypt_change_passwd(const char *filename, char *cur_passwd, const char *change_passwd);
 
 #endif //_AES_H_

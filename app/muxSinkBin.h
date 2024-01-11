@@ -25,7 +25,7 @@ typedef struct _MuxSinkData
 {
     guint8 ch;
     guint8 start_f;
-    gint split_sec;
+    gint split_msec;
 } MuxSinkData;
 
 class MuxSinkBin
@@ -43,7 +43,7 @@ public :
     gboolean addBinAudioSinkPad();
     gboolean addBinVideoSinkPad();
     guint8 getStartFlag();
-    gint getSplitSec();
+    gint getSplitMsec();
     //gchararray format_location(GstElement *sink, guint arg0, gpointer data);
 private :
     //static gchararray format_location(GstElement *sink, guint arg0, gpointer data);

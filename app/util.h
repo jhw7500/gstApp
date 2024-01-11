@@ -131,7 +131,7 @@ typedef struct _CmdArg
     gboolean audio_en;
     const gchar *appname;
     gint captureMaxCnt;
-    gint split_margin_sec;
+    gint split_margin_msec;
     gboolean input_en;
     const gchar *rtsp_port;
     const gchar *captureDir;

@@ -1,6 +1,6 @@
 /*
  *
- * Cantops parser.cpp support
+ * Cantops aes.cpp support
  *
  * Copyright (C)2023 Cantops, Inc. All rights reserved.
  *
@@ -43,7 +43,7 @@
 
 #define DEFAULT_PLAY_DELAY  3
 #define DEFAULT_CAPTURE_MAX_CNT 3
-#define DEFAULT_SPLIT_MARGIN_SEC    2
+#define DEFAULT_SPLIT_MARGIN_MSEC    100
 
 #define DEFULAT_DOT_PATH    "/tmp"
 #define JHW_TESTx
@@ -55,11 +55,29 @@
 #define DEFAULT_CAPTURE_PATH   "/mnt/sd_cam/capture"
 #endif
 
-gint cmd_parser(gchar *path, gpointer data);
-gint json_parser(const gchar *path);
-gint arg_parser(int *argc, char **argv[], gpointer data);
 gboolean bus_message_parse(GstBus *bus, GstMessage *message, gpointer data);
-void print_option();
-void init_arg();
+
+class ParserClass
+{
+public :
+	static ParserClass* getInstance() ;
+    ParserClass();
+    ~ParserClass();
+	gint init() ;
+	gint destroy() ;
+    gint cmd_parser(gchar *path, gpointer data);
+    gint json_parser(const gchar *path);
+    gint arg_parser(int *argc, char **argv[], gpointer data);
+    void print_option();
+    void init_arg();
+    
+private :
+	
+public :
+	gboolean m_flagDestroy;
+	
+private :
+
+};
 
 #endif

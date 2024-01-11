@@ -86,9 +86,9 @@ gboolean MuxSinkBin::splitNow(gpointer data, gboolean timer_en)
     return TRUE;
 }
 
-gint MuxSinkBin::getSplitSec()
+gint MuxSinkBin::getSplitMsec()
 {
-    return muxSinkData.split_sec;
+    return muxSinkData.split_msec;
 }
 
 gchararray format_location(GstElement *sink, guint arg0, gpointer data)
@@ -96,6 +96,7 @@ gchararray format_location(GstElement *sink, guint arg0, gpointer data)
     MuxSinkData *info = (MuxSinkData *)data;
     GDateTime *datetime = g_date_time_new_now_local();
     gint sec = g_date_time_get_second(datetime);
+    gint msec = g_date_time_get_microsecond(datetime);
     gchar *date_str;
     static gboolean g_start_rec = FALSE;
 
@@ -109,16 +110,18 @@ gchararray format_location(GstElement *sink, guint arg0, gpointer data)
     }
     else
     {
-        if(sec <= cmdArg.split_margin_sec) {
-            datetime = g_date_time_add_seconds(datetime, -sec);
+        if(sec <= cmdArg.split_margin_msec) {
+            //datetime = g_date_time_add_seconds(datetime, -sec);
         }
         //else if(sec >= 60-margin_sec) {
         //    datetime = g_date_time_add_seconds(datetime, 60-sec);
         //}
     }
 #endif
-    info->split_sec = sec;
-    date_str = g_date_time_format(datetime, "%Y%m%d_%H%M%S");
+    //info->split_msec = sec;
+    info->split_msec = sec*1000 + msec/1000;
+    //__LOG(LOG_NOTICE, "[GST][%s:%d] ch%d, %d*1000+%d/1000=%d", _FILE_, __LINE__, info->ch, sec, msec, info->split_msec);
+    date_str = g_date_time_format(datetime, "%Y%m%d_%H%M00");
     gchararray file_name = g_strdup_printf("%s/%s_%s-ch%d.mp4", cmdArg.mntDir, cmdArg.ohtName, date_str, info->ch);
     
     //__LOG(LOG_NOTICE, "[GST][%s:%d] %s : %s", _FILE_, __LINE__, __FUNCTION__, file_name);
@@ -157,7 +160,7 @@ MuxSinkBin::MuxSinkBin()
     sinkVideoPad = NULL;
     be.bin = NULL;
     muxSinkData.start_f = 0;
-    muxSinkData.split_sec = 0;
+    muxSinkData.split_msec = 0;
 }
 
 MuxSinkBin::~MuxSinkBin()

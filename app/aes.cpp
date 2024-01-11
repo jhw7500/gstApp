@@ -35,7 +35,6 @@
 	#define KEYLEN      16
 #endif
 
-#define DEFAULT_PASSWD_PATH "/root/shared_v/.passwd"
 #define Nr          (KEYLEN/8+3)*2
 #define KEYEXPSIZE  (Nr+1)*16
 #define BLOCKLEN    16
@@ -242,7 +241,7 @@ VOID AES_ECB_Decrypt(LPCBYTE Input, LPCBYTE Key, LPBYTE Output, int Length) {
 }
 
 //-------------------------------------------------------------------------
-int encrypt_get_passwd(char *filename, char *passwd)
+int encrypt_get_passwd(const char *filename, char *passwd)
 {
 	BYTE Key[] = {0x2b, 0x7e, 0x15, 0x16, 0x28, 0xae, 0xd2, 0xa6, 0xab, 0xf7, 0x15, 0x88, 0x09, 0xcf, 0x4f, 0x3c};
 	BYTE ENC[1024];
@@ -297,7 +296,7 @@ err:
 }
 
 //-------------------------------------------------------------------------
-int encrypt_change_passwd(char *filename, char *cur_passwd, const char *change_passwd)
+int encrypt_change_passwd(const char *filename, char *cur_passwd, const char *change_passwd)
 {
 	BYTE Key[] = {0x2b, 0x7e, 0x15, 0x16, 0x28, 0xae, 0xd2, 0xa6, 0xab, 0xf7, 0x15, 0x88, 0x09, 0xcf, 0x4f, 0x3c};
 	BYTE ENC[1024];
