@@ -132,6 +132,7 @@ typedef struct _CmdArg
     const gchar *appname;
     gint captureMaxCnt;
     gint split_margin_msec;
+    gint split_max_msec;
     gboolean input_en;
     const gchar *rtsp_port;
     const gchar *captureDir;

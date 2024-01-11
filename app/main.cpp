@@ -206,7 +206,6 @@ static gboolean splitCheck(gpointer data, guint8 startSec)
     GDateTime *datetime = g_date_time_new_now_local();
     gint min = g_date_time_get_minute(datetime);
     gint sec = g_date_time_get_second(datetime);
-    gboolean force_split_f = FALSE;
     //gint microsec = g_date_time_get_microsecond(datetime);
     g_date_time_unref(datetime);
 
@@ -255,15 +254,13 @@ static gboolean splitCheck(gpointer data, guint8 startSec)
                         splitMax = muxSinkBin[i].getSplitMsec();
                     if(splitMsec < splitMin)
                         splitMin = muxSinkBin[i].getSplitMsec();
-                    if(splitMsec > 2000)
-                        force_split_f = TRUE;
                 }
             }
             __LOG(LOG_INFO, "[GST][%s:%d] splitMax : %d, splitMin : %d", _FILE_, __LINE__, splitMax, splitMin);
 
-            if(splitMax - splitMin > cmdArg.split_margin_msec || force_split_f)
+            if(splitMax - splitMin > cmdArg.split_margin_msec || splitMax > cmdArg.split_max_msec)
             {
-                __LOG(LOG_ERR, "[GST][%s:%d] split time check error : max:%d, min:%d force_split_f:%d", _FILE_, __LINE__, splitMax, splitMin, force_split_f);
+                __LOG(LOG_ERR, "[GST][%s:%d] split time check error : max:%d, min:%d", _FILE_, __LINE__, splitMax, splitMin);
                 __LOG(LOG_NOTICE, "[GST][%s:%d] split now", _FILE_, __LINE__);
                 for(i=0; i<MAX_CHANNEL; i++)
                     if(muxSinkBin[i].getBinVideoSinkPad()) muxSinkBin[i].splitNow(NULL, FALSE);

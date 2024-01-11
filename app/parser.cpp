@@ -462,7 +462,8 @@ gint ParserClass::arg_parser(int *argc, char **argv[], gpointer data)
         {"passwd", 'P', 0, G_OPTION_ARG_STRING, &cmdArg.rtsp_passwd, "rtsp passwd, default(semes)", "STRING"},
         {"cmax", 'x', 0, G_OPTION_ARG_INT, &cmdArg.captureMaxCnt, "capture max count, default(3)", "INT"},
         {"eover", 'v', 0, G_OPTION_ARG_NONE, &cmdArg.overlay_en, "overlay enable, default(FALSE)", "NONE"},
-        {"split", 'S', 0, G_OPTION_ARG_INT, &cmdArg.split_margin_msec, "split margin msec, default(3)", "INT"},
+        {"split", 'n', 0, G_OPTION_ARG_INT, &cmdArg.split_margin_msec, "split margin msec, default(100)", "INT"},
+        {"split", 'S', 0, G_OPTION_ARG_INT, &cmdArg.split_max_msec, "split max msec, default(1500)", "INT"},
         {"grec", 'g', 0, G_OPTION_ARG_INT, &cmdArg.gop[STREAM_REC], "rec gop size, default(15)", "INT"},
         {"grtsp", 'G', 0, G_OPTION_ARG_INT, &cmdArg.gop[STREAM_RTSP], "rtsp gop size, default(15)", "INT"},
         {NULL}
@@ -552,6 +553,7 @@ void ParserClass::init_arg()
     cmdArg.input_en = FALSE;
     cmdArg.overlay_en = FALSE;
     cmdArg.split_margin_msec = DEFAULT_SPLIT_MARGIN_MSEC;
+    cmdArg.split_max_msec = DEFAULT_SPLIT_MAX_MSEC;
     cmdArg.stream_en[STREAM_REC] = TRUE;
     cmdArg.stream_en[STREAM_RTSP] = TRUE;
     cmdArg.gop[STREAM_REC] = DEFAULT_GOP_SIZE;
@@ -601,6 +603,7 @@ void ParserClass::print_option()
     g_print("rtsp passwd : %s\n", cmdArg.rtsp_passwd);
     g_print("overlay enable : %s\n", cmdArg.overlay_en? "TURE":"FALSE");
     g_print("split margin msec : %d\n", cmdArg.split_margin_msec);
+    g_print("split max msec : %d\n", cmdArg.split_max_msec);
     for(guint8 i=0; i<MAX_CHANNEL; i++){
         //g_print("rec ch %d rotation : %d\n", i, cmdArg.recRotationMode[i]);
         //g_print("rtsp ch %d rotation : %d\n", i, cmdArg.rtspRotationMode[i]);

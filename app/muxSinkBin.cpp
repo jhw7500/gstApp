@@ -100,7 +100,6 @@ gchararray format_location(GstElement *sink, guint arg0, gpointer data)
     gchar *date_str;
     static gboolean g_start_rec = FALSE;
 
-#if 1
     if(info->start_f == 0)
     {
         __LOG(LOG_NOTICE, "[GST][%s:%d] ch%d firstSplitFlag", _FILE_, __LINE__, info->ch);
@@ -108,10 +107,11 @@ gchararray format_location(GstElement *sink, guint arg0, gpointer data)
         info->start_f = 1;
         //date_str = g_date_time_format(datetime, "%Y%m%d_%H%M%S");
     }
+#if 0
     else
     {
         if(sec <= cmdArg.split_margin_msec) {
-            //datetime = g_date_time_add_seconds(datetime, -sec);
+            datetime = g_date_time_add_seconds(datetime, -sec);
         }
         //else if(sec >= 60-margin_sec) {
         //    datetime = g_date_time_add_seconds(datetime, 60-sec);
