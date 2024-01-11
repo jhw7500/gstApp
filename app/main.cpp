@@ -2,26 +2,23 @@
  *
  * Cantops main.cpp support
  *
- * Copyright (C)2022 Cantops, Inc. All rights reserved.
+ * Copyright (C)2023 Cantops, Inc. All rights reserved.
  *
  * Author:
  *   jhw <hwjo@cantops.biz>, 2023/09/18
  *
  * Description:
- *    This program is free software; you can redistribute  it and/or modify it
- *    under  the terms of  the GNU General  Public License as published by the
- *    Free Software Foundation;  either version 2 of the  License, or (at your
- *    option) any later version.
  */
 
 #include "util.h"
 #include "videoBin.h"
 #include "recordBin.h"
-#include "muxBin.h"
+//#include "muxBin.h"
 #include "testBin.h"
 #include "muxSinkBin.h"
 #include "rtspServerBin.h"
 #include "captureBin.h"
+#include "parser.h"
 #include <glib-unix.h>
 #include <fcntl.h>
 //#include <signal.h>
@@ -36,14 +33,6 @@
 
 #define GST_API_VERSION "1.0"
 #define APP_VERSION "0.0"
-
-typedef struct {
-    void* arg0;
-    void* arg1;
-    void* arg2;
-    void* arg3;
-    void* arg4;
-} ThreadArgs;
 
 static gboolean quiet = FALSE;
 extern volatile gboolean glib_on_error_halt;
@@ -173,19 +162,10 @@ void cleanup() {
 
 static void check_terminal_input(gpointer arg)  //(gpointer arg0, gpointer arg1, gpointer arg2) 
 {
-    ThreadArgs *thraedArgs = (ThreadArgs *)arg;
-    VideoBin *videoBin = (VideoBin *)(thraedArgs->arg0);
-    RecordBin *recordBin = (RecordBin *)(thraedArgs->arg1);
-    RtspServerBin *rtspServerBin = (RtspServerBin *)(thraedArgs->arg2);
-    MuxSinkBin *muxSinkBin = (MuxSinkBin *)(thraedArgs->arg3);
-    CaptureBin *captrueBin = (CaptureBin *)(thraedArgs->arg4);
-    int bytesRead;
-    guint8 i;
-    gchar *token = NULL;
-    char buffer[64];
-    const gchar *stateStr[] = {"PENDING", "NULL", "READY", "PAUSED", "PLAYING"};
+    gint bytesRead;
+    gchar buffer[64];
 
-    int flags = fcntl(STDIN_FILENO, F_GETFL, 0);
+    gint flags = fcntl(STDIN_FILENO, F_GETFL, 0);
     fcntl(STDIN_FILENO, F_SETFL, flags | O_NONBLOCK);
 
     __LOG(LOG_NOTICE, "[TERMINAL][%s:%d] %s start", _FILE_, __LINE__, __FUNCTION__);
@@ -199,378 +179,13 @@ static void check_terminal_input(gpointer arg)  //(gpointer arg0, gpointer arg1,
 
         bytesRead = read(STDIN_FILENO, buffer, sizeof(buffer));
 
-        if (bytesRead == -1)
-        {
-
-        }
-        else if(bytesRead > 0)
+        if(bytesRead > 0)
         {
             buffer[bytesRead] = '\0';
             g_print("Input: %s", buffer);
-
-            do
-            {
-                token = strtok(buffer, " ");
-
-                if (!strcmp(token, "get"))
-                {
-                    token = strtok(NULL, " ");
-                    if(!strcmp(token, "bps"))
-                    {
-                        token = strtok(NULL, "\n");
-                        if(!strcmp(token, "rec"))
-                        {
-                            for (i = 0; i < MAX_CHANNEL; i++)
-                                if (recordBin[i].getBinSinkPad()) recordBin[i].getBitrate();
-                        }
-                        else if(!strcmp(token, "rtsp"))
-                        {
-                            for (i = 0; i < MAX_CHANNEL; i++)
-                                if (rtspServerBin[i].getBinSinkPad()) rtspServerBin[i].getBitrate();
-                        }
-                    }
-                    else if(!strcmp(token, "fps"))
-                    {
-                        token = strtok(NULL, "\n");
-                        if(!strcmp(token, "rec"))
-                        {
-                            for (i = 0; i < MAX_CHANNEL; i++)
-                                if (recordBin[i].getBinSinkPad()) recordBin[i].getFps();
-                        }
-                        else if(!strcmp(token, "rtsp"))
-                        {
-                            for (i = 0; i < MAX_CHANNEL; i++)
-                                if (rtspServerBin[i].getBinSinkPad()) rtspServerBin[i].getFps();
-                        }
-                    }
-                    else if(!strcmp(token, "cap"))
-                    {
-                        token = strtok(NULL, "\n");
-                        if(!strcmp(token, "rec"))
-                        {
-                            //for (i = 0; i < MAX_CHANNEL; i++)
-                                //if (recordBin[i].getBinSinkPad()) recordBin[i].getFps();
-                        }
-                        else if(!strcmp(token, "rtsp"))
-                        {
-                            for (i = 0; i < MAX_CHANNEL; i++)
-                                if (rtspServerBin[i].getBinSinkPad()) rtspServerBin[i].getCaps();
-                        }
-                    }
-                    else if(!strcmp(token, "rotation"))
-                    {
-                        token = strtok(NULL, "\n");
-                        if(!strcmp(token, "rec"))
-                        {
-                            for (i = 0; i < MAX_CHANNEL; i++)
-                                if (recordBin[i].getBinSinkPad()) recordBin[i].getRotation();
-                        }
-                        else if(!strcmp(token, "rtsp"))
-                        {
-                            for (i = 0; i < MAX_CHANNEL; i++)
-                                if (rtspServerBin[i].getBinSinkPad()) rtspServerBin[i].getRotation();
-                        }
-                    }
-                    else if(!strcmp(token, "state"))
-                    {
-                        token = strtok(NULL, "\n");
-                        GstState state;
-                        if(!strcmp(token, "rec"))
-                        {
-                            gst_element_get_state(pipeline, &state, NULL, GST_CLOCK_TIME_NONE);
-                            __LOG(LOG_NOTICE, "[GST][%s:%d] rec state : %s[%d]", _FILE_, __LINE__, stateStr[state], state);
-                        }
-                        else if(!strcmp(token, "rtsp"))
-                        {
-                            gst_element_get_state(pipeline, &state, NULL, GST_CLOCK_TIME_NONE);
-                            __LOG(LOG_NOTICE, "[GST][%s:%d] rtsp state : %s[%d]", _FILE_, __LINE__, stateStr[state], state);
-                        }
-                    }
-                    else if(!strcmp(token, "iomode"))
-                    {
-                        token = strtok(NULL, "\n");
-                        if(!strcmp(token, "0"))
-                        {
-                            videoBin[0].getIoMode();
-                        }
-                        else if(!strcmp(token, "1"))
-                        {
-                            videoBin[1].getIoMode();
-                        }
-                    }
-                    else if(!strcmp(token, "gop"))
-                    {
-                        token = strtok(NULL, "\n");
-                        if(!strcmp(token, "rec"))
-                        {
-                            for (i = 0; i < MAX_CHANNEL; i++)
-                                if (recordBin[i].getBinSinkPad()) recordBin[i].getGop();
-                        }
-                        else if(!strcmp(token, "rtsp"))
-                        {
-                            for (i = 0; i < MAX_CHANNEL; i++)
-                                if (rtspServerBin[i].getBinSinkPad()) rtspServerBin[i].getGop();
-                        }
-                    }
-                }       //get
-                else if (!strcmp(token, "set"))
-                {
-                    token = strtok(NULL, " ");
-                    if(!strcmp(token, "bps"))
-                    {
-                        guint bps;
-                        token = strtok(NULL, " ");
-                        if(!strcmp(token, "rec"))
-                        {
-                            token = strtok(NULL, "\0");
-                            bps = charArrayToInt(token);
-
-                            if(bps > 9999) {
-                                __LOG(LOG_ERR, "[GST][%s:%d] bps %d not supported", _FILE_, __LINE__, bps);
-                                break;
-                            }
-
-                            for (i = 0; i < MAX_CHANNEL; i++)
-                                if (recordBin[i].getBinSinkPad()) recordBin[i].setBitrate(bps);
-                        }
-                        else if(!strcmp(token, "rtsp"))
-                        {
-                            token = strtok(NULL, "\0");
-                            bps = charArrayToInt(token);
-
-                            if(bps > 9999) {
-                                __LOG(LOG_ERR, "[GST][%s:%d] bps %d not supported", _FILE_, __LINE__, bps);
-                                break;
-                            }
-
-                            for (i = 0; i < MAX_CHANNEL; i++)
-                                if (rtspServerBin[i].getBinSinkPad()) rtspServerBin[i].setBitrate(bps);
-                        }
-                    }
-                    else if(!strcmp(token, "fps"))
-                    {
-                        guint fps;
-                        token = strtok(NULL, " ");
-                        if(!strcmp(token, "rec"))
-                        {
-                            token = strtok(NULL, "\0");
-                            fps = charArrayToInt(token);
-
-                            if(fps > 99) {
-                                __LOG(LOG_ERR, "[GST][%s:%d] fps %d not supported", _FILE_, __LINE__, fps);
-                                break;
-                            }
-
-                            for (i = 0; i < MAX_CHANNEL; i++)
-                                if (recordBin[i].getBinSinkPad()) recordBin[i].setFps(fps);
-                        }
-                        else if(!strcmp(token, "rtsp"))
-                        {
-                            token = strtok(NULL, "\0");
-                            fps = charArrayToInt(token);
-
-                            if(fps > 99) {
-                                __LOG(LOG_ERR, "[GST][%s:%d] fps %d not supported", _FILE_, __LINE__, fps);
-                                break;
-                            }
-
-                            for (i = 0; i < MAX_CHANNEL; i++)
-                                if (rtspServerBin[i].getBinSinkPad()) rtspServerBin[i].setFps(fps);
-                        }
-                    }
-                    else if(!strcmp(token, "rotation"))
-                    {
-                        guint rotation;
-                        token = strtok(NULL, " ");
-                        if(!strcmp(token, "rec"))
-                        {
-                            token = strtok(NULL, "\0");
-                            rotation = charArrayToInt(token);
-
-                            if(rotation > 5) {
-                                __LOG(LOG_ERR, "[GST][%s:%d] rotation %d not supported", _FILE_, __LINE__, rotation);
-                                break;
-                            }
-
-                            for (i = 0; i < MAX_CHANNEL; i++)
-                                if (recordBin[i].getBinSinkPad()) recordBin[i].setRotation(rotation);
-                        }
-                        else if(!strcmp(token, "rtsp"))
-                        {
-                            token = strtok(NULL, "\0");
-                            rotation = charArrayToInt(token);
-
-                            if(rotation > 5) {
-                                __LOG(LOG_ERR, "[GST][%s:%d] rotation %d not supported", _FILE_, __LINE__, rotation);
-                                break;
-                            }
-
-                            for (i = 0; i < MAX_CHANNEL; i++)
-                                if (rtspServerBin[i].getBinSinkPad()) rtspServerBin[i].setRotation(rotation);
-                        }
-                    }
-                    else if(!strcmp(token, "state"))
-                    {
-                        GstState state;
-                        token = strtok(NULL, " ");
-                        if(!strcmp(token, "rec"))
-                        {
-                            token = strtok(NULL, "\0");
-                            state = (GstState)charArrayToInt(token);
-
-                            if(state > 4) {
-                                __LOG(LOG_ERR, "[GST][%s:%d] state %d not supported", _FILE_, __LINE__, state);
-                                break;
-                            }
-                            gst_element_set_state(pipeline, state);
-                            __LOG(LOG_NOTICE, "[GST][%s:%d] rec state : %s[%d]", _FILE_, __LINE__, stateStr[state], state);
-                        }
-                        else if(!strcmp(token, "rtsp"))
-                        {
-                            token = strtok(NULL, "\0");
-                            state = (GstState)charArrayToInt(token);
-
-                            if(state > 4) {
-                                __LOG(LOG_ERR, "[GST][%s:%d] state %d not supported", _FILE_, __LINE__, state);
-                                break;
-                            }
-                            gst_element_set_state(pipeline, state);
-                            __LOG(LOG_NOTICE, "[GST][%s:%d] rtsp state : %s[%d]", _FILE_, __LINE__, stateStr[state], state);
-                        }
-                    }
-                    else if(!strcmp(token, "iomode"))
-                    {
-                        guint ioMode;
-                        token = strtok(NULL, " ");
-                        if(!strcmp(token, "0"))
-                        {
-                            token = strtok(NULL, "\0");
-                            ioMode = charArrayToInt(token);
-
-                            if(ioMode > 5) {
-                                __LOG(LOG_ERR, "[GST][%s:%d] ioMode %d not supported", _FILE_, __LINE__, ioMode);
-                                break;
-                            }
-
-                            videoBin[0].setIoMode(ioMode);
-                        }
-                        else if(!strcmp(token, "1"))
-                        {
-                            token = strtok(NULL, "\0");
-                            ioMode = charArrayToInt(token);
-
-                            if(ioMode > 5) {
-                                __LOG(LOG_ERR, "[GST][%s:%d] ioMode %d not supported", _FILE_, __LINE__, ioMode);
-                                break;
-                            }
-
-                            videoBin[1].setIoMode(ioMode);
-                        }
-                    }
-                    else if(!strcmp(token, "gop"))
-                    {
-                        guint gop;
-                        token = strtok(NULL, " ");
-                        if(!strcmp(token, "rec"))
-                        {
-                            token = strtok(NULL, "\0");
-                            gop = charArrayToInt(token);
-
-                            if(gop > 100) {
-                                __LOG(LOG_ERR, "[GST][%s:%d] gop %d not supported", _FILE_, __LINE__, gop);
-                                break;
-                            }
-
-                            for (i = 0; i < MAX_CHANNEL; i++)
-                                if (recordBin[i].getBinSinkPad()) recordBin[i].setGop(gop);
-                        }
-                        else if(!strcmp(token, "rtsp"))
-                        {
-                            token = strtok(NULL, "\0");
-                            gop = charArrayToInt(token);
-
-                            if(gop > 100) {
-                                __LOG(LOG_ERR, "[GST][%s:%d] gop %d not supported", _FILE_, __LINE__, gop);
-                                break;
-                            }
-
-                            for (i = 0; i < MAX_CHANNEL; i++)
-                                if (rtspServerBin[i].getBinSinkPad()) rtspServerBin[i].setGop(gop);
-                        }
-                    }
-                    else if(!strcmp(token, "dbg"))
-                    {
-                        token = strtok(NULL, "\n");
-                        if(!strcmp(token, "rtsp"))
-                        {
-                            for (i = 0; i < MAX_CHANNEL; i++)
-                                if (rtspServerBin[i].getBinSinkPad()) rtspServerBin[i].setTimeStampDebug();
-                        }
-                        else if(!strcmp(token, "rec"))
-                        {
-
-                        }
-                    }
-                }   //set
-                else if(!strncmp(buffer, "capture", 7))
-                {
-                    token = strtok(NULL, "\n");
-                    if(!strcmp(token, "start"))
-                    {
-                        for (i = 0; i < MAX_CHANNEL; i++)
-                            if (captrueBin[i].getBinSinkPad()) captrueBin[i].startCapture();
-                    }
-                    else if(!strcmp(token, "stop"))
-                    {
-                        for (i = 0; i < MAX_CHANNEL; i++)
-                            if (captrueBin[i].getBinSinkPad()) captrueBin[i].stopCapture();
-                    }
-                }
-                else if(!strncmp(buffer, "split", 5))
-                {
-                    token = strtok(NULL, " ");
-                    if(!strcmp(token, "start"))
-                    {
-                        for (i = 0; i < MAX_CHANNEL; i++)
-                            if(muxSinkBin[i].getBinVideoSinkPad()) muxSinkBin[i].splitNow(NULL, FALSE);
-                    }
-                    else if(!strcmp(token, "set"))
-                    {
-                        token = strtok(NULL, "\0");
-                        gint set_sec = charArrayToInt(token);
-                        
-                        if(set_sec > 59)
-                        {
-                            __LOG(LOG_ERR, "[GST][%s:%d] set_sec %d not supported", _FILE_, __LINE__, set_sec);
-                            break;
-                        }
-                        __LOG(LOG_NOTICE, "[GST][%s:%d] split set_sec : %d", _FILE_, __LINE__, set_sec);
-
-                        GDateTime *datetime;
-                        gint sec;
-
-                        while(1)
-                        {
-                            datetime = g_date_time_new_now_local();
-                            sec = g_date_time_get_second(datetime);
-                            if(set_sec == sec) 
-                            {
-                                __LOG(LOG_NOTICE, "[GST][%s:%d] set_sec %d = sec %d", _FILE_, __LINE__, set_sec, sec);
-                                break;
-                            }
-
-                            usleep(1000);
-                        }
-                            
-                        for (i = 0; i < MAX_CHANNEL; i++)
-                            if(muxSinkBin[i].getBinVideoSinkPad()) muxSinkBin[i].splitNow(NULL, FALSE);
-
-                        g_date_time_unref(datetime);
-                    }
-                }
-
-            } while(0);
+            cmd_parser(buffer, arg);
         }
+        
     } while(1);
 
     __LOG(LOG_NOTICE, "[TERMINAL][%s:%d] %s break", _FILE_, __LINE__, __FUNCTION__);
@@ -629,7 +244,8 @@ static gboolean splitCheck(gpointer data, guint8 startSec)
         {
             for(i=0; i<MAX_CHANNEL; i++)
             {
-                if(muxSinkBin[i].getBinVideoSinkPad()) {
+                if(muxSinkBin[i].getBinVideoSinkPad())
+                {
                     gint splitSec = muxSinkBin[i].getSplitSec();
                     if(splitSec > secMax)
                         secMax = muxSinkBin[i].getSplitSec();
@@ -643,6 +259,7 @@ static gboolean splitCheck(gpointer data, guint8 startSec)
             if(secMax - secMin > 1 || force_split_f)
             {
                 __LOG(LOG_ERR, "[GST][%s:%d] split time check error : max:%d, min:%d force_split_f:%d", _FILE_, __LINE__, secMax, secMin, force_split_f);
+                __LOG(LOG_NOTICE, "[GST][%s:%d] split now", _FILE_, __LINE__);
                 for(i=0; i<MAX_CHANNEL; i++)
                     if(muxSinkBin[i].getBinVideoSinkPad()) muxSinkBin[i].splitNow(NULL, FALSE);
             }
@@ -721,7 +338,7 @@ gint main(gint argc, gchar *argv[])
 {
     atexit(cleanup);
     gst_init(&argc, &argv);
-
+    
     guint major, minor, micro, nano;
     const gchar *nano_str;
     gst_version(&major, &minor, &micro, &nano);
@@ -733,10 +350,14 @@ gint main(gint argc, gchar *argv[])
         nano_str="";
     printf("This program i linked against Gstreamer %d.%d.%d %s\n", major, minor, micro, nano_str);
 
-    //attachInterruptHandlers();
     cmdArg.appname = CHARNEXT(argv[0], '/');
-    cmd_parser(&argc, &argv, &cmdArg);
-
+    init_arg();
+    //attachInterruptHandlers();
+    json_parser(DEFAULT_PATH_JSON);
+    if(arg_parser(&argc, &argv, &cmdArg) < 0)
+        return -1;
+        
+    print_option();
     //MuxBin* muxBin = MuxBin::getInstance();
     GstBus *bus;
     VideoBin videoBin[MAX_VIDEO_SRC];
@@ -796,7 +417,8 @@ gint main(gint argc, gchar *argv[])
 
     for(i=0; i<MAX_CHANNEL; i++)
     {
-        if(!(cmdArg.ch_enable & (0x1 << i))) continue;
+        //if(!(cmdArg.ch_enable & (0x1 << i))) continue;
+        if(!cmdArg.cam_en[i]) continue;
         chNum = (ChannelNum)i;
         __LOG(LOG_NOTICE, "[GST][%s:%d] ch[%d] enable", _FILE_, __LINE__, chNum);
         videoBin[chNum/2].init((CsiNum)(chNum/2));
@@ -829,7 +451,8 @@ gint main(gint argc, gchar *argv[])
             //else __LOG(LOG_NOTICE, "[GST][%s:%d] mux video ch[%d] pad link", _FILE_, __LINE__, chNum);
             //g_thread_new("split-timer-thread", (GThreadFunc)splitTimerStart, &muxSinkBin[chNum]);
         }
-
+        //json_parser(DEFAULT_PATH_JSON);
+        //print_option();
         if(cmdArg.stream_en[STREAM_RTSP])
         {
             rtspStart();
@@ -924,7 +547,7 @@ gint main(gint argc, gchar *argv[])
         goto main_end;
     }
 
-    gst_bus_add_watch(bus, my_bus_callback, NULL);
+    gst_bus_add_watch(bus, bus_message_parse, NULL);
 
     gst_object_unref(bus);
 

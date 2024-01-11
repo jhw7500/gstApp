@@ -17,6 +17,11 @@
         "string_view": "cpp",
         "ranges": "cpp",
         "cstdlib": "cpp",
-        "random": "cpp"
+        "random": "cpp",
+        "system_error": "cpp",
+        "compare": "cpp",
+        "functional": "cpp",
+        "tuple": "cpp",
+        "utility": "cpp"
     }
 }

@@ -2,16 +2,12 @@
  *
  * Cantops util.cpp support
  *
- * Copyright (C)2022 Cantops, Inc. All rights reserved.
+ * Copyright (C)2023 Cantops, Inc. All rights reserved.
  *
  * Author:
  *   jhw <hwjo@cantops.biz>, 2023/09/18
  *
  * Description:
- *    This program is free software; you can redistribute  it and/or modify it
- *    under  the terms of  the GNU General  Public License as published by the
- *    Free Software Foundation;  either version 2 of the  License, or (at your
- *    option) any later version.
  */
 
 #ifndef _UTIL_H_
@@ -28,39 +24,12 @@
 #define MAX_CHANNEL 4
 #define MAX_VIDEO_SRC 2
 
-#define DEFAULT_RECORD_BITRATE  4096
-#define DEFAULT_RTSP_BITRATE    1024
-#define DEFAULT_MAIN_FPS    15
-#define DEFAULT_RECORD_FPS  15
-#define DEFAULT_RTSP_FPS    15
-#define DEFAULT_GOP_SIZE    15
-#define DEFUALT_DURATION    1
-#define DEFAULT_DBG_LEVEL   5
-#define DEFAULT_LOG_LEVEL   6
-
-#define DEFAULT_RTSP_PORT   "8554"
-#define DEFAULT_RTSP_ID     "semes"
-#define DEFAULT_RTSP_PASSWD "semes"
+#define DEFAULT_OVERLAY_FONT "Times New Roman Italic, 12"
 
 #define QUEUE_TYPE          "queue"
 #define LEAKY_NONE          0
 #define LEAKY_UPSTREAM      1
 #define LEAKY_DOWNSTREAM    2
-
-#define DEFAULT_PLAY_DELAY  3
-#define DEFAULT_CAPTURE_MAX_CNT 3
-#define DEFAULT_SPLIT_MARGIN_SEC    3
-#define DEFAULT_OVERLAY_FONT "Times New Roman Italic, 12"
-
-#define JHW_TESTx
-#ifdef JHW_TEST
-#define MOUNT_PATH   "/home/user/jhw"
-#define CAPTURE_PATH "/home/user/jhw"
-#else
-#define DEFAULT_MOUNT_PATH   "/mnt/sd_cam"
-#define DEFAULT_CAPTURE_PATH   "/mnt/sd_cam/capture"
-#endif
-#define DEFULAT_DOT_PATH    "/tmp"
 
 typedef enum
 {
@@ -126,13 +95,22 @@ typedef struct _Resolution
     guint16 height;
 } Resolution;
 
+#pragma pack(push, 1)
+
+typedef struct {
+    void* arg0;
+    void* arg1;
+    void* arg2;
+    void* arg3;
+    void* arg4;
+} ThreadArgs;
+
 typedef struct _CmdArg
 {
     TestMode testMode;
     IoMode ioMode;
-    RotationMode csiRotationMode[MAX_CHANNEL/2];
-    RotationMode recRotationMode[MAX_CHANNEL];
-    RotationMode rtspRotationMode[MAX_CHANNEL];
+    gboolean cam_rotate[MAX_CHANNEL];
+    gboolean cam_en[MAX_CHANNEL];
     gint fps[MAX_CHANNEL/2];
     gint bps[MAX_CHANNEL/2];
     gboolean stream_en[MAX_CHANNEL/2];
@@ -141,8 +119,9 @@ typedef struct _CmdArg
     gint dbg_level;
     const gchar *dotDir;
     const gchar *mntDir;
-    gchar *ohtName;
-    gint ch_enable;
+    const gchar *ohtName;
+    guint8 ch_enable;
+    guint8 ch_rotate;
     ResMode resMode;
     gint main_fps;
     gint play_delay;
@@ -150,8 +129,8 @@ typedef struct _CmdArg
     gint duration;
     gboolean capture_en;
     gboolean audio_en;
-    gchar *appname;
-    guint8 captureMaxCnt;
+    const gchar *appname;
+    gint captureMaxCnt;
     gint split_margin_sec;
     gboolean input_en;
     const gchar *rtsp_port;
@@ -159,8 +138,11 @@ typedef struct _CmdArg
     const gchar *rtsp_id;
     const gchar *rtsp_passwd;
     gboolean overlay_en;
-    Resolution res[2] = {{1920,1080}, {1280,720}};
+    gint width;
+    gint height;
 } CmdArg;
+
+#pragma pack(pop)
 
 //extern gchar *program_name;
 extern GstElement *pipeline;
@@ -168,20 +150,20 @@ extern GMainLoop *loop;
 extern volatile sig_atomic_t is_interrupted;
 extern CmdArg cmdArg;
 extern gboolean is_live;
+extern const char *test0;
+extern const char *test1;
+extern const char *test2;
 
-void log_once(gint opt, const gchar *message);
-extern guint charArrayToInt(gchar *arr);
-extern gboolean compareBuf(guint8 *cmp1, guint8 *cmp2, guint8 len);
-extern gboolean my_bus_callback(GstBus *bus, GstMessage *message, gpointer data);
-extern GstPadProbeReturn probe_function(GstPad *pad, GstPadProbeInfo *info, gpointer user_data);
-extern gboolean print_delay(GstPad *pad, GstObject *parent, GstBuffer *buffer);
 void mylog(gint opt, const gchar* _szfmt, ... );
-gint cmd_parser(int *argc, char **argv[], gpointer data);
+void log_once(gint opt, const gchar *message);
+guint charArrayToInt(gchar *arr);
+gboolean compareBuf(guint8 *cmp1, guint8 *cmp2, guint8 len);
+GstPadProbeReturn probe_function(GstPad *pad, GstPadProbeInfo *info, gpointer user_data);
+gboolean print_delay(GstPad *pad, GstObject *parent, GstBuffer *buffer);
+gchar *search_file(const gchar* path, const gchar* prefix, const gchar* suffix);
 #define __LOG(opt, fmt, args...) do { mylog(opt, (char*)fmt, ##args); } while(0)
 #define CHARNEXT(x,y)    (strrchr(x,y)? strrchr(x,y)+1:x)
 #define _FILE_  CHARNEXT(__FILE__, '/')
 #define PROGRAM_NAME	"gstApp"
-
-//extern void attachInterruptHandlers();
 
 #endif

@@ -2,16 +2,12 @@
  *
  * Cantops recordBin.cpp support
  *
- * Copyright (C)2022 Cantops, Inc. All rights reserved.
+ * Copyright (C)2023 Cantops, Inc. All rights reserved.
  *
  * Author:
  *   jhw <hwjo@cantops.biz>, 2023/09/18
  *
  * Description:
- *    This program is free software; you can redistribute  it and/or modify it
- *    under  the terms of  the GNU General  Public License as published by the
- *    Free Software Foundation;  either version 2 of the  License, or (at your
- *    option) any later version.
  */
 
 #include "recordBin.h"
@@ -142,6 +138,27 @@ void RecordBin::getGop()
     __LOG(LOG_NOTICE, "[GST][%s:%d] ch%d get gop_size : %d", _FILE_, __LINE__, ch, gop);
 }
 
+void RecordBin::getKeyframe()
+{
+    gint key;
+
+    //g_object_get(re.enc, "bitrate", &bps, NULL);
+    //__LOG(LOG_NOTICE, "[GST][%s:%d] ch%d get bitrate : %d", _FILE_, __LINE__, ch, bps);
+    g_object_get(re.enc, "set-keyframe", &key, NULL);
+    __LOG(LOG_NOTICE, "[GST][%s:%d] ch%d get keyframe : %d", _FILE_, __LINE__, ch, key);
+}
+
+void RecordBin::setkeyframe(guint16 data)
+{
+    gint key;
+
+    //g_object_get(re.enc, "bitrate", &bps, NULL);
+    //__LOG(LOG_NOTICE, "[GST][%s:%d] ch%d get bitrate : %d", _FILE_, __LINE__, ch, bps);
+    g_object_set(re.enc, "set-keyframe", data, NULL);
+    g_object_get(re.enc, "set-keyframe", &key, NULL);
+    __LOG(LOG_NOTICE, "[GST][%s:%d] ch%d set keyframe : %d", _FILE_, __LINE__, ch, key);
+}
+
 RecordBin::RecordBin()
 {
     // 생성자 코드 추가
@@ -155,12 +172,12 @@ RecordBin::RecordBin()
 RecordBin::~RecordBin()
 {
     // 소멸자 코드 추가
-    __LOG(LOG_INFO, "[GST][%s:%d] %s", _FILE_, __LINE__, __FUNCTION__);
+    __LOG(LOG_INFO, "[GST][%s:%d] %s[%d]", _FILE_, __LINE__, __FUNCTION__, ch);
 }
 
 gint RecordBin::init(guint8 num)
 {
-    gboolean ret = FALSE;
+    gint ret = 0;
     ch = num;
     //sinkPad = NULL;
     __LOG(LOG_NOTICE, "[GST][%s:%d] %s ch : %d", _FILE_, __LINE__, __FUNCTION__, ch);
@@ -201,16 +218,16 @@ gint RecordBin::init(guint8 num)
         return ret;
     }
 
-    g_object_set(re.convert, "rotation", cmdArg.recRotationMode[ch], NULL);
-
     GstCaps *caps = gst_caps_new_simple("video/x-raw", "framerate", GST_TYPE_FRACTION, cmdArg.fps[STREAM_REC], 1, NULL);
     g_object_set(re.capsfilter, "caps", caps, NULL);
     gst_caps_unref(caps);
 
     if (ch % 2 == 0)
-        g_object_set(re.crop, "top", 0, "bottom", 0, "left", cmdArg.res[cmdArg.resMode].width, "right", 0, NULL);
+        g_object_set(re.crop, "top", 0, "bottom", 0, "left", cmdArg.width, "right", 0, NULL);
+        //g_object_set(re.crop, "top", 0, "bottom", 0, "left", cmdArg.res[cmdArg.resMode].width, "right", 0, NULL);
     else
-        g_object_set(re.crop, "top", 0, "bottom", 0, "left", 0, "right", cmdArg.res[cmdArg.resMode].width, NULL);
+        g_object_set(re.crop, "top", 0, "bottom", 0, "left", 0, "right", cmdArg.width, NULL);
+        //g_object_set(re.crop, "top", 0, "bottom", 0, "left", 0, "right", cmdArg.res[cmdArg.resMode].width, NULL);
         
     //if(cmdArg.rec_fps >= 25) g_object_set(re.rate, "max-rate", cmdArg.rec_fps, "drop-only", TRUE, NULL);
     g_object_set(re.overlay, "valignment", 2, NULL);

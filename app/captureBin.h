@@ -2,21 +2,17 @@
  *
  * Cantops captureBin.cpp support
  *
- * Copyright (C)2022 Pointimage, Inc. All rights reserved.
+ * Copyright (C)2023 Pointimage, Inc. All rights reserved.
  *
  * Author:
  *   jhw <hwjo@cantops.biz>, 2023/09/18
  *
  * Description:
- *    This program is free software; you can redistribute  it and/or modify it
- *    under  the terms of  the GNU General  Public License as published by the
- *    Free Software Foundation;  either version 2 of the  License, or (at your
- *    option) any later version.
  */
 
 
-#ifndef _CAPTRUE_H_
-#define _CAPTURE_H_
+#ifndef _CAPTRUEBIN_H_
+#define _CAPTUREBIN_H_
 
 #include "util.h"
 #include <gst/app/gstappsink.h>

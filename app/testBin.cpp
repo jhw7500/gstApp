@@ -2,16 +2,12 @@
  *
  * Cantops testBin.cpp support
  *
- * Copyright (C)2022 Cantops, Inc. All rights reserved.
+ * Copyright (C)2023 Cantops, Inc. All rights reserved.
  *
  * Author:
  *   jhw <hwjo@cantops.biz>, 2023/09/18
  *
  * Description:
- *    This program is free software; you can redistribute  it and/or modify it
- *    under  the terms of  the GNU General  Public License as published by the
- *    Free Software Foundation;  either version 2 of the  License, or (at your
- *    option) any later version.
  */
 
 #include "testBin.h"
@@ -31,7 +27,7 @@ TestBin::TestBin()
 
 TestBin::~TestBin()
 {
-    __LOG(LOG_INFO, "[GST][%s:%d] %s", _FILE_, __LINE__, __FUNCTION__);
+    __LOG(LOG_NOTICE, "[GST][%s:%d] %s", _FILE_, __LINE__, __FUNCTION__);
 }
 
 GstPad* TestBin::getBinSrcPad(guint8 ch)
@@ -91,7 +87,7 @@ gint TestBin::addElement(const gchar* firstStr, ...)
 
 gint TestBin::init()
 {
-    gboolean ret = FALSE;
+    gint ret = 0;
     
     if(be.bin) return ret;
 

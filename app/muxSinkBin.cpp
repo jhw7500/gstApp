@@ -2,16 +2,12 @@
  *
  * Cantops muxSinkBin.cpp support
  *
- * Copyright (C)2022 Cantops, Inc. All rights reserved.
+ * Copyright (C)2023 Cantops, Inc. All rights reserved.
  *
  * Author:
  *   jhw <hwjo@cantops.biz>, 2023/09/18
  *
  * Description:
- *    This program is free software; you can redistribute  it and/or modify it
- *    under  the terms of  the GNU General  Public License as published by the
- *    Free Software Foundation;  either version 2 of the  License, or (at your
- *    option) any later version.
  */
 
 #include "muxSinkBin.h"
@@ -76,7 +72,7 @@ gboolean MuxSinkBin::splitNow(gpointer data, gboolean timer_en)
     //MuxBin* muxBin = MuxBin::getInstance();
     //MuxBin* muxBin = (MuxBin *)data;
 
-    __LOG(LOG_NOTICE, "[GST][%s:%d] %s ch : %d", _FILE_, __LINE__, __FUNCTION__, muxSinkData.ch);
+    //__LOG(LOG_NOTICE, "[GST][%s:%d] %s ch : %d", _FILE_, __LINE__, __FUNCTION__, muxSinkData.ch);
 
     //g_signal_emit_by_name (be.sink, "split-at-running-time");
     g_signal_emit_by_name (be.sink, "split-after");
@@ -101,7 +97,8 @@ gchararray format_location(GstElement *sink, guint arg0, gpointer data)
     GDateTime *datetime = g_date_time_new_now_local();
     gint sec = g_date_time_get_second(datetime);
     gchar *date_str;
-    
+    static gboolean g_start_rec = FALSE;
+
 #if 1
     if(info->start_f == 0)
     {
@@ -124,7 +121,21 @@ gchararray format_location(GstElement *sink, guint arg0, gpointer data)
     date_str = g_date_time_format(datetime, "%Y%m%d_%H%M%S");
     gchararray file_name = g_strdup_printf("%s/%s_%s-ch%d.mp4", cmdArg.mntDir, cmdArg.ohtName, date_str, info->ch);
     
-    __LOG(LOG_NOTICE, "[GST][%s:%d] %s : %s", _FILE_, __LINE__, __FUNCTION__, file_name);
+    //__LOG(LOG_NOTICE, "[GST][%s:%d] %s : %s", _FILE_, __LINE__, __FUNCTION__, file_name);
+
+    if(!g_start_rec)
+    {
+		FILE *fp = NULL;
+
+		g_start_rec = TRUE;
+		fp = fopen("/tmp/start_video_time", "wb");
+		if(fp != NULL)
+		{
+            date_str = g_date_time_format(datetime, "%Y%m%d %H:%M:%S");
+			fwrite(date_str, sizeof(char), strlen(date_str), fp);
+			fclose(fp);
+		}
+    }
 
     g_date_time_unref(datetime);
     g_free(date_str);
@@ -152,12 +163,12 @@ MuxSinkBin::MuxSinkBin()
 MuxSinkBin::~MuxSinkBin()
 {
     // 소멸자 코드 추가
-    __LOG(LOG_INFO, "[GST][%s:%d] %s", _FILE_, __LINE__, __FUNCTION__);
+    __LOG(LOG_NOTICE, "[GST][%s:%d] %s[%d]", _FILE_, __LINE__, __FUNCTION__, muxSinkData.ch);
 }
 
 gboolean MuxSinkBin::addBinVideoSinkPad()
 {
-    __LOG(LOG_INFO, "[GST][%s:%d] %s ch:%d", _FILE_, __LINE__, __FUNCTION__, muxSinkData.ch);
+    __LOG(LOG_NOTICE, "[GST][%s:%d] %s ch:%d", _FILE_, __LINE__, __FUNCTION__, muxSinkData.ch);
     
     sinkVideoPad = gst_ghost_pad_new(g_strdup_printf("muxBinSink_video_ch%d", muxSinkData.ch), gst_element_get_request_pad(be.sink, "video_aux_%u"));
     if(!gst_element_add_pad(be.bin, sinkVideoPad))
@@ -169,7 +180,7 @@ gboolean MuxSinkBin::addBinVideoSinkPad()
 
 gboolean MuxSinkBin::addBinAudioSinkPad()
 {
-    __LOG(LOG_INFO, "[GST][%s:%d] %s ch:%d", _FILE_, __LINE__, __FUNCTION__, muxSinkData.ch);
+    __LOG(LOG_NOTICE, "[GST][%s:%d] %s ch:%d", _FILE_, __LINE__, __FUNCTION__, muxSinkData.ch);
 
     sinkAudioPad = gst_ghost_pad_new(g_strdup_printf("muxBinSink_audio_ch%d", muxSinkData.ch), gst_element_get_request_pad(be.sink, "audio_%u"));
     if(!gst_element_add_pad(be.bin, sinkAudioPad))
@@ -193,13 +204,13 @@ GstPad* MuxSinkBin::getBinAudioSinkPad()
 
 gint MuxSinkBin::init(guint8 num)
 {
-    gboolean ret = FALSE;
+    gint ret = 0;
     muxSinkData.ch = num;
     muxSinkData.start_f = 0;
 
     be.bin = gst_bin_new(g_strdup_printf("muxSinkBin%d", muxSinkData.ch));
     //me.sink = gst_element_factory_make("splitmuxsink", "splitmuxsink");
-    __LOG(LOG_NOTICE, "[GST][%s:%d] %s ch:%d", _FILE_, __LINE__, __FUNCTION__, muxSinkData.ch);
+    __LOG(LOG_NOTICE, "[GST][%s:%d] %s ch : %d", _FILE_, __LINE__, __FUNCTION__, muxSinkData.ch);
     //g_object_set(me.sink, "max-size-time", 10*GST_SECOND, NULL);
     be.sink = gst_element_factory_make("splitmuxsink", g_strdup_printf("splitmuxsink%d", muxSinkData.ch));
 #if 0

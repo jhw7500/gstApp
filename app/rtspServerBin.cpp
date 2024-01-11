@@ -2,16 +2,12 @@
  *
  * Cantops rtspServerBin.cpp support
  *
- * Copyright (C)2022 Cantops, Inc. All rights reserved.
+ * Copyright (C)2023 Cantops, Inc. All rights reserved.
  *
  * Author:
  *   jhw <hwjo@cantops.biz>, 2023/09/18
  *
  * Description:
- *    This program is free software; you can redistribute  it and/or modify it
- *    under  the terms of  the GNU General  Public License as published by the
- *    Free Software Foundation;  either version 2 of the  License, or (at your
- *    option) any later version.
  */
 
 #include "rtspServerBin.h"
@@ -19,6 +15,12 @@
 GstRTSPMountPoints *rtspMounts = NULL;
 GstRTSPServer *rtspServer = NULL;
 guint cleanRtsp_id = 0;
+
+static void enough_data(GstElement *source, gpointer user_data) 
+{
+    RtspServerData *info = (RtspServerData*)user_data;
+	__LOG(LOG_ERR, "[RTSP][%s:%d] ch %d Enough Data !!!", _FILE_, __LINE__, info->ch);
+}
 
 static gboolean cleanRtspSession(GstRTSPServer *server)
 {
@@ -107,11 +109,11 @@ static void	media_configure(GstRTSPMediaFactory *factory, GstRTSPMedia *media, g
     //static GMutex mutex;
 
 	//g_mutex_lock(&mutex);
-    __LOG(LOG_NOTICE, "[GST][%s:%d] %s", _FILE_, __LINE__, __FUNCTION__);
+    __LOG(LOG_NOTICE, "[GST][%s:%d] media connect ch:%d", _FILE_, __LINE__, __FUNCTION__, info->ch);
 	element = gst_rtsp_media_get_element(media);
     //name = GST_ELEMENT_NAME(GST_APP_SRC(element));
     //name = gst_object_get_name(GST_OBJECT(element));
-    __LOG(LOG_NOTICE, "[GST][%s:%d] appsrc name : %s", _FILE_, __LINE__, info->appSrcName);
+    __LOG(LOG_INFO, "[GST][%s:%d] appsrc name : %s", _FILE_, __LINE__, info->appSrcName);
 	info->appsrc = gst_bin_get_by_name_recurse_up(GST_BIN(element), info->appSrcName);
     
     //queue_name = g_strdup_printf("%s", QUEUE_NAME, info->ch);
@@ -122,7 +124,8 @@ static void	media_configure(GstRTSPMediaFactory *factory, GstRTSPMedia *media, g
     //g_free(queue_name);
 	gst_object_unref(element);
 
-    g_signal_connect (media, "prepared", (GCallback) media_prepared_cb, factory);
+    g_signal_connect(media, "prepared", (GCallback) media_prepared_cb, factory);
+    g_signal_connect(info->appsrc, "enough-data", (GCallback) enough_data, info);
 	//g_mutex_unlock(&mutex);
 
 #ifdef DYNAMIC_CAPS
@@ -175,6 +178,15 @@ static GstFlowReturn new_sample_handler(GstElement *sink, gpointer userData)
         g_message("Timestamp: %" GST_TIME_FORMAT "\n", GST_TIME_ARGS(timestamp));
         info->debug = 0;
     }
+    
+#if 0
+    GstFlowReturn ret;
+    g_signal_emit_by_name(info->appsrc, "push-buffer", buffer, &ret);
+    if(ret != GST_FLOW_OK)
+    {
+        g_print("Failed to push buffer\n");
+    }
+#endif
 
 #if 1
     if(info->appsrc == NULL)
@@ -217,7 +229,7 @@ static GstFlowReturn new_sample_handler(GstElement *sink, gpointer userData)
 static GstFlowReturn new_preroll_handler(GstElement *sink, gpointer data) 
 {
     RtspServerData *info = (RtspServerData *)data;
-    __LOG(LOG_NOTICE, "[GST][%s:%d] %s", _FILE_, __LINE__, __FUNCTION__);
+    __LOG(LOG_NOTICE, "[GST][%s:%d] %s[%d]", _FILE_, __LINE__, __FUNCTION__, info->ch);
     info->start_f = TRUE;
 
     return GST_FLOW_OK;
@@ -343,6 +355,27 @@ void RtspServerBin::getGop()
     __LOG(LOG_NOTICE, "[GST][%s:%d] ch%d get gop_size : %d", _FILE_, __LINE__, ch, gop);
 }
 
+void RtspServerBin::getKeyframe()
+{
+    gint key;
+
+    //g_object_get(re.enc, "bitrate", &bps, NULL);
+    //__LOG(LOG_NOTICE, "[GST][%s:%d] ch%d get bitrate : %d", _FILE_, __LINE__, ch, bps);
+    g_object_get(re.enc, "set-keyframe", &key, NULL);
+    __LOG(LOG_NOTICE, "[GST][%s:%d] ch%d get keyframe : %d", _FILE_, __LINE__, ch, key);
+}
+
+void RtspServerBin::setkeyframe(guint16 data)
+{
+    gint key;
+
+    //g_object_get(re.enc, "bitrate", &bps, NULL);
+    //__LOG(LOG_NOTICE, "[GST][%s:%d] ch%d get bitrate : %d", _FILE_, __LINE__, ch, bps);
+    g_object_set(re.enc, "set-keyframe", data, NULL);
+    g_object_get(re.enc, "set-keyframe", &key, NULL);
+    __LOG(LOG_NOTICE, "[GST][%s:%d] ch%d set keyframe : %d", _FILE_, __LINE__, ch, key);
+}
+
 RtspServerBin* RtspServerBin::getInstance()
 {
 	static RtspServerBin instance;
@@ -362,12 +395,12 @@ RtspServerBin::RtspServerBin()
 
 RtspServerBin::~RtspServerBin()
 {
-    __LOG(LOG_INFO, "[GST][%s:%d] %s", _FILE_, __LINE__, __FUNCTION__);
+    __LOG(LOG_NOTICE, "[GST][%s:%d] %s[%d]", _FILE_, __LINE__, __FUNCTION__, ch);
 }
 
 GstPad* RtspServerBin::getBinSinkPad()
 {
-    __LOG(LOG_INFO, "[GST][%s:%d] %s ch:%d", _FILE_, __LINE__, __FUNCTION__, ch);
+    __LOG(LOG_INFO, "[GST][%s:%d] %s[%d]", _FILE_, __LINE__, __FUNCTION__, ch);
     //return gst_element_get_static_pad(re.bin, g_strdup_printf("recordBin_sink_ch%d", ch));
     return sinkPad;
 }
@@ -375,8 +408,9 @@ GstPad* RtspServerBin::getBinSinkPad()
 gint RtspServerBin::init(guint8 num)
 {
     GstPad *staticPad;
+    gint ret = 0;
     ch = num;
-    gboolean ret = FALSE;
+    rtspServerData.ch = ch;
     //sinkPad = NULL;
     __LOG(LOG_NOTICE, "[GST][%s:%d] %s ch : %d", _FILE_, __LINE__, __FUNCTION__, ch);
 
@@ -423,16 +457,17 @@ gint RtspServerBin::init(guint8 num)
 
     //g_object_set(re.convert, "composition-meta-enable", TRUE, NULL);
     //g_object_set(re.convert, "videocrop-meta-enable", TRUE, NULL);
-    g_object_set(re.convert, "rotation", cmdArg.rtspRotationMode[ch], NULL);
 
     GstCaps *caps = gst_caps_new_simple("video/x-raw", "framerate", GST_TYPE_FRACTION, cmdArg.fps[STREAM_RTSP], 1, NULL);
     g_object_set(re.capsfilter, "caps", caps, NULL);
     gst_caps_unref(caps);
 
     if (ch % 2 == 0)
-        g_object_set(re.crop, "top", 0, "bottom", 0, "left", cmdArg.res[cmdArg.resMode].width, "right", 0, NULL);
+        g_object_set(re.crop, "top", 0, "bottom", 0, "left", cmdArg.width, "right", 0, NULL);
+        //g_object_set(re.crop, "top", 0, "bottom", 0, "left", cmdArg.res[cmdArg.resMode].width, "right", 0, NULL);
     else
-        g_object_set(re.crop, "top", 0, "bottom", 0, "left", 0, "right", cmdArg.res[cmdArg.resMode].width, NULL);
+        g_object_set(re.crop, "top", 0, "bottom", 0, "left", 0, "right", cmdArg.width, NULL);
+        //g_object_set(re.crop, "top", 0, "bottom", 0, "left", 0, "right", cmdArg.res[cmdArg.resMode].width, NULL);
 
     //if(cmdArg.rtsp_fps >= 25) g_object_set(re.rate, "max-rate", cmdArg.rtsp_fps, "drop-only", TRUE, NULL);
     g_object_set(re.overlay, "valignment", 2, NULL);
@@ -465,8 +500,8 @@ gint RtspServerBin::init(guint8 num)
     gst_object_unref(staticPad);
 
     GstRTSPMediaFactory *factory = gst_rtsp_media_factory_new();
-    rtspServerData.ch = ch;
-    rtspServerData.appSrcName = g_strdup_printf("%s%d", "appsrc", rtspServerData.ch);
+    //rtspServerData.appSrcName = g_strdup_printf("%s%d", "appsrc", ch);
+    rtspServerData.appSrcName = g_strdup_printf("%s", "appsrc");
 
     gchar *launch_str = g_strdup_printf("( appsrc name=%s do-timestamp=1 is-live=1 format=3 ! queue max-size-buffers=1 leaky=2 ! h264parse ! rtph264pay name=pay0 config-interval=-1 )", rtspServerData.appSrcName);
     
@@ -479,16 +514,16 @@ gint RtspServerBin::init(guint8 num)
     //rtspServerData.appsrc = gst_element_factory_make("appsrc", rtspServerData.appSrcName);
     g_signal_connect(factory, "media-configure", (GCallback)media_configure, &rtspServerData);
 
-    gchar *point = g_strdup_printf("/ch%d", rtspServerData.ch);
+    gchar *point = g_strdup_printf("/ch%d", ch);
     //__LOG(LOG_INFO, "[RTSP][%s:%d] point : %s", _FILE_, __LINE__, point);
 
     gst_rtsp_mount_points_add_factory(rtspMounts, point, factory);
 
-    gst_rtsp_media_factory_add_role(factory, "semes",
+    gst_rtsp_media_factory_add_role(factory, cmdArg.rtsp_id,
                                     GST_RTSP_PERM_MEDIA_FACTORY_ACCESS, G_TYPE_BOOLEAN, TRUE,
                                     GST_RTSP_PERM_MEDIA_FACTORY_CONSTRUCT, G_TYPE_BOOLEAN, TRUE, NULL);
 
-    __LOG(LOG_NOTICE, "[RTSP][%s:%d]stream ready at rtsp://127.0.0.1:%s%s", _FILE_, __LINE__, cmdArg.rtsp_port, point);
+    __LOG(LOG_NOTICE, "[RTSP][%s:%d]stream ready at rtsp://%s:%s@127.0.0.1:%s%s", _FILE_, __LINE__, cmdArg.rtsp_id, cmdArg.rtsp_passwd, cmdArg.rtsp_port, point);
     
     g_free(point);
 
@@ -504,7 +539,7 @@ void rtspStop()
 
 gint rtspStart()
 {
-    gboolean ret = FALSE;
+    gint ret = 0;
     if(rtspServer) return ret;
 
     __LOG(LOG_NOTICE, "[RTSP][%s:%d] %s", _FILE_, __LINE__, __FUNCTION__);
@@ -517,11 +552,11 @@ gint rtspStart()
 
     g_signal_connect(rtspServer, "client-connected", G_CALLBACK(handle_client_connected), NULL);
 
-
     /* make a new authentication manager */
     GstRTSPAuth *auth = gst_rtsp_auth_new ();
-
+    
     /* make user token */
+    __LOG(LOG_NOTICE, "[RTSP][%s:%d] id : %s, passwd : %s", _FILE_, __LINE__, cmdArg.rtsp_id, cmdArg.rtsp_passwd);
     GstRTSPToken *token = gst_rtsp_token_new (GST_RTSP_TOKEN_MEDIA_FACTORY_ROLE, G_TYPE_STRING, cmdArg.rtsp_id, NULL);
     gchar *basic = gst_rtsp_auth_make_basic (cmdArg.rtsp_id, cmdArg.rtsp_passwd);
     gst_rtsp_auth_add_basic (auth, basic, token);

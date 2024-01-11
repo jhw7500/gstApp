@@ -2,16 +2,12 @@
  *
  * Cantops captureBin.cpp support
  *
- * Copyright (C)2022 Cantops, Inc. All rights reserved.
+ * Copyright (C)2023 Cantops, Inc. All rights reserved.
  *
  * Author:
  *   jhw <hwjo@cantops.biz>, 2023/09/18
  *
  * Description:
- *    This program is free software; you can redistribute  it and/or modify it
- *    under  the terms of  the GNU General  Public License as published by the
- *    Free Software Foundation;  either version 2 of the  License, or (at your
- *    option) any later version.
  */
 
 #include "captureBin.h"
@@ -99,12 +95,12 @@ CaptureBin::CaptureBin()
 
 CaptureBin::~CaptureBin()
 {
-    __LOG(LOG_INFO, "[GST][%s:%d] %s ch:%d", _FILE_, __LINE__, __FUNCTION__, ch);
+    __LOG(LOG_NOTICE, "[GST][%s:%d] %s[%d]", _FILE_, __LINE__, __FUNCTION__, ch);
 }
 
 gint CaptureBin::startCapture()
 {
-    __LOG(LOG_NOTICE, "[GST][%s:%d] %s ch:%d", _FILE_, __LINE__, __FUNCTION__, ch);
+    __LOG(LOG_NOTICE, "[GST][%s:%d] %s", _FILE_, __LINE__, __FUNCTION__);
     captureData.captureCnt = 0;
     setFilePath();
 
@@ -143,7 +139,7 @@ gint CaptureBin::setFilePath()
 
 gint CaptureBin::init(guint8 num)
 {
-    gboolean ret = FALSE;
+    gint ret = 0;
     GstPad *staticPad;
     ch = num;
     //sinkPad = NULL;
@@ -180,17 +176,17 @@ gint CaptureBin::init(guint8 num)
     }
 
     if (ch % 2 == 0)
-        g_object_set(be.crop, "top", 0, "bottom", 0, "left", cmdArg.res[cmdArg.resMode].width, "right", 0, NULL);
+        g_object_set(be.crop, "top", 0, "bottom", 0, "left", cmdArg.width, "right", 0, NULL);
     else
-        g_object_set(be.crop, "top", 0, "bottom", 0, "left", 0, "right", cmdArg.res[cmdArg.resMode].width, NULL);
+        g_object_set(be.crop, "top", 0, "bottom", 0, "left", 0, "right", cmdArg.width, NULL);
 
     //if(cmdArg.rtsp_fps >= 25) g_object_set(re.rate, "max-rate", cmdArg.rtsp_fps, "drop-only", TRUE, NULL);
 
     //g_object_set(re.enc, "bitrate", cmdArg.rtsp_bitrate, NULL);
-    g_object_set(be.queue, "max-size-time", GST_SECOND, "max-size-buffers", DEFAULT_MAIN_FPS, "leaky", LEAKY_DOWNSTREAM, NULL);
-    g_object_set(be.queue2, "max-size-time", GST_SECOND, "max-size-buffers", DEFAULT_MAIN_FPS, "leaky", LEAKY_DOWNSTREAM, NULL);
+    g_object_set(be.queue, "max-size-time", GST_SECOND, "max-size-buffers", cmdArg.main_fps, "leaky", LEAKY_DOWNSTREAM, NULL);
+    g_object_set(be.queue2, "max-size-time", GST_SECOND, "max-size-buffers", cmdArg.main_fps, "leaky", LEAKY_DOWNSTREAM, NULL);
     //g_object_set(re.capsfilter, "max-size-time", 5*GST_SECOND, "max-size-buffers", 60, "leaky", 1, NULL);
-    g_object_set(be.sink, "max-buffers", DEFAULT_MAIN_FPS, NULL);
+    g_object_set(be.sink, "max-buffers", cmdArg.main_fps, NULL);
     g_object_set(be.sink, "drop", TRUE, NULL);
     //g_object_set(pipe->sink, "max-lateness", 1*GST_SECOND, NULL);
     //g_object_set(pipe->sink, "render-delay", 100*GST_MSECOND, NULL);

@@ -2,16 +2,12 @@
  *
  * Cantops rtspServerBin.cpp support
  *
- * Copyright (C)2022 Cantops, Inc. All rights reserved.
+ * Copyright (C)2023 Cantops, Inc. All rights reserved.
  *
  * Author:
  *   jhw <hwjo@cantops.biz>, 2023/09/18
  *
  * Description:
- *    This program is free software; you can redistribute  it and/or modify it
- *    under  the terms of  the GNU General  Public License as published by the
- *    Free Software Foundation;  either version 2 of the  License, or (at your
- *    option) any later version.
  */
 
 #ifndef _RTSPSERVER_H_
@@ -31,11 +27,11 @@ typedef struct _RtspServerData
 {
     GstElement *appsrc;
     gchar *appSrcName;
-    guint8 ch;
     guint8 start_f;
     GstBuffer *buf;
     GstCaps *caps;
     gboolean debug;
+    guint8 ch;
 } RtspServerData;
 
 typedef struct _RtspServerElement
@@ -76,6 +72,8 @@ public :
     void setTimeStampDebug();
     void setGop(guint16 data);
     void getGop();
+    void getKeyframe();
+    void setkeyframe(guint16 data);
 
 private :
 	
@@ -85,8 +83,8 @@ public :
     //GstElement *pipeline[2];
 	
 private :
-    RtspServerElement re;
     guint8 ch;
+    RtspServerElement re;
     GstPad *sinkPad;
     RtspServerData rtspServerData;
 };

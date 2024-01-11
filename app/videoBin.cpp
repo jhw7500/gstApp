@@ -2,16 +2,12 @@
  *
  * Cantops videoBin.cpp support
  *
- * Copyright (C)2022 Cantops, Inc. All rights reserved.
+ * Copyright (C)2023 Cantops, Inc. All rights reserved.
  *
  * Author:
  *   jhw <hwjo@cantops.biz>, 2023/09/18
  *
  * Description:
- *    This program is free software; you can redistribute  it and/or modify it
- *    under  the terms of  the GNU General  Public License as published by the
- *    Free Software Foundation;  either version 2 of the  License, or (at your
- *    option) any later version.
  */
 
 #include "videoBin.h"
@@ -64,11 +60,11 @@ GstPad* VideoBin::getBinCaptureSrcPad(ChannelNum ch)
 gint VideoBin::addBinRtspSrcPad(ChannelNum ch)
 {
     if(be.crop[ch%2] == NULL) {
-        __LOG(LOG_NOTICE, "[GST][%s:%d] no crop rtsp pad[%d]", _FILE_, __LINE__, ch);
+        __LOG(LOG_NOTICE, "[GST][%s:%d] add rtsp pad[%d]", _FILE_, __LINE__, ch);
         srcRtspPad = gst_ghost_pad_new(g_strdup_printf("videoBin_rtsp_src_ch%d", ch%2), gst_element_get_request_pad(be.teeCrop, "src_%u"));
     }
     else {
-        __LOG(LOG_NOTICE, "[GST][%s:%d] crop rtsp pad[%d]", _FILE_, __LINE__, ch);
+        __LOG(LOG_NOTICE, "[GST][%s:%d] add crop rtsp pad[%d]", _FILE_, __LINE__, ch);
         srcRtspPad = gst_ghost_pad_new(g_strdup_printf("videoBin_rtsp_src_ch%d", ch%2), gst_element_get_request_pad(be.tee[ch%2], "src_%u"));
     }
 
@@ -84,11 +80,11 @@ gint VideoBin::addBinRtspSrcPad(ChannelNum ch)
 gint VideoBin::addBinRecordSrcPad(ChannelNum ch)
 {
     if(be.crop[ch%2] == NULL) {
-        __LOG(LOG_NOTICE, "[GST][%s:%d] no crop record pad[%d]", _FILE_, __LINE__, ch);
+        __LOG(LOG_NOTICE, "[GST][%s:%d] add record pad[%d]", _FILE_, __LINE__, ch);
         srcRecordPad = gst_ghost_pad_new(g_strdup_printf("videoBin_record_src_ch%d", ch%2), gst_element_get_request_pad(be.teeCrop, "src_%u"));
     }
     else {
-        __LOG(LOG_NOTICE, "[GST][%s:%d] crop record pad[%d]", _FILE_, __LINE__, ch);
+        __LOG(LOG_NOTICE, "[GST][%s:%d] add crop record pad[%d]", _FILE_, __LINE__, ch);
         srcRecordPad = gst_ghost_pad_new(g_strdup_printf("videoBin_record_src_ch%d", ch%2), gst_element_get_request_pad(be.tee[ch%2], "src_%u"));
     }
 
@@ -108,10 +104,14 @@ gint VideoBin::addBinRecordSrcPad(ChannelNum ch)
 
 gint VideoBin::addBinCaptureSrcPad(ChannelNum ch)
 {
-    if(be.crop[ch%2] == NULL)
+    if(be.crop[ch%2] == NULL) {
+        __LOG(LOG_NOTICE, "[GST][%s:%d] add captrue pad[%d]", _FILE_, __LINE__, ch);
         srcCapturePad = gst_ghost_pad_new(g_strdup_printf("videoBin_capture_src_ch%d", ch%2), gst_element_get_request_pad(be.teeCrop, "src_%u"));
-    else
+    }
+    else {
+        __LOG(LOG_NOTICE, "[GST][%s:%d] add crop capture pad[%d]", _FILE_, __LINE__, ch);
         srcCapturePad = gst_ghost_pad_new(g_strdup_printf("videoBin_capture_src_ch%d", ch%2), gst_element_get_request_pad(be.tee[ch%2], "src_%u"));
+    }
 
     if (!gst_element_add_pad(be.bin, srcCapturePad))
     {
@@ -124,7 +124,7 @@ gint VideoBin::addBinCaptureSrcPad(ChannelNum ch)
 
 VideoBin::VideoBin()
 {
-    __LOG(LOG_INFO, "[GST][%s:%d] %s", _FILE_, __LINE__, __FUNCTION__);
+    __LOG(LOG_NOTICE, "[GST][%s:%d] %s", _FILE_, __LINE__, __FUNCTION__);
     be.bin = NULL;
     be.crop[0] = NULL;
     be.crop[1] = NULL;
@@ -134,12 +134,12 @@ VideoBin::VideoBin()
 
 VideoBin::~VideoBin()
 {
-    __LOG(LOG_INFO, "[GST][%s:%d] %s", _FILE_, __LINE__, __FUNCTION__);
+    __LOG(LOG_NOTICE, "[GST][%s:%d] %s[%d]", _FILE_, __LINE__, __FUNCTION__, csi);
 }
 
 gint VideoBin::addCrop(CropDir dir)
 {
-    gboolean ret = FALSE;
+    gint ret = 0;
     //g_print("csi:%d, dir:%d\n", csi, dir);
     __LOG(LOG_NOTICE, "[GST][%s:%d] video crop csi : %d, dir : %d", _FILE_, __LINE__, csi, dir);
 
@@ -150,9 +150,11 @@ gint VideoBin::addCrop(CropDir dir)
     be.convert2[dir] = gst_element_factory_make("imxvideoconvert_g2d", g_strdup_printf("convert%d", dir));
 
     if (dir % 2 == 0)
-        g_object_set(be.crop[dir], "top", 0, "bottom", 0, "left", 0, "right", cmdArg.res[cmdArg.resMode].width, NULL);
+        g_object_set(be.crop[dir], "top", 0, "bottom", 0, "left", 0, "right", cmdArg.width, NULL);
+        //g_object_set(be.crop[dir], "top", 0, "bottom", 0, "left", 0, "right", cmdArg.res[cmdArg.resMode].width, NULL);
     else
-        g_object_set(be.crop[dir], "top", 0, "bottom", 0, "left", cmdArg.res[cmdArg.resMode].width, "right", 0, NULL);
+        g_object_set(be.crop[dir], "top", 0, "bottom", 0, "left", cmdArg.width, "right", 0, NULL);
+        //g_object_set(be.crop[dir], "top", 0, "bottom", 0, "left", cmdArg.res[cmdArg.resMode].width, "right", 0, NULL);
 
     if (!be.crop[dir] || !be.tee[dir] || !be.overlay[dir] || !be.queue[dir] || !be.convert2[dir]) {
         __LOG(LOG_CRIT, "[GST][%s:%d] video crop [%d] create error", _FILE_, __LINE__, dir);
@@ -208,7 +210,7 @@ gint VideoBin::addCrop(CropDir dir)
 
 gint VideoBin::init(CsiNum num)
 {
-    gboolean ret = FALSE;
+    gint ret = 0;
     csi = num;
 
     if(be.bin != NULL)
@@ -226,7 +228,6 @@ gint VideoBin::init(CsiNum num)
     be.teeCrop = gst_element_factory_make("tee", "teeCrop");
     be.queue_main = gst_element_factory_make(QUEUE_TYPE, "queue_main");
 
-    g_object_set(be.convert, "rotation", cmdArg.csiRotationMode[csi], NULL);
     g_object_set(be.src, "io-mode", cmdArg.ioMode, NULL);   //0:auto, 1:rw, 2:mmap, 3:userptr, 4:dmabuf, 5:dmabuf-import
     g_object_set(be.src, "do-timestamp", TRUE, NULL);
     g_signal_connect(be.src, "prepare-format", G_CALLBACK(prepare_format), &csi);
@@ -254,10 +255,18 @@ gint VideoBin::init(CsiNum num)
 
     // g_print("cmdArg.res[cmdArg.resMode].width:%d\n", cmdArg.res[cmdArg.resMode].width);
     // g_print("cmdArg.res[cmdArg.resMode].height:%d\n", cmdArg.res[cmdArg.resMode].height);
+#if 0
     GstCaps *caps = gst_caps_new_simple("video/x-raw",
                                         "format", G_TYPE_STRING, "NV12",
                                         "width", G_TYPE_INT, cmdArg.res[cmdArg.resMode].width * 2,
                                         "height", G_TYPE_INT, cmdArg.res[cmdArg.resMode].height,
+                                        "framerate", GST_TYPE_FRACTION, cmdArg.main_fps, 1,
+                                        NULL);
+#endif
+    GstCaps *caps = gst_caps_new_simple("video/x-raw",
+                                        "format", G_TYPE_STRING, "NV12",
+                                        "width", G_TYPE_INT, cmdArg.width*2,
+                                        "height", G_TYPE_INT, cmdArg.height,
                                         "framerate", GST_TYPE_FRACTION, cmdArg.main_fps, 1,
                                         NULL);
 
