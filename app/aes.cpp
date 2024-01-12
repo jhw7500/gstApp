@@ -43,7 +43,7 @@
 #define ROTATE(T,A,B,C,D)   {T=A; A=B; B=C; C=D; D=T;}
 
 
-LOCAL(VOID) GetSBox(LPBYTE TA) {
+VOID AESClass::GetSBox(LPBYTE TA) {
     static CONST BYTE SBox[256] = {
         //0     1    2      3     4    5     6     7      8    9     A      B    C     D     E     F
         0x63, 0x7c, 0x77, 0x7b, 0xf2, 0x6b, 0x6f, 0xc5, 0x30, 0x01, 0x67, 0x2b, 0xfe, 0xd7, 0xab, 0x76,
@@ -71,7 +71,7 @@ LOCAL(VOID) GetSBox(LPBYTE TA) {
 }
 
 
-LOCAL(VOID) KeyExpansion(LPBYTE ExpKey, LPCBYTE Key) {
+void AESClass::KeyExpansion(LPBYTE ExpKey, LPCBYTE Key) {
 	BYTE TA[4];
 	static CONST BYTE Rcon[11]= { 0x8d, 0x01, 0x02, 0x04, 0x08, 0x10, 0x20, 0x40, 0x80, 0x1b, 0x36 };
 	
@@ -100,17 +100,17 @@ LOCAL(VOID) KeyExpansion(LPBYTE ExpKey, LPCBYTE Key) {
 	}
 }
 
-LOCAL(VOID) AddRoundKey(BYTE State[4][4], LPBYTE ExpKey, BYTE Round) {
+VOID AESClass::AddRoundKey(BYTE State[4][4], LPBYTE ExpKey, BYTE Round) {
 	for (int i = 0; i < 4; i++)
 		for (int j = 0; j < 4; j++) 
 			State[i][j] ^= ExpKey[Round*4*4 + i*4 + j];
 }
 
-LOCAL(VOID) SubBytes(BYTE State[4][4]) {
+VOID AESClass::SubBytes(BYTE State[4][4]) {
 	for (int i = 0; i < 4; i++) GetSBox(State[i]);
 }
 
-LOCAL(VOID) ShiftRows(BYTE State[4][4]) {
+VOID AESClass::ShiftRows(BYTE State[4][4]) {
 	BYTE T;
 	
 	ROTATE(T, State[0][1], State[1][1], State[2][1], State[3][1]);
@@ -122,7 +122,7 @@ LOCAL(VOID) ShiftRows(BYTE State[4][4]) {
 }
 
 
-LOCAL(VOID) InvShiftRows(BYTE State[4][4]) {
+VOID AESClass::InvShiftRows(BYTE State[4][4]) {
 	BYTE T;
 	
 	ROTATE(T, State[3][1], State[2][1], State[1][1], State[0][1]);
@@ -133,11 +133,11 @@ LOCAL(VOID) InvShiftRows(BYTE State[4][4]) {
 	ROTATE(T, State[0][3], State[1][3], State[2][3], State[3][3]);
 }
 
-LOCAL(int) XTime(int X) {
+int AESClass::XTime(int X) {
 	return ((X<<1) & 0xFF) ^ (((X>>7)&1)*0x1B);
 }
 
-LOCAL(VOID) MixColumns(BYTE State[4][4]) {
+VOID AESClass::MixColumns(BYTE State[4][4]) {
 	for (int i = 0; i < 4; i++) {
 		int T1 = State[i][0];
 		int T2 = State[i][0] ^ State[i][1] ^ State[i][2] ^ State[i][3];
@@ -148,7 +148,7 @@ LOCAL(VOID) MixColumns(BYTE State[4][4]) {
 	}
 }
 
-LOCAL(int) Multiply(int X, int Y) {
+int AESClass::Multiply(int X, int Y) {
 	return  ((Y>>0&1)*X)^
 			((Y>>1&1)*XTime(X))^
 			((Y>>2&1)*XTime(XTime(X)))^
@@ -156,7 +156,7 @@ LOCAL(int) Multiply(int X, int Y) {
 			((Y>>4&1)*XTime(XTime(XTime(XTime(X)))));
 }
 
-LOCAL(VOID) InvMixColumns(BYTE State[4][4]) {
+VOID AESClass::InvMixColumns(BYTE State[4][4]) {
 	for (int i = 0; i < 4; i++) {
 		int A = State[i][0];
 		int B = State[i][1];
@@ -170,7 +170,7 @@ LOCAL(VOID) InvMixColumns(BYTE State[4][4]) {
 	}
 }
 
-static VOID InvSubBytes(BYTE State[4][4]) {
+VOID AESClass::InvSubBytes(BYTE State[4][4]) {
 	static CONST BYTE SBoxInvert[256] = {
 		0x52, 0x09, 0x6a, 0xd5, 0x30, 0x36, 0xa5, 0x38, 0xbf, 0x40, 0xa3, 0x9e, 0x81, 0xf3, 0xd7, 0xfb,
 		0x7c, 0xe3, 0x39, 0x82, 0x9b, 0x2f, 0xff, 0x87, 0x34, 0x8e, 0x43, 0x44, 0xc4, 0xde, 0xe9, 0xcb,
@@ -194,7 +194,7 @@ static VOID InvSubBytes(BYTE State[4][4]) {
 		for (int j = 0; j < 4; j++) State[j][i] = SBoxInvert[State[j][i]];
 }
 
-LOCAL(VOID) Cipher(BYTE State[4][4], LPBYTE ExpKey) {
+VOID AESClass::Cipher(BYTE State[4][4], LPBYTE ExpKey) {
 	AddRoundKey(State, ExpKey, 0);
 	
 	for (int Round = 1; Round < Nr; Round++) {
@@ -209,7 +209,7 @@ LOCAL(VOID) Cipher(BYTE State[4][4], LPBYTE ExpKey) {
 	AddRoundKey(State, ExpKey, Nr);
 }
 
-LOCAL(VOID) InvCipher(BYTE State[4][4], LPBYTE ExpKey) {
+VOID AESClass::InvCipher(BYTE State[4][4], LPBYTE ExpKey) {
 	AddRoundKey(State, ExpKey, Nr);
 	
 	for (int Round = Nr - 1; Round > 0; Round--) {
@@ -224,7 +224,23 @@ LOCAL(VOID) InvCipher(BYTE State[4][4], LPBYTE ExpKey) {
 	AddRoundKey(State, ExpKey, 0);
 }
 
-VOID AES_ECB_Encrypt(LPCBYTE Input, LPCBYTE Key, LPBYTE Output, int Length) {
+AESClass* AESClass::getInstance()
+{
+	static AESClass instance;
+	return &instance;
+}
+
+AESClass::AESClass()
+{
+    __LOG(LOG_INFO, "[GST][%s:%d] %s", _FILE_, __LINE__, __FUNCTION__);
+}
+
+AESClass::~AESClass()
+{
+    __LOG(LOG_INFO, "[GST][%s:%d] %s[%d]", _FILE_, __LINE__, __FUNCTION__);
+}
+
+VOID AESClass::AES_ECB_Encrypt(LPCBYTE Input, LPCBYTE Key, LPBYTE Output, int Length) {
 	BYTE ExpKey[KEYEXPSIZE];
 	
 	memcpy(Output, Input, Length);
@@ -232,7 +248,7 @@ VOID AES_ECB_Encrypt(LPCBYTE Input, LPCBYTE Key, LPBYTE Output, int Length) {
 	Cipher((BYTE(*)[4])Output, ExpKey);
 }
 
-VOID AES_ECB_Decrypt(LPCBYTE Input, LPCBYTE Key, LPBYTE Output, int Length) {
+VOID AESClass::AES_ECB_Decrypt(LPCBYTE Input, LPCBYTE Key, LPBYTE Output, int Length) {
 	BYTE ExpKey[KEYEXPSIZE];
 	
 	memcpy(Output, Input, Length);
@@ -241,7 +257,7 @@ VOID AES_ECB_Decrypt(LPCBYTE Input, LPCBYTE Key, LPBYTE Output, int Length) {
 }
 
 //-------------------------------------------------------------------------
-int encrypt_get_passwd(const char *filename, char *passwd)
+int AESClass::encrypt_get_passwd(const char *filename, char *passwd)
 {
 	BYTE Key[] = {0x2b, 0x7e, 0x15, 0x16, 0x28, 0xae, 0xd2, 0xa6, 0xab, 0xf7, 0x15, 0x88, 0x09, 0xcf, 0x4f, 0x3c};
 	BYTE ENC[1024];
@@ -296,7 +312,7 @@ err:
 }
 
 //-------------------------------------------------------------------------
-int encrypt_change_passwd(const char *filename, char *cur_passwd, const char *change_passwd)
+int AESClass::encrypt_change_passwd(const char *filename, char *cur_passwd, const char *change_passwd)
 {
 	BYTE Key[] = {0x2b, 0x7e, 0x15, 0x16, 0x28, 0xae, 0xd2, 0xa6, 0xab, 0xf7, 0x15, 0x88, 0x09, 0xcf, 0x4f, 0x3c};
 	BYTE ENC[1024];

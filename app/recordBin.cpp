@@ -180,7 +180,7 @@ gint RecordBin::init(guint8 num)
     gint ret = 0;
     ch = num;
     //sinkPad = NULL;
-    __LOG(LOG_NOTICE, "[GST][%s:%d] %s ch : %d", _FILE_, __LINE__, __FUNCTION__, ch);
+    __LOG(LOG_INFO, "[GST][%s:%d] %s ch : %d", _FILE_, __LINE__, __FUNCTION__, ch);
 
     re.bin = gst_bin_new(g_strdup_printf("recordBin%d", ch));
     re.queue = gst_element_factory_make(QUEUE_TYPE, "queue");

@@ -15,8 +15,8 @@
 static void prepare_format(GstElement *object, gint arg0, GstCaps *caps, gpointer data)
 {
     guint8 *csi = (guint8 *)data;
-    __LOG(LOG_NOTICE, "[GST][%s:%d] %s [%d]", _FILE_, __LINE__, __FUNCTION__, *csi);
-    __LOG(LOG_NOTICE, "[GST][%s:%d] get caps : %s", _FILE_, __LINE__, gst_caps_to_string(caps));
+    //__LOG(LOG_NOTICE, "[GST][%s:%d] %s [%d]", _FILE_, __LINE__, __FUNCTION__, *csi);
+    __LOG(LOG_INFO, "[GST][%s:%d] csi%d caps : %s", _FILE_, __LINE__, *csi, gst_caps_to_string(caps));
 }
 
 void VideoBin::getIoMode()
@@ -60,11 +60,11 @@ GstPad* VideoBin::getBinCaptureSrcPad(ChannelNum ch)
 gint VideoBin::addBinRtspSrcPad(ChannelNum ch)
 {
     if(be.crop[ch%2] == NULL) {
-        __LOG(LOG_NOTICE, "[GST][%s:%d] add rtsp pad[%d]", _FILE_, __LINE__, ch);
+        __LOG(LOG_INFO, "[GST][%s:%d] add rtsp pad[%d]", _FILE_, __LINE__, ch);
         srcRtspPad = gst_ghost_pad_new(g_strdup_printf("videoBin_rtsp_src_ch%d", ch%2), gst_element_get_request_pad(be.teeCrop, "src_%u"));
     }
     else {
-        __LOG(LOG_NOTICE, "[GST][%s:%d] add crop rtsp pad[%d]", _FILE_, __LINE__, ch);
+        __LOG(LOG_INFO, "[GST][%s:%d] add crop rtsp pad[%d]", _FILE_, __LINE__, ch);
         srcRtspPad = gst_ghost_pad_new(g_strdup_printf("videoBin_rtsp_src_ch%d", ch%2), gst_element_get_request_pad(be.tee[ch%2], "src_%u"));
     }
 
@@ -80,11 +80,11 @@ gint VideoBin::addBinRtspSrcPad(ChannelNum ch)
 gint VideoBin::addBinRecordSrcPad(ChannelNum ch)
 {
     if(be.crop[ch%2] == NULL) {
-        __LOG(LOG_NOTICE, "[GST][%s:%d] add record pad[%d]", _FILE_, __LINE__, ch);
+        __LOG(LOG_INFO, "[GST][%s:%d] add record pad[%d]", _FILE_, __LINE__, ch);
         srcRecordPad = gst_ghost_pad_new(g_strdup_printf("videoBin_record_src_ch%d", ch%2), gst_element_get_request_pad(be.teeCrop, "src_%u"));
     }
     else {
-        __LOG(LOG_NOTICE, "[GST][%s:%d] add crop record pad[%d]", _FILE_, __LINE__, ch);
+        __LOG(LOG_INFO, "[GST][%s:%d] add crop record pad[%d]", _FILE_, __LINE__, ch);
         srcRecordPad = gst_ghost_pad_new(g_strdup_printf("videoBin_record_src_ch%d", ch%2), gst_element_get_request_pad(be.tee[ch%2], "src_%u"));
     }
 
@@ -124,7 +124,7 @@ gint VideoBin::addBinCaptureSrcPad(ChannelNum ch)
 
 VideoBin::VideoBin()
 {
-    __LOG(LOG_NOTICE, "[GST][%s:%d] %s", _FILE_, __LINE__, __FUNCTION__);
+    __LOG(LOG_INFO, "[GST][%s:%d] %s", _FILE_, __LINE__, __FUNCTION__);
     be.bin = NULL;
     be.crop[0] = NULL;
     be.crop[1] = NULL;
@@ -134,7 +134,7 @@ VideoBin::VideoBin()
 
 VideoBin::~VideoBin()
 {
-    __LOG(LOG_NOTICE, "[GST][%s:%d] %s[%d]", _FILE_, __LINE__, __FUNCTION__, csi);
+    __LOG(LOG_INFO, "[GST][%s:%d] %s[%d]", _FILE_, __LINE__, __FUNCTION__, csi);
 }
 
 gint VideoBin::addCrop(CropDir dir)
@@ -243,12 +243,12 @@ gint VideoBin::init(CsiNum num)
 
     if (csi == 0)
     {
-        __LOG(LOG_NOTICE, "[GST][%s:%d] %s : video4", _FILE_, __LINE__, __FUNCTION__);
+        __LOG(LOG_INFO, "[GST][%s:%d] %s : video4", _FILE_, __LINE__, __FUNCTION__);
         g_object_set(be.src, "device", "/dev/video4", NULL);
     }
     else if (csi == 1)
     {
-        __LOG(LOG_NOTICE, "[GST][%s:%d] %s : video3", _FILE_, __LINE__, __FUNCTION__);
+        __LOG(LOG_INFO, "[GST][%s:%d] %s : video3", _FILE_, __LINE__, __FUNCTION__);
         g_object_set(be.src, "device", "/dev/video3", NULL);
     }
     // g_object_set(ve.src, "device", g_strdup_printf("/dev/video%d", csi+3), NULL);

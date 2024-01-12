@@ -95,7 +95,7 @@ CaptureBin::CaptureBin()
 
 CaptureBin::~CaptureBin()
 {
-    __LOG(LOG_NOTICE, "[GST][%s:%d] %s[%d]", _FILE_, __LINE__, __FUNCTION__, ch);
+    __LOG(LOG_INFO, "[GST][%s:%d] %s[%d]", _FILE_, __LINE__, __FUNCTION__, ch);
 }
 
 gint CaptureBin::startCapture()

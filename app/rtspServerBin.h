@@ -20,8 +20,8 @@
 
 #define DYNAMIC_CAPSx
 
-gint rtspStart();
-void rtspStop();
+gint rtspServerStart();
+void rtspServerStop();
 
 typedef struct _RtspServerData
 {

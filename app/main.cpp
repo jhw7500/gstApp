@@ -161,6 +161,267 @@ void cleanup() {
     gst_deinit();  // GStreamer 해제
 }
 
+gboolean bus_message_parse(GstBus *bus, GstMessage *message, gpointer data)
+{
+    //PipeMain *info = (PipeMain *)data;
+    static guint8 cam_cnt = 0;
+    static GstState state = GST_STATE_VOID_PENDING;
+    GstMessageType mType = GST_MESSAGE_TYPE(message);
+
+    if(mType == GST_MESSAGE_QOS) return TRUE;
+
+    if(mType == GST_MESSAGE_TAG) return TRUE;
+
+    //if(mType == GST_MESSAGE_ELEMENT) return TRUE;
+
+    if(mType == GST_MESSAGE_STREAM_STATUS) return TRUE;
+    //printf("Got %s message\n", GST_MESSAGE_TYPE_NAME(message));
+    if(mType == GST_MESSAGE_STATE_CHANGED) return TRUE;
+
+    //__LOG(LOG_NOTICE, "[GST][%s:%d] Got %s message from %s", _FILE_, __LINE__, GST_MESSAGE_TYPE_NAME(message), GST_OBJECT_NAME (message->src));
+
+    switch(mType) 
+    {
+        case GST_MESSAGE_STATE_CHANGED:
+        {
+            GstState old_state, new_state, pending_state;
+            gst_message_parse_state_changed(message, &old_state, &new_state, &pending_state);
+            if(state != old_state)
+            {
+                //__LOG(LOG_INFO, "[GST][%s:%d] from %s to %s", _FILE_, __LINE__, gst_element_state_get_name(old_state), gst_element_state_get_name(new_state));
+                state = old_state;
+            }
+            __LOG(LOG_INFO, "[GST][%s:%d] in %s", _FILE_, __LINE__, GST_OBJECT_NAME (message->src));
+            break;
+        }
+
+        case GST_MESSAGE_ERROR:
+        {
+            GError *err;
+            gchar *debug;
+            gst_message_parse_error(message, &err, &debug);
+            __LOG(LOG_ERR, "[GST][%s:%d] error message : %s\n", __FILE__, __LINE__, err->message);
+            __LOG(LOG_ERR, "[GST][%s:%d] error debug : %s\n", __FILE__, __LINE__, (debug)? debug : "none");
+            printf("Error : %s\n", err->message);
+            printf("Debug : %s\n", (debug)? debug : "none");
+            g_error_free(err);
+            g_free(debug);
+            //destroy();
+            gst_element_send_event(pipeline, gst_event_new_eos());
+            break;
+        }
+
+        case GST_MESSAGE_EOS:
+        {
+            //printf("GST_MESSAGE_EOS (index:%d sigflag:%d)\n", info->index, sigflag);
+            //__LOG(LOG_NOTICE, "[GST][%s:%d] GST_MESSAGE_EOS (index:%d sigflag:%d)", _FILE_, __LINE__, info->index, sigflag);
+            if(is_interrupted)
+            {
+                cam_cnt++;
+                //if(cam_cnt >= MAX_PIPELINE) destroy();
+            }
+            else
+            {
+                gst_element_set_state(pipeline, GST_STATE_READY);
+                //gst_element_get_state(pipeline[info->index], NULL, NULL, GST_CLOCK_TIME_NONE);
+                //gst_element_seek(pipeline[info->index], 1.0, GST_FORMAT_TIME, GST_SEEK_FLAG_FLUSH, GST_SEEK_TYPE_SET, 0, GST_SEEK_TYPE_SET, -1);
+                //gst_element_set_state(pipeline[info->index], GST_STATE_NULL);
+                gst_element_set_state(pipeline, GST_STATE_PLAYING);
+                //change_file_datetime(NULL);
+            }
+
+            break;
+        }
+
+        case GST_MESSAGE_ELEMENT:
+        {
+            //__LOG(LOG_INFO, "[GST][%s:%d] %s", __FILE__, __LINE__, gst_structure_to_string(gst_message_get_structure(message)));
+            //g_print("%s\n", gst_structure_to_string(gst_message_get_structure(message)));
+ 			const GstStructure *structure = gst_message_get_structure(message);
+			if(gst_structure_has_name(structure, "splitmuxsink-fragment-opened"))
+            {
+                __LOG(LOG_NOTICE, "[GST][%s:%d] filename : %s, time : %llu", __FILE__, __LINE__, \
+                    g_value_get_string(gst_structure_get_value(structure, "location")), g_value_get_uint64(gst_structure_get_value(structure, "running-time")));
+            }
+            else
+                __LOG(LOG_INFO, "[GST][%s:%d] %s", __FILE__, __LINE__, gst_structure_to_string(gst_message_get_structure(message)));
+
+            break;
+        }
+
+        case GST_MESSAGE_STREAM_STATUS:
+        {
+            GstStreamStatusType type;
+            GstElement *owner;
+            const GValue *val;
+            gchar *path;
+            GstTask *task = NULL;
+
+            g_message ("received STREAM_STATUS");
+            gst_message_parse_stream_status (message, &type, &owner);
+
+            val = gst_message_get_stream_status_object (message);
+
+            g_message ("type:   %d", type);
+            path = gst_object_get_path_string (GST_MESSAGE_SRC (message));
+            g_message ("source: %s", path);
+            g_free (path);
+            path = gst_object_get_path_string (GST_OBJECT (owner));
+            g_message ("owner:  %s", path);
+            g_free (path);
+            g_message ("object: type %s, value %p", G_VALUE_TYPE_NAME (val),
+            g_value_get_object (val));
+
+            /* see if we know how to deal with this object */
+            if (G_VALUE_TYPE (val) == GST_TYPE_TASK) {
+                task = (GstTask *)g_value_get_object (val);
+            }
+
+            switch (type) {
+                case GST_STREAM_STATUS_TYPE_CREATE:
+                g_message ("created task %p", task);
+                break;
+                case GST_STREAM_STATUS_TYPE_ENTER:
+                /* g_message ("raising task priority"); */
+                /* setpriority (PRIO_PROCESS, 0, -10); */
+                break;
+                case GST_STREAM_STATUS_TYPE_LEAVE:
+                break;
+                default:
+                break;
+            }
+            break;
+        }
+
+        case GST_MESSAGE_QOS:
+        {
+#if 1
+            gboolean live;
+            guint64 running_time, stream_time,timestamp,duration;
+            gst_message_parse_qos (message,&live,&running_time,&stream_time,&timestamp,&duration);
+            g_warning("GOt a QOS event %lu %lu %lu %lu", running_time, stream_time, timestamp, duration);
+            gint64 jitter;
+            gdouble prop;
+            gint qual;
+            gst_message_parse_qos_values(message, &jitter, &prop, &qual);
+            g_warning("gotQoSE %lu %f %d", jitter, prop, qual );
+
+            GstFormat format;
+            guint64 processed;
+            guint64 dropped;
+            gst_message_parse_qos_stats(message, &format, &processed, &dropped);
+
+            g_print("QoS Message:\n");
+            g_print("Format: %s\n", gst_format_get_name(format));
+            g_print("Processed: %lu\n", processed);
+            g_print("Dropped: %lu\n", dropped);
+#endif
+            break;
+        }
+
+        case GST_MESSAGE_TAG: 
+        {
+#if 1
+            GstTagList *tags = NULL;
+            gst_message_parse_tag (message, &tags);
+            g_print ("Got tags from element %s\n", GST_OBJECT_NAME (message->src));
+            gst_tag_list_foreach (tags, print_tag, NULL);
+            gst_tag_list_free (tags);
+            //handle_tags (tags);
+            //gst_tag_list_unref (tags);
+#endif
+            break;
+        }
+#if 0
+        case GST_MESSAGE_BUFFERING: 
+        {
+            gint percent = 0;
+
+            /* If the stream is live, we do not care about buffering. */
+            if (info->is_live) break;
+
+            gst_message_parse_buffering (message, &percent);
+            g_print ("Buffering (%3d%%)\r", percent);
+            /* Wait until buffering is complete before start/resume playing */
+
+            if (percent < 100)
+                gst_element_set_state (pipeline, GST_STATE_PAUSED);
+            else
+                gst_element_set_state (pipeline, GST_STATE_PLAYING);
+            break;
+
+        }
+#endif
+        case GST_MESSAGE_CLOCK_LOST:
+        {
+            /* Get a new clock */
+            g_print ("GST_MESSAGE_CLOCK_LOST\r");
+            gst_element_set_state (pipeline, GST_STATE_PAUSED);
+            gst_element_set_state (pipeline, GST_STATE_PLAYING);
+            break;
+        }
+
+        case GST_MESSAGE_LATENCY:
+        {
+                // when pipeline latency is changed, this msg is posted on the bus. we then have
+                // to explicitly tell the pipeline to recalculate its latency
+                // FIXME: this never works!
+#if 1
+                if (!gst_bin_recalculate_latency (GST_BIN(pipeline)))
+                    g_print("Could not reconfigure latency.\n");
+                else
+                    g_print("Reconfigured latency.\n");
+                break;
+#endif
+
+        }     
+
+        case GST_MESSAGE_APPLICATION:
+        {
+            const GstStructure *s;
+            s = gst_message_get_structure (message);
+            if (gst_structure_has_name (s, "GstLaunchInterrupt")) {
+            /* this application message is posted when we caught an interrupt and
+            * we need to stop the pipeline. */
+            g_print(("Interrupt: Stopping pipeline ...\n"));
+            //res = ELR_INTERRUPT;
+            //goto exit;
+            }
+            break;
+        }
+
+        case GST_MESSAGE_NEW_CLOCK:
+        {
+            GDateTime *datetime = g_date_time_new_now_local();
+            gchar *date_str = g_date_time_format(datetime, "%Y%m%d %H:%M:%S");
+            gchar *str = g_strdup_printf("echo '%s' > %s &", date_str, DEFAULT_START_VIDEO_TIME_PATH);
+            __LOG(LOG_NOTICE, "[GST][%s:%d] %s", _FILE_, __LINE__, str);
+            if(system(str) < 0) __LOG(LOG_ERR, "[GST][%s:%d] write error", _FILE_, __LINE__);
+
+            g_date_time_unref(datetime);
+            g_free(date_str);
+#if 0
+            FILE *fp = NULL;
+            fp = fopen(DEFAULT_START_VIDEO_TIME_PATH, "wb");
+            if(fp != NULL)
+            {
+                gchar *date_str = g_date_time_format(datetime, "%Y%m%d %H:%M:%S");
+                fwrite(date_str, sizeof(char), strlen(date_str), fp);
+                fclose(fp);
+            }
+#endif
+            break;
+        }
+        
+        default:
+            __LOG(LOG_NOTICE, "[GST][%s:%d] Got %s message from %s", _FILE_, __LINE__, GST_MESSAGE_TYPE_NAME(message), GST_OBJECT_NAME (message->src));
+            break;
+
+    }
+
+    return TRUE;
+}
+
 static void check_terminal_input(gpointer arg)  //(gpointer arg0, gpointer arg1, gpointer arg2) 
 {
     gint bytesRead;
@@ -196,18 +457,17 @@ static void check_terminal_input(gpointer arg)  //(gpointer arg0, gpointer arg1,
     return;
 }
 
-static gboolean splitCheck(gpointer data, guint8 startSec)
+static void splitCheck(gpointer data, guint8 startSec)
 {
     MuxSinkBin* muxSinkBin = (MuxSinkBin *)data;
     static gboolean start_flag = 0;
-    static gint target_min = -1;
+    static gint target_min;
     guint8 i;
     gint splitMax=0, splitMin=59999;
     GDateTime *datetime = g_date_time_new_now_local();
-    gint min = g_date_time_get_minute(datetime);
-    gint sec = g_date_time_get_second(datetime);
-    //gint microsec = g_date_time_get_microsecond(datetime);
-    g_date_time_unref(datetime);
+    GDateTime *datetimeTarget = NULL;
+    gint min;
+    gint sec;
 
     if(start_flag == 0)
     {
@@ -216,33 +476,27 @@ static gboolean splitCheck(gpointer data, guint8 startSec)
         {
             //if(!(cmdArg.ch_enable & (0x1 << i))) continue;
             if(!muxSinkBin[i].getBinVideoSinkPad()) continue;
-            if (muxSinkBin[i].getStartFlag() == 0) return start_flag; 
+            if (muxSinkBin[i].getStartFlag() == 0) goto func_end; 
         }
+        start_flag = 1;
+        datetimeTarget = g_date_time_add_minutes(datetime, 1);
+        target_min = g_date_time_get_minute(datetimeTarget);
+        //target_min = min + 1;
+        //if(target_min >= 60) target_min = 0;
+        __LOG(LOG_NOTICE, "[GST][%s:%d] second split time : %02dm %02ds", _FILE_, __LINE__, target_min, startSec);
     }
-    //else return start_flag;
 
-    if(target_min == -1)
-    {
-        target_min = min + 1;
-        if(target_min >= 60) target_min = 0;
-        g_print("init split time : %02dm %02ds\n", target_min, startSec);
-    }
+    min = g_date_time_get_minute(datetime);
+    sec = g_date_time_get_second(datetime);
 
     if(target_min != min)
     {
-        return start_flag;
+        goto func_end;
     }
 
     if(sec == startSec+0)    //if(sec == 1 && microsec <= 50000)   //if(sec == 59 && microsec >= 700000 && microsec <b= 750000)
     {
-        if(start_flag == 0)
-        {
-            start_flag = 1;
-            for(i=0; i<MAX_CHANNEL; i++)
-                if(muxSinkBin[i].getBinVideoSinkPad()) muxSinkBin[i].splitNow(NULL, FALSE);
-        }
 #ifdef SPLIT_TIME_RECOVERY
-        else
         {
             for(i=0; i<MAX_CHANNEL; i++)
             {
@@ -267,13 +521,19 @@ static gboolean splitCheck(gpointer data, guint8 startSec)
             }
         }
 #endif
+        datetimeTarget = g_date_time_add_minutes(datetime, cmdArg.duration);
+        target_min = g_date_time_get_minute(datetimeTarget);
+        //target_min += cmdArg.duration;
+        //if(target_min >= 60) target_min -= 60;
 
-        target_min += cmdArg.duration;
-        if(target_min >= 60) target_min -= 60;
-        g_print("next split time : %02dm %02ds\n", target_min, startSec);
+        __LOG(LOG_NOTICE, "[GST][%s:%d] next split time : %02dm %02ds", _FILE_, __LINE__, target_min, startSec);
     }
 
-    return start_flag;
+func_end:
+    if(datetime) g_date_time_unref(datetime);
+    if(datetimeTarget) g_date_time_unref(datetimeTarget);
+
+    return;
 } 
 
 static void splitLoop(gpointer data)
@@ -341,11 +601,12 @@ gint getPasswdWithAES(void)
 	gint ret = 0;
 	gchar passwd[1024] = { 0, };
     const gchar *path = DEFAULT_PASSWD_PATH;
+    AESClass *aesClass = AESClass::getInstance();
 	//info->encrypt.id = strdup(DEFAULT_ENCRYPT_ID);
-	if(encrypt_get_passwd(path, passwd) < 0)
+	if(aesClass->encrypt_get_passwd(path, passwd) < 0)
 	{
 		/* create */
-		ret = encrypt_change_passwd(path, NULL, DEFAULT_RTSP_PASSWD);
+		ret = aesClass->encrypt_change_passwd(path, NULL, DEFAULT_RTSP_PASSWD);
 		if(ret < 0) {
 			__LOG(LOG_ERR, "[CFG][%s:%d] Error change passwd .. ", _FILE_, __LINE__);
 		}
@@ -373,18 +634,22 @@ gint main(gint argc, gchar *argv[])
         nano_str="(Prerelease)";
     else
         nano_str="";
-    printf("This program i linked against Gstreamer %d.%d.%d %s\n", major, minor, micro, nano_str);
+    //printf("This program i linked against Gstreamer %d.%d.%d %s\n", major, minor, micro, nano_str);
 
     ParserClass* parser = ParserClass::getInstance();
-    cmdArg.appname = CHARNEXT(argv[0], '/');
-    parser->init_arg();
+    //cmdArg.appname = CHARNEXT(argv[0], '/');
+    parser->init_arg(argv[0]);
     //attachInterruptHandlers();
     parser->json_parser(DEFAULT_PATH_JSON);
-    if(parser->arg_parser(&argc, &argv, &cmdArg) < 0)
+    if(parser->arg_parser(&argc, &argv) < 0)
         return -1;
-    
+
     getPasswdWithAES();
+    cmdArg = parser->arg;
+
+    __LOG(LOG_NOTICE, "[GST][%s:%d] %s version : %s linked against Gstreamer %d.%d.%d %s", __FILE__, __LINE__, cmdArg.appname, APP_VERSION, major, minor, micro, nano_str);
     parser->print_option();
+    
     //MuxBin* muxBin = MuxBin::getInstance();
     GstBus *bus;
     VideoBin videoBin[MAX_VIDEO_SRC];
@@ -399,6 +664,7 @@ gint main(gint argc, gchar *argv[])
     guint8 i;
     guint srtTimer_id = 0;
     ThreadArgs* thraedArgs = g_new(ThreadArgs, 1);
+    const gchar *stateChangeReturnStr[4] = {"GST_STATE_CHANGE_FAILURE", "GST_STATE_CHANGE_SUCCESS", "GST_STATE_CHANGE_ASYNC", "GST_STATE_CHANGE_NO_PREROLL"};
 
     thraedArgs->arg0 = videoBin;
     thraedArgs->arg1 = recordBin;
@@ -406,7 +672,6 @@ gint main(gint argc, gchar *argv[])
     thraedArgs->arg3 = muxSinkBin;
     thraedArgs->arg4 = captureBin;
 
-    __LOG(LOG_NOTICE, "[GST][%s:%d] %s version : %s", __FILE__, __LINE__, cmdArg.appname, APP_VERSION);
     pipeline = gst_pipeline_new(g_strdup_printf("pipeline-%s", cmdArg.appname));
     //muxBin.init();
     //g_print("width : %d\n", cmdArg.res[cmdArg.resolution_mode].height);
@@ -417,7 +682,7 @@ gint main(gint argc, gchar *argv[])
     if(!cmdArg.fault) fault_setup();
 
     g_setenv("GST_DEBUG_DUMP_DOT_DIR", cmdArg.dotDir, 1);
-    g_print("GST_DEBUG_DUMP_DOT_DIR : %s\n", g_getenv("GST_DEBUG_DUMP_DOT_DIR"));
+    //g_print("GST_DEBUG_DUMP_DOT_DIR : %s\n", g_getenv("GST_DEBUG_DUMP_DOT_DIR"));
 
 #ifdef MUXBIN_ENABLE
     MuxBin muxBin;
@@ -442,12 +707,14 @@ gint main(gint argc, gchar *argv[])
     }
 #endif
 
+    //if(cmdArg.stream_en[STREAM_RTSP]) rtspServerStart();
+
     for(i=0; i<MAX_CHANNEL; i++)
     {
         //if(!(cmdArg.ch_enable & (0x1 << i))) continue;
         if(!cmdArg.cam_en[i]) continue;
         chNum = (ChannelNum)i;
-        __LOG(LOG_NOTICE, "[GST][%s:%d] ch[%d] enable", _FILE_, __LINE__, chNum);
+        __LOG(LOG_INFO, "[GST][%s:%d] ch[%d] enable", _FILE_, __LINE__, chNum);
         videoBin[chNum/2].init((CsiNum)(chNum/2));
 //#if !defined(CHANNEL_EACH_CROP)
 #ifndef CHANNEL_EACH_CROP
@@ -482,7 +749,7 @@ gint main(gint argc, gchar *argv[])
         //print_option();
         if(cmdArg.stream_en[STREAM_RTSP])
         {
-            rtspStart();
+            rtspServerStart();
             videoBin[chNum/2].addBinRtspSrcPad(chNum);
             rtspServerBin[chNum].init(chNum);
 
@@ -579,6 +846,8 @@ gint main(gint argc, gchar *argv[])
     gst_object_unref(bus);
 
     ret = gst_element_set_state(pipeline, GST_STATE_PAUSED);
+    
+    __LOG(LOG_NOTICE, "[GST][%s:%d] paused : %s", _FILE_, __LINE__, stateChangeReturnStr[ret]);
     if (ret == GST_STATE_CHANGE_FAILURE)
     {
         __LOG(LOG_CRIT, "[GST][%s:%d] pipeline state paused error", _FILE_, __LINE__);
@@ -588,13 +857,14 @@ gint main(gint argc, gchar *argv[])
     else if(ret == GST_STATE_CHANGE_NO_PREROLL)
     {
         is_live = TRUE;
-        __LOG(LOG_NOTICE, "[GST][%s:%d] pipeline state paused (ret : %d)", _FILE_, __LINE__, ret);
+        //__LOG(LOG_NOTICE, "[GST][%s:%d] pipeline state paused", _FILE_, __LINE__);
     }
 
     __LOG(LOG_NOTICE, "[GST][%s:%d] delay %d sec for play", __FILE__, __LINE__, cmdArg.play_delay);
     sleep(cmdArg.play_delay);
 
     ret = gst_element_set_state(pipeline, GST_STATE_PLAYING);
+    __LOG(LOG_NOTICE, "[GST][%s:%d] playing : %s", _FILE_, __LINE__, stateChangeReturnStr[ret]);
     if (ret == GST_STATE_CHANGE_FAILURE)
     {
         __LOG(LOG_CRIT, "[GST][%s:%d] pipeline state playing error", _FILE_, __LINE__);
@@ -617,9 +887,9 @@ gint main(gint argc, gchar *argv[])
     loop = g_main_loop_new(NULL, FALSE);
 
 	if(!loop) {
-        __LOG(LOG_CRIT, "[GST][%s:%d] Main loop create error", _FILE_, __LINE__);
+        __LOG(LOG_CRIT, "[GST][%s:%d] mainLoop create error", _FILE_, __LINE__);
     } else {
-        __LOG(LOG_NOTICE, "[GST][%s:%d] Main loop start", _FILE_, __LINE__);
+        __LOG(LOG_NOTICE, "[GST][%s:%d] mainLoop start", _FILE_, __LINE__);
 #if 0
         g_main_loop_run(loop);
 #else
@@ -656,7 +926,7 @@ gint main(gint argc, gchar *argv[])
     }
 
 main_end:
-    rtspStop();
+    rtspServerStop();
     if(loop) g_main_loop_unref(loop);
     if(pipeline) gst_object_unref(pipeline);
     if(thraedArgs) g_free(thraedArgs);

@@ -27,7 +27,7 @@ TestBin::TestBin()
 
 TestBin::~TestBin()
 {
-    __LOG(LOG_NOTICE, "[GST][%s:%d] %s", _FILE_, __LINE__, __FUNCTION__);
+    __LOG(LOG_INFO, "[GST][%s:%d] %s", _FILE_, __LINE__, __FUNCTION__);
 }
 
 GstPad* TestBin::getBinSrcPad(guint8 ch)

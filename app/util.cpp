@@ -40,10 +40,11 @@ void log_once(gint opt, const gchar *message)
     {
         GDateTime *datetime = g_date_time_new_now_local();
         gchar *date_str = g_date_time_format(datetime, "%Y-%m-%d %H:%M:%S");
+        gint usec = g_date_time_get_microsecond(datetime);
         const gchar *debug_codes[] = {"emerg", "alert", "crit", "err", "warning", "notice", "info", "debug"};
 		const gchar *color_codes[] = {"\033[1;34m", "\033[0;34m", "\033[1;31m", "\033[1;35m", "\033[1;33m", "\033[1;32m", "\033[1;36m", "\033[0m"};
 
-		g_print("%s%s %s: [%s]\033[0m", color_codes[opt], date_str, PROGRAM_NAME, debug_codes[opt]);
+		g_print("%s%s:%03d %s: [%s]\033[0m", color_codes[opt], date_str, usec/1000, PROGRAM_NAME, debug_codes[opt]);
         g_print("%s\n", message);
         g_date_time_unref(datetime);
         g_free(date_str);
@@ -72,12 +73,13 @@ void mylog(gint opt, const gchar* _szfmt, ... )
         GDateTime *datetime = g_date_time_new_now_local();
         //gchar *date_str = g_date_time_format(datetime, "%Y%m%d_%H%M00");
         gchar *date_str = g_date_time_format(datetime, "%Y-%m-%d %H:%M:%S");
+        gint usec = g_date_time_get_microsecond(datetime);
 
         //gchar *tmp = g_strdup_printf("output_%s.mp4", date_str);
         //memcpy(file_name, tmp, 128);
         const gchar *debug_codes[] = {"emerg", "alert", "crit", "err", "warning", "notice", "info", "debug"};
 		const gchar *color_codes[] = {"\033[1;34m", "\033[0;34m", "\033[1;31m", "\033[1;35m", "\033[1;33m", "\033[1;32m", "\033[1;36m", "\033[0m"};
-		g_print("%s%s %s: [%s]\033[0m", color_codes[opt], date_str, PROGRAM_NAME, debug_codes[opt]);
+		g_print("%s%s:%03d %s: [%s]\033[0m", color_codes[opt], date_str, usec/1000, PROGRAM_NAME, debug_codes[opt]);
 
 		vprintf( _szfmt, va );
 		printf("\n");
@@ -165,4 +167,31 @@ gchar *search_file(const gchar* path, const gchar* prefix, const gchar* suffix)
 	//Eliminate(str, '\n');
 
 	return str;
+}
+
+void print_tag(const GstTagList * list, const gchar * tag, gpointer unused)
+{
+    gint i, count;
+
+    count = gst_tag_list_get_tag_size (list, tag);
+
+    for (i = 0; i < count; i++) {
+      gchar *str;
+
+      if (gst_tag_get_type (tag) == G_TYPE_STRING) {
+        if (!gst_tag_list_get_string_index (list, tag, i, &str))
+          g_assert_not_reached ();
+      } else {
+        str =
+          g_strdup_value_contents (gst_tag_list_get_value_index (list, tag, i));
+      }
+
+      if (i == 0) {
+        g_print ("  %15s: %s\n", gst_tag_get_nick (tag), str);
+      } else {
+        g_print ("                 : %s\n", str);
+      }
+
+      g_free (str);
+    }
 }

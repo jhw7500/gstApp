@@ -229,7 +229,7 @@ static GstFlowReturn new_sample_handler(GstElement *sink, gpointer userData)
 static GstFlowReturn new_preroll_handler(GstElement *sink, gpointer data) 
 {
     RtspServerData *info = (RtspServerData *)data;
-    __LOG(LOG_NOTICE, "[GST][%s:%d] %s[%d]", _FILE_, __LINE__, __FUNCTION__, info->ch);
+    __LOG(LOG_INFO, "[GST][%s:%d] %s[%d]", _FILE_, __LINE__, __FUNCTION__, info->ch);
     info->start_f = TRUE;
 
     return GST_FLOW_OK;
@@ -395,7 +395,7 @@ RtspServerBin::RtspServerBin()
 
 RtspServerBin::~RtspServerBin()
 {
-    __LOG(LOG_NOTICE, "[GST][%s:%d] %s[%d]", _FILE_, __LINE__, __FUNCTION__, ch);
+    __LOG(LOG_INFO, "[GST][%s:%d] %s[%d]", _FILE_, __LINE__, __FUNCTION__, ch);
 }
 
 GstPad* RtspServerBin::getBinSinkPad()
@@ -412,7 +412,7 @@ gint RtspServerBin::init(guint8 num)
     ch = num;
     rtspServerData.ch = ch;
     //sinkPad = NULL;
-    __LOG(LOG_NOTICE, "[GST][%s:%d] %s ch : %d", _FILE_, __LINE__, __FUNCTION__, ch);
+    __LOG(LOG_INFO, "[GST][%s:%d] %s ch : %d", _FILE_, __LINE__, __FUNCTION__, ch);
 
     re.bin = gst_bin_new(g_strdup_printf("rtspServerBin%d", ch));
     re.queue = gst_element_factory_make(QUEUE_TYPE, "queue");
@@ -509,8 +509,8 @@ gint RtspServerBin::init(guint8 num)
     gst_rtsp_media_factory_set_shared(factory, TRUE);
     g_free(launch_str);
     
-    log_once(LOG_NOTICE, g_strdup_printf("[GST][%s:%d] eos shutdown : %s", _FILE_, __LINE__, gst_rtsp_media_factory_is_eos_shutdown(factory)? "TRUE":"FALSE"));
-    log_once(LOG_NOTICE, g_strdup_printf("[GST][%s:%d] latency : %d", _FILE_, __LINE__, gst_rtsp_media_factory_get_latency(factory)));
+    log_once(LOG_INFO, g_strdup_printf("[GST][%s:%d] eos shutdown : %s", _FILE_, __LINE__, gst_rtsp_media_factory_is_eos_shutdown(factory)? "TRUE":"FALSE"));
+    log_once(LOG_INFO, g_strdup_printf("[GST][%s:%d] latency : %d", _FILE_, __LINE__, gst_rtsp_media_factory_get_latency(factory)));
     //rtspServerData.appsrc = gst_element_factory_make("appsrc", rtspServerData.appSrcName);
     g_signal_connect(factory, "media-configure", (GCallback)media_configure, &rtspServerData);
 
@@ -523,7 +523,7 @@ gint RtspServerBin::init(guint8 num)
                                     GST_RTSP_PERM_MEDIA_FACTORY_ACCESS, G_TYPE_BOOLEAN, TRUE,
                                     GST_RTSP_PERM_MEDIA_FACTORY_CONSTRUCT, G_TYPE_BOOLEAN, TRUE, NULL);
 
-    __LOG(LOG_NOTICE, "[RTSP][%s:%d]stream ready at rtsp://%s:%s@127.0.0.1:%s%s", _FILE_, __LINE__, cmdArg.rtsp_id, cmdArg.rtsp_passwd, cmdArg.rtsp_port, point);
+    __LOG(LOG_INFO, "[RTSP][%s:%d]stream ready at rtsp://%s:%s@127.0.0.1:%s%s", _FILE_, __LINE__, cmdArg.rtsp_id, cmdArg.rtsp_passwd, cmdArg.rtsp_port, point);
     
     g_free(point);
 
@@ -531,13 +531,13 @@ gint RtspServerBin::init(guint8 num)
 }
 
 #if 1
-void rtspStop()
+void rtspServerStop()
 {
     if(rtspServer) g_object_unref(rtspServer);
     if(cleanRtsp_id) g_source_remove(cleanRtsp_id);
 }
 
-gint rtspStart()
+gint rtspServerStart()
 {
     gint ret = 0;
     if(rtspServer) return ret;
@@ -556,7 +556,7 @@ gint rtspStart()
     GstRTSPAuth *auth = gst_rtsp_auth_new ();
     
     /* make user token */
-    __LOG(LOG_NOTICE, "[RTSP][%s:%d] id : %s, passwd : %s", _FILE_, __LINE__, cmdArg.rtsp_id, cmdArg.rtsp_passwd);
+    __LOG(LOG_INFO, "[RTSP][%s:%d] rtsp id : %s, passwd : %s", _FILE_, __LINE__, cmdArg.rtsp_id, cmdArg.rtsp_passwd);
     GstRTSPToken *token = gst_rtsp_token_new (GST_RTSP_TOKEN_MEDIA_FACTORY_ROLE, G_TYPE_STRING, cmdArg.rtsp_id, NULL);
     gchar *basic = gst_rtsp_auth_make_basic (cmdArg.rtsp_id, cmdArg.rtsp_passwd);
     gst_rtsp_auth_add_basic (auth, basic, token);

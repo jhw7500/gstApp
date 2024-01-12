@@ -44,9 +44,10 @@
 #define DEFAULT_PLAY_DELAY  3
 #define DEFAULT_CAPTURE_MAX_CNT 3
 #define DEFAULT_SPLIT_MARGIN_MSEC    100
-#define DEFAULT_SPLIT_MAX_MSEC      1500
+#define DEFAULT_SPLIT_MAX_MSEC      2000
 
-#define DEFULAT_DOT_PATH    "/tmp"
+#define DEFAULT_START_VIDEO_TIME_PATH   "/tmp/start_video_time"
+#define DEFAULT_DOT_PATH    "/tmp"
 #define JHW_TESTx
 #ifdef JHW_TEST
 #define DEFAULT_MOUNT_PATH   "/home/user/jhw"
@@ -55,8 +56,6 @@
 #define DEFAULT_MOUNT_PATH   "/mnt/sd_cam"
 #define DEFAULT_CAPTURE_PATH   "/mnt/sd_cam/capture"
 #endif
-
-gboolean bus_message_parse(GstBus *bus, GstMessage *message, gpointer data);
 
 class ParserClass
 {
@@ -68,14 +67,17 @@ public :
 	gint destroy() ;
     gint cmd_parser(gchar *path, gpointer data);
     gint json_parser(const gchar *path);
-    gint arg_parser(int *argc, char **argv[], gpointer data);
+    gint arg_parser(int *argc, char **argv[]);
     void print_option();
-    void init_arg();
+    void init_arg(gchar *argv);
+    static gint json_object_get_value(json_object *hobj, const gchar *name, gpointer data);
+    static json_object *json_find_obj (json_object * jobj, char *find_key);
     
 private :
 	
 public :
 	gboolean m_flagDestroy;
+    CmdArg arg;
 	
 private :
 
