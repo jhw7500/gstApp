@@ -19,6 +19,9 @@
 #include <stdio.h>
 #include "util.h"
 
+#define GST_API_VERSION "1.0"
+#define APP_VERSION "0.0"
+
 #define CHANNEL_EACH_CROP
 #define DEBUG_TIMESTAMP
 #define MAX_CHANNEL 4
@@ -155,6 +158,9 @@ extern const char *test0;
 extern const char *test1;
 extern const char *test2;
 
+void fault_setup (void);
+void addSignalHandler();
+void removeSignalHandler();
 void mylog(gint opt, const gchar* _szfmt, ... );
 void log_once(gint opt, const gchar *message);
 guint charArrayToInt(gchar *arr);

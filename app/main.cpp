@@ -20,7 +20,6 @@
 #include "captureBin.h"
 #include "parser.h"
 #include "aes.h"
-#include <glib-unix.h>
 #include <fcntl.h>
 //#include <signal.h>
 
@@ -31,135 +30,6 @@
 #define MUXBIN_ENABLEx
 #define SPLIT_TIME_RECOVERY
 //MuxSinkBin muxSinkBin[MAX_CHANNEL];
-
-#define GST_API_VERSION "1.0"
-#define APP_VERSION "0.0"
-
-static gboolean quiet = FALSE;
-extern volatile gboolean glib_on_error_halt;
-guint signal_watch_intr_id = 0;
-guint signal_watch_hup_id = 0;
-gboolean ch_en_array[MAX_CHANNEL] = { TRUE, TRUE, TRUE, TRUE };
-
-static void fault_restore (void);
-static void fault_spin (void);
-
-static gboolean intr_handler (gpointer user_data)
-{
-  GstElement *pipeline = (GstElement *) user_data;
-  g_print("handling interrupt.\n");
-  /* post an application specific message */
-  gst_element_post_message (GST_ELEMENT (pipeline),
-      gst_message_new_application (GST_OBJECT (pipeline),
-          gst_structure_new ("GstLaunchInterrupt",
-              "message", G_TYPE_STRING, "Pipeline interrupted", NULL)));
-  /* remove signal handler */
-  signal_watch_intr_id = 0;
-  is_interrupted = TRUE;
-  return G_SOURCE_REMOVE;
-}
-
-static gboolean hup_handler (gpointer user_data)
-{
-  GstElement *pipeline = (GstElement *) user_data;
-  if (g_getenv ("GST_DEBUG_DUMP_DOT_DIR") != NULL) {
-    g_print("SIGHUP: dumping dot file snapshot ...\n");
-  } else {
-    g_print("SIGHUP: not dumping dot file snapshot, GST_DEBUG_DUMP_DOT_DIR "
-        "environment variable not set.\n");
-  }
-  /* dump graph on hup */
-  GST_DEBUG_BIN_TO_DOT_FILE_WITH_TS (GST_BIN (pipeline),
-      GST_DEBUG_GRAPH_SHOW_ALL, "gst-launch.snapshot");
-  return G_SOURCE_CONTINUE;
-}
-
-static void fault_handler_sighandler (int signum)
-{
-  fault_restore ();
-  /* printf is used instead of g_print(), since it's less likely to
-   * deadlock */
-  switch (signum) {
-    case SIGSEGV:
-      fprintf (stderr, "Caught SIGSEGV\n");
-      break;
-    case SIGQUIT:
-      if (!quiet)
-        printf ("Caught SIGQUIT\n");
-      break;
-    default:
-      fprintf (stderr, "signo:  %d\n", signum);
-      break;
-  }
-  fault_spin ();
-}
-static void fault_spin (void)
-{
-  int spinning = TRUE;
-  glib_on_error_halt = FALSE;
-  g_on_error_stack_trace ("/home/user/gstApp" GST_API_VERSION);
-  wait (NULL);
-  /* FIXME how do we know if we were run by libtool? */
-  fprintf (stderr,
-      "Spinning.  Please run 'gdb gstApp " GST_API_VERSION " %d' to "
-      "continue debugging, Ctrl-C to quit, or Ctrl-\\ to dump core.\n",
-      (gint) getpid ());
-  while (spinning)
-    g_usleep (1000000);
-}
-static void fault_restore (void)
-{
-  struct sigaction action;
-  memset (&action, 0, sizeof (action));
-  action.sa_handler = SIG_DFL;
-  sigaction (SIGSEGV, &action, NULL);
-  sigaction (SIGQUIT, &action, NULL);
-}
-static void fault_setup (void)
-{
-  struct sigaction action;
-  memset (&action, 0, sizeof (action));
-  action.sa_handler = fault_handler_sighandler;
-  sigaction (SIGSEGV, &action, NULL);
-  sigaction (SIGQUIT, &action, NULL);
-}
-
-void sigHandler(int sig)
-{
-    static guint8 cnt = 0;
-    __LOG(LOG_NOTICE, "[GST][%s:%d] sigHandler(%d)", _FILE_, __LINE__, sig);
-	is_interrupted = TRUE;
-    if(cnt++ > 3)
-    {
-        g_main_loop_unref(loop);
-        gst_element_set_state (pipeline, GST_STATE_NULL);
-        gst_object_unref(pipeline);
-    }
-
-#if 0
-    for(guint8 i=0; i<MAX_CHANNEL; i++)
-    {
-        gst_pad_send_event(muxSinkBin[i].getBinVideoSinkPad(), gst_event_new_eos());
-#ifdef AUDIOBIN_ENABLE
-        gst_pad_send_event(muxSinkBin[i].getBinAudioSinkPad(), gst_event_new_eos());
-#endif
-    }
-#endif
-}
-
-void attachInterruptHandlers()
-{
-    //signal(SIGUSR1, ipcHandler);
-    signal(SIGINT, sigHandler);
-    signal(SIGKILL, sigHandler);
-    signal(SIGTERM, sigHandler);
-}
-
-void cleanup() {
-    //g_message("Cleaning up GStreamer...");
-    __LOG(LOG_INFO, "[GST][%s:%d] %s", _FILE_, __LINE__, __FUNCTION__);
-    gst_deinit();  // GStreamer 해제
-}
 
 gboolean bus_message_parse(GstBus *bus, GstMessage *message, gpointer data)
 {
@@ -622,7 +492,7 @@ gint getPasswdWithAES(void)
 
 gint main(gint argc, gchar *argv[]) 
 {
-    atexit(cleanup);
+    atexit(gst_deinit);
     gst_init(&argc, &argv);
     
     guint major, minor, micro, nano;
@@ -676,8 +546,9 @@ gint main(gint argc, gchar *argv[])
     //muxBin.init();
     //g_print("width : %d\n", cmdArg.res[cmdArg.resolution_mode].height);
 
-    signal_watch_intr_id = g_unix_signal_add (SIGINT, (GSourceFunc) intr_handler, pipeline);
-    signal_watch_hup_id = g_unix_signal_add (SIGHUP, (GSourceFunc) hup_handler, pipeline);
+    //signal_watch_intr_id = g_unix_signal_add (SIGINT, (GSourceFunc) intr_handler, pipeline);
+    //signal_watch_hup_id = g_unix_signal_add (SIGHUP, (GSourceFunc) hup_handler, pipeline);
+    addSignalHandler();
 
     if(!cmdArg.fault) fault_setup();
 
@@ -943,8 +814,7 @@ main_end:
         g_source_remove(srtTimer_id);
     }
 
-    if (signal_watch_intr_id > 0) g_source_remove(signal_watch_intr_id);
-    if (signal_watch_hup_id > 0) g_source_remove(signal_watch_hup_id);
+    removeSignalHandler();
 
     return 0;
 }

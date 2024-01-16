@@ -114,32 +114,25 @@ gint ParserClass::json_parser(const gchar *path)
         //hobj = json_find_obj(jobj, "VHL_CAM");
         hobj = json_object_object_get(jobj, "VHL_CAM");
         type = json_object_get_type(hobj);
-#if 1
+
 		if(type != json_type_object) {
 			__LOG(LOG_ERR, "[CFG][%s:%d] data not json type[%d]", _FILE_, __LINE__, type);
 			//break;
 		}
-#endif
 
-#if 1
         json_object_get_value(hobj, "vhl_name", &arg.ohtName);
-        //__LOG(LOG_NOTICE, "[CFG][%s:%d] vhl_name : %s", _FILE_, __LINE__, arg.ohtName);
         json_object_get_value(hobj, "id", &arg.rtsp_id);
-        //__LOG(LOG_NOTICE, "[CFG][%s:%d] id : %s", _FILE_, __LINE__, arg.rtsp_id);
-        //json_object_get_value(hobj, "passwd", &arg.rtsp_passwd);
-        //__LOG(LOG_NOTICE, "[CFG][%s:%d] rtsp_passwd : %s", _FILE_, __LINE__, arg.rtsp_passwd);
         json_object_get_value(hobj, "cam_width", &arg.width);
-        //__LOG(LOG_NOTICE, "[CFG][%s:%d] cam_width : %d", _FILE_, __LINE__, arg.width);
         json_object_get_value(hobj, "cam_height", &arg.height);
-        //__LOG(LOG_NOTICE, "[CFG][%s:%d] cam_height : %d", _FILE_, __LINE__, arg.height);
         json_object_get_value(hobj, "recording_time", &arg.duration);
+        json_object_get_value(hobj, "log_level", &arg.log_level);
+        json_object_get_value(hobj, "debug_level", &arg.dbg_level);
 
         for(guint8 i=0; i<MAX_CHANNEL; i++)
         {
             json_object_get_value(hobj, g_strdup_printf("cam_ch%d", i), &arg.cam_en[i]);
             json_object_get_value(hobj, g_strdup_printf("cam_ch%d_rotate", i), &arg.cam_rotate[i]);
         }
-#endif
 
     } while(0);
 

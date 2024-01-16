@@ -11,48 +11,190 @@
  */
 
 #include "util.h"
+#include <glib-unix.h>
 
 GstElement *pipeline = NULL;
 GMainLoop *loop = NULL;
 volatile sig_atomic_t is_interrupted = 0;
 gboolean is_live = FALSE;
 CmdArg cmdArg;
-const char *test0;
-const char *test1;
-const char *test2;
+
+static gboolean quiet = FALSE;
+extern volatile gboolean glib_on_error_halt;
+guint signal_watch_intr_id = 0;
+guint signal_watch_hup_id = 0;
+gboolean ch_en_array[MAX_CHANNEL] = { TRUE, TRUE, TRUE, TRUE };
+
+static void fault_restore (void);
+static void fault_spin (void);
+
+static gboolean intr_handler (gpointer user_data)
+{
+  GstElement *pipeline = (GstElement *) user_data;
+  g_print("handling interrupt.\n");
+  /* post an application specific message */
+  gst_element_post_message (GST_ELEMENT (pipeline),
+      gst_message_new_application (GST_OBJECT (pipeline),
+          gst_structure_new ("GstLaunchInterrupt",
+              "message", G_TYPE_STRING, "Pipeline interrupted", NULL)));
+  /* remove signal handler */
+  signal_watch_intr_id = 0;
+  is_interrupted = TRUE;
+  return G_SOURCE_REMOVE;
+}
+
+static gboolean hup_handler (gpointer user_data)
+{
+  GstElement *pipeline = (GstElement *) user_data;
+  if (g_getenv ("GST_DEBUG_DUMP_DOT_DIR") != NULL) {
+    g_print("SIGHUP: dumping dot file snapshot ...\n");
+  } else {
+    g_print("SIGHUP: not dumping dot file snapshot, GST_DEBUG_DUMP_DOT_DIR "
+        "environment variable not set.\n");
+  }
+  /* dump graph on hup */
+  GST_DEBUG_BIN_TO_DOT_FILE_WITH_TS (GST_BIN (pipeline),
+      GST_DEBUG_GRAPH_SHOW_ALL, "gst-launch.snapshot");
+  return G_SOURCE_CONTINUE;
+}
+
+static void fault_handler_sighandler (int signum)
+{
+  fault_restore ();
+  /* printf is used instead of g_print(), since it's less likely to
+   * deadlock */
+  switch (signum) {
+    case SIGSEGV:
+      fprintf (stderr, "Caught SIGSEGV\n");
+      break;
+    case SIGQUIT:
+      if (!quiet)
+        printf ("Caught SIGQUIT\n");
+      break;
+    default:
+      fprintf (stderr, "signo:  %d\n", signum);
+      break;
+  }
+  fault_spin ();
+}
+
+static void fault_spin (void)
+{
+  int spinning = TRUE;
+  glib_on_error_halt = FALSE;
+  g_on_error_stack_trace (__FILE__ GST_API_VERSION);
+  wait (NULL);
+  /* FIXME how do we know if we were run by libtool? */
+  fprintf (stderr,
+      "Spinning.  Please run 'gdb gstApp " GST_API_VERSION " %d' to "
+      "continue debugging, Ctrl-C to quit, or Ctrl-\\ to dump core.\n",
+      (gint) getpid ());
+  while (spinning)
+    g_usleep (1000000);
+}
+
+static void fault_restore (void)
+{
+  struct sigaction action;
+  memset (&action, 0, sizeof (action));
+  action.sa_handler = SIG_DFL;
+  sigaction (SIGSEGV, &action, NULL);
+  sigaction (SIGQUIT, &action, NULL);
+}
+
+void fault_setup (void)
+{
+  struct sigaction action;
+  memset (&action, 0, sizeof (action));
+  action.sa_handler = fault_handler_sighandler;
+  sigaction (SIGSEGV, &action, NULL);
+  sigaction (SIGQUIT, &action, NULL);
+}
+
+void sigHandler(int sig)
+{
+  static guint8 cnt = 0;
+  __LOG(LOG_NOTICE, "[GST][%s:%d] sigHandler(%d)", _FILE_, __LINE__, sig);
+	is_interrupted = TRUE;
+  if(cnt++ > 3)
+  {
+    g_main_loop_unref(loop);
+    gst_element_set_state (pipeline, GST_STATE_NULL);
+    gst_object_unref(pipeline);
+  }
+
+#if 0
+  for(guint8 i=0; i<MAX_CHANNEL; i++)
+  {
+    gst_pad_send_event(muxSinkBin[i].getBinVideoSinkPad(), gst_event_new_eos());
+#ifdef AUDIOBIN_ENABLE
+    gst_pad_send_event(muxSinkBin[i].getBinAudioSinkPad(), gst_event_new_eos());
+#endif
+  }
+#endif
+}
+
+void addSignalHandler()
+{
+  signal_watch_intr_id = g_unix_signal_add (SIGINT, (GSourceFunc) intr_handler, pipeline);
+  signal_watch_hup_id = g_unix_signal_add (SIGHUP, (GSourceFunc) hup_handler, pipeline);
+}
+
+void removeSignalHandler()
+{
+  if (signal_watch_intr_id > 0) g_source_remove(signal_watch_intr_id);
+  if (signal_watch_hup_id > 0) g_source_remove(signal_watch_hup_id);
+}
+
+void attachInterruptHandlers()
+{
+  //signal(SIGUSR1, ipcHandler);
+  signal(SIGINT, sigHandler);
+  signal(SIGKILL, sigHandler);
+  signal(SIGTERM, sigHandler);
+}
+
+void cleanup()
+{
+  //g_message("Cleaning up GStreamer...");
+  __LOG(LOG_INFO, "[GST][%s:%d] %s", _FILE_, __LINE__, __FUNCTION__);
+  gst_deinit();  // GStreamer 해제
+}
+
 void log_once(gint opt, const gchar *message) 
 {
-    static gchar lastMessage[256][256];
-    static guint8 ptr = 0;
+  static gchar lastMessage[256][256];
+  static guint8 ptr = 0;
 
-    for(guint8 i=0; i<ptr; i++)
-    {
-        if (strcmp(message, lastMessage[i]) == 0) {
-            return;
-        }
+  for(guint8 i=0; i<ptr; i++)
+  {
+    if (strcmp(message, lastMessage[i]) == 0) {
+      return;
     }
+  }
 
-    if(opt <= cmdArg.log_level || opt <= LOG_ALERT)
-    {
-        syslog( opt|LOG_LOCAL0, "%s", message);
-    }
-    if(opt <= cmdArg.dbg_level || opt <= LOG_ALERT)
-    {
-        GDateTime *datetime = g_date_time_new_now_local();
-        gchar *date_str = g_date_time_format(datetime, "%Y-%m-%d %H:%M:%S");
-        gint usec = g_date_time_get_microsecond(datetime);
-        const gchar *debug_codes[] = {"emerg", "alert", "crit", "err", "warning", "notice", "info", "debug"};
+  if(opt <= cmdArg.log_level || opt <= LOG_ALERT)
+  {
+    syslog( opt|LOG_LOCAL0, "%s", message);
+  }
+
+  if(opt <= cmdArg.dbg_level || opt <= LOG_ALERT)
+  {
+    GDateTime *datetime = g_date_time_new_now_local();
+    gchar *date_str = g_date_time_format(datetime, "%Y-%m-%d %H:%M:%S");
+    gint usec = g_date_time_get_microsecond(datetime);
+    const gchar *debug_codes[] = {"emerg", "alert", "crit", "err", "warning", "notice", "info", "debug"};
 		const gchar *color_codes[] = {"\033[1;34m", "\033[0;34m", "\033[1;31m", "\033[1;35m", "\033[1;33m", "\033[1;32m", "\033[1;36m", "\033[0m"};
 
 		g_print("%s%s:%03d %s: [%s]\033[0m", color_codes[opt], date_str, usec/1000, PROGRAM_NAME, debug_codes[opt]);
-        g_print("%s\n", message);
-        g_date_time_unref(datetime);
-        g_free(date_str);
-    }
+    g_print("%s\n", message);
+    g_date_time_unref(datetime);
+    g_free(date_str);
+  }
 
     //strncpy(lastMessage[ptr], message, sizeof(lastMessage));
-    strncpy(lastMessage[ptr], message, sizeof(lastMessage[ptr]));
-    ptr++;
+  strncpy(lastMessage[ptr], message, sizeof(lastMessage[ptr]));
+  ptr++;
 }
 
 void mylog(gint opt, const gchar* _szfmt, ... )
@@ -70,22 +212,22 @@ void mylog(gint opt, const gchar* _szfmt, ... )
 	if(opt <= cmdArg.dbg_level || opt <= LOG_ALERT) {
 		//timer = time(NULL);
 		//localtime_r(&timer, &t);
-        GDateTime *datetime = g_date_time_new_now_local();
-        //gchar *date_str = g_date_time_format(datetime, "%Y%m%d_%H%M00");
-        gchar *date_str = g_date_time_format(datetime, "%Y-%m-%d %H:%M:%S");
-        gint usec = g_date_time_get_microsecond(datetime);
+    GDateTime *datetime = g_date_time_new_now_local();
+    //gchar *date_str = g_date_time_format(datetime, "%Y%m%d_%H%M00");
+    gchar *date_str = g_date_time_format(datetime, "%Y-%m-%d %H:%M:%S");
+    gint usec = g_date_time_get_microsecond(datetime);
 
-        //gchar *tmp = g_strdup_printf("output_%s.mp4", date_str);
-        //memcpy(file_name, tmp, 128);
-        const gchar *debug_codes[] = {"emerg", "alert", "crit", "err", "warning", "notice", "info", "debug"};
+    //gchar *tmp = g_strdup_printf("output_%s.mp4", date_str);
+    //memcpy(file_name, tmp, 128);
+    const gchar *debug_codes[] = {"emerg", "alert", "crit", "err", "warning", "notice", "info", "debug"};
 		const gchar *color_codes[] = {"\033[1;34m", "\033[0;34m", "\033[1;31m", "\033[1;35m", "\033[1;33m", "\033[1;32m", "\033[1;36m", "\033[0m"};
 		g_print("%s%s:%03d %s: [%s]\033[0m", color_codes[opt], date_str, usec/1000, PROGRAM_NAME, debug_codes[opt]);
 
 		vprintf( _szfmt, va );
 		printf("\n");
 		fflush(stdout);
-        g_date_time_unref(datetime);
-        g_free(date_str);
+    g_date_time_unref(datetime);
+    g_free(date_str);
 	}
 	va_end( va );
 }
@@ -97,8 +239,8 @@ guint charArrayToInt(gchar *arr)
 
     for(i=0; (arr[i]!='\n' && arr[i]!='\r' && arr[i]!='\0' && arr[i]!=' '); i++)
     {
-        //g_print("arr[%d] : %c %d\n", i, arr[i], arr[i]);
-        result = (result * 10) + (arr[i] - '0');
+      //g_print("arr[%d] : %c %d\n", i, arr[i], arr[i]);
+      result = (result * 10) + (arr[i] - '0');
     }
 
     //g_print("result : %d\n", result);
@@ -120,34 +262,34 @@ gboolean compareBuf(guint8 *cmp1, guint8 *cmp2, guint8 len)
 
 GstPadProbeReturn probe_function(GstPad *pad, GstPadProbeInfo *info, gpointer user_data) 
 {
-    GstElement *data = (GstElement *)user_data;
-    GstClockTime timestamp = GST_BUFFER_PTS(info->data);
-    gchar *name;
-    g_object_get(data, "name", &name, NULL);
-    g_message("%s[%s]Timestamp: %" GST_TIME_FORMAT "\n", name, gst_pad_get_direction(pad)==1? "SRC":"SINK", GST_TIME_ARGS(timestamp));
+  GstElement *data = (GstElement *)user_data;
+  GstClockTime timestamp = GST_BUFFER_PTS(info->data);
+  gchar *name;
+  g_object_get(data, "name", &name, NULL);
+  g_message("%s[%s]Timestamp: %" GST_TIME_FORMAT "\n", name, gst_pad_get_direction(pad)==1? "SRC":"SINK", GST_TIME_ARGS(timestamp));
 
-    g_free(name);
-    return GST_PAD_PROBE_OK;
+  g_free(name);
+  return GST_PAD_PROBE_OK;
 }
 
 gboolean print_delay(GstPad *pad, GstObject *parent, GstBuffer *buffer)
 {
-    // 현재 시간 가져오기
-    static GstClockTime prev_time = GST_CLOCK_TIME_NONE;
-    GstClockTime current_time = GST_BUFFER_PTS(buffer);
+  // 현재 시간 가져오기
+  static GstClockTime prev_time = GST_CLOCK_TIME_NONE;
+  GstClockTime current_time = GST_BUFFER_PTS(buffer);
 
-    if (prev_time != GST_CLOCK_TIME_NONE) {
-        // 이전 시간이 존재하면 현재 시간과의 차이 계산
-        GstClockTimeDiff delay = current_time - prev_time;
+  if (prev_time != GST_CLOCK_TIME_NONE) {
+    // 이전 시간이 존재하면 현재 시간과의 차이 계산
+    GstClockTimeDiff delay = current_time - prev_time;
 
-        // 지연 출력
-        g_print("Delay: %" GST_TIME_FORMAT "\n", GST_TIME_ARGS(delay));
-    }
+    // 지연 출력
+    g_print("Delay: %" GST_TIME_FORMAT "\n", GST_TIME_ARGS(delay));
+  }
 
-    // 이전 시간 업데이트
-    prev_time = current_time;
+  // 이전 시간 업데이트
+  prev_time = current_time;
 
-    return TRUE;
+  return TRUE;
 }
 
 gchar *search_file(const gchar* path, const gchar* prefix, const gchar* suffix)
@@ -155,14 +297,14 @@ gchar *search_file(const gchar* path, const gchar* prefix, const gchar* suffix)
 	FILE *fp;
 	static gchar str[128];
 
-    sprintf(str, "ls -ptr %s/%s*%s | grep -v '/$' | tail -1 | tr -d '\r\n'", path, prefix, suffix);
-    fp = popen(str, "r");
-    if (NULL == fp)
-    {
-        perror("popen() fail");
-        __LOG(LOG_CRIT, "[CFG][%s:%d] popen fail", _FILE_, __LINE__);
-    }
-    while (fgets(str, 128, fp));
+  sprintf(str, "ls -ptr %s/%s*%s | grep -v '/$' | tail -1 | tr -d '\r\n'", path, prefix, suffix);
+  fp = popen(str, "r");
+  if (NULL == fp)
+  {
+    perror("popen() fail");
+    __LOG(LOG_CRIT, "[CFG][%s:%d] popen fail", _FILE_, __LINE__);
+  }
+  while (fgets(str, 128, fp));
 	__LOG(LOG_INFO, "[CFG][%s:%d] search_json_file : %s", _FILE_, __LINE__, str);
 	//Eliminate(str, '\n');
 
@@ -171,27 +313,26 @@ gchar *search_file(const gchar* path, const gchar* prefix, const gchar* suffix)
 
 void print_tag(const GstTagList * list, const gchar * tag, gpointer unused)
 {
-    gint i, count;
+  gint i, count;
 
-    count = gst_tag_list_get_tag_size (list, tag);
+  count = gst_tag_list_get_tag_size (list, tag);
 
-    for (i = 0; i < count; i++) {
-      gchar *str;
+  for (i = 0; i < count; i++) {
+    gchar *str;
 
-      if (gst_tag_get_type (tag) == G_TYPE_STRING) {
-        if (!gst_tag_list_get_string_index (list, tag, i, &str))
-          g_assert_not_reached ();
-      } else {
-        str =
-          g_strdup_value_contents (gst_tag_list_get_value_index (list, tag, i));
-      }
-
-      if (i == 0) {
-        g_print ("  %15s: %s\n", gst_tag_get_nick (tag), str);
-      } else {
-        g_print ("                 : %s\n", str);
-      }
-
-      g_free (str);
+    if (gst_tag_get_type (tag) == G_TYPE_STRING) {
+      if (!gst_tag_list_get_string_index (list, tag, i, &str))
+        g_assert_not_reached ();
+    } else {
+      str = g_strdup_value_contents (gst_tag_list_get_value_index (list, tag, i));
     }
+
+    if (i == 0) {
+      g_print ("  %15s: %s\n", gst_tag_get_nick (tag), str);
+    } else {
+      g_print ("                 : %s\n", str);
+    }
+
+    g_free (str);
+  }
 }
