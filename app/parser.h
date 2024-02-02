@@ -22,7 +22,8 @@
 #define DEFAULT_ROTATE_PATH_01	"/sys/bus/i2c/devices/i2c-2/2-0048/rotate"
 #define DEFAULT_ROTATE_PATH_23	"/sys/bus/i2c/devices/i2c-1/1-0048/rotate"
 
-#define DEFAULT_PATH_JSON   "/root/shared_v"
+#define DEFAULT_JSON_PATH   "/root/shared_v"
+#define DEFAULT_JSON_HEADER "VHL_CAM"
 #define DEFAULT_RECORD_BITRATE  4096
 #define DEFAULT_RTSP_BITRATE    1024
 #define DEFAULT_MAIN_FPS    15
@@ -32,7 +33,7 @@
 #define DEFUALT_DURATION    1
 #define DEFAULT_DBG_LEVEL   5
 #define DEFAULT_LOG_LEVEL   6
-#define DEFAULT_CH_ENABLE   0x0f
+#define DEFAULT_CH_ENABLE   0x00
 #define DEFAULT_CH_ROTATE   0x00
 #define DEFAULT_WIDTH       1920
 #define DEFAULT_HEIGHT      1080
@@ -43,7 +44,7 @@
 
 #define DEFAULT_PLAY_DELAY  5
 #define DEFAULT_CAPTURE_MAX_CNT 3
-#define DEFAULT_SPLIT_MARGIN_MSEC    100
+#define DEFAULT_SPLIT_DIFF_MSEC    100
 #define DEFAULT_SPLIT_MAX_MSEC      2000
 
 #define DEFAULT_START_VIDEO_TIME_PATH   "/tmp/start_video_time"
@@ -57,6 +58,9 @@
 #define DEFAULT_CAPTURE_PATH   "/mnt/sd_cam/capture"
 #endif
 
+#define MAX_FPS_HD  240
+#define MAX_FPS_FHD 180
+
 class ParserClass
 {
 public :
@@ -66,9 +70,9 @@ public :
 	gint init() ;
 	gint destroy() ;
     gint cmd_parser(gchar *path, gpointer data);
-    gint json_parser(const gchar *path);
+    gint json_parser(const gchar *path, const gchar *header);
     gint arg_parser(int *argc, char **argv[]);
-    void print_option();
+    gint check_arg();
     void init_arg(gchar *argv);
     static gint json_object_get_value(json_object *hobj, const gchar *name, gpointer data);
     static json_object *json_find_obj (json_object * jobj, char *find_key);

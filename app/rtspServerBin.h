@@ -57,7 +57,7 @@ public :
 	static RtspServerBin* getInstance() ;
     RtspServerBin();
     ~RtspServerBin();
-	gint init(guint8 num) ;
+	gint init(guint8 num, gboolean crop_en) ;
 	gint destroy() ;
     GstPad* getBinSinkPad();
     gboolean getStartFlag();

@@ -85,7 +85,7 @@ ParserClass* ParserClass::getInstance()
 	return &instance;
 }
 
-gint ParserClass::json_parser(const gchar *path)
+gint ParserClass::json_parser(const gchar *path, const gchar *header)
 {
 	gint ret = 0;
 
@@ -112,7 +112,7 @@ gint ParserClass::json_parser(const gchar *path)
 		}
 
         //hobj = json_find_obj(jobj, "VHL_CAM");
-        hobj = json_object_object_get(jobj, "VHL_CAM");
+        hobj = json_object_object_get(jobj, header);
         type = json_object_get_type(hobj);
 
 		if(type != json_type_object) {
@@ -128,10 +128,21 @@ gint ParserClass::json_parser(const gchar *path)
         json_object_get_value(hobj, "log_level", &arg.log_level);
         json_object_get_value(hobj, "debug_level", &arg.dbg_level);
 
+        json_object_get_value(hobj, "rec_fps", &arg.fps[STREAM_REC]);
+        json_object_get_value(hobj, "rec_bps", &arg.bps[STREAM_REC]);
+        json_object_get_value(hobj, "rtsp_fps", &arg.fps[STREAM_RTSP]);
+        json_object_get_value(hobj, "rtsp_bps", &arg.bps[STREAM_RTSP]);
+
         for(guint8 i=0; i<MAX_CHANNEL; i++)
         {
             json_object_get_value(hobj, g_strdup_printf("cam_ch%d", i), &arg.cam_en[i]);
-            json_object_get_value(hobj, g_strdup_printf("cam_ch%d_rotate", i), &arg.cam_rotate[i]);
+            json_object_get_value(hobj, g_strdup_printf("ch%d_hflip", i), &arg.hflip[i]);
+            json_object_get_value(hobj, g_strdup_printf("ch%d_vflip", i), &arg.vflip[i]);
+            //json_object_get_value(hobj, g_strdup_printf("cam_ch%d_rotate", i), &arg.cam_rotate[i]);
+            arg.ch_enable |= (arg.cam_en[i]<<i);
+            arg.ch_rotate |= (arg.hflip[i]<<(i*2));
+            arg.ch_rotate |= (arg.vflip[i]<<(i*2+1));
+            //__LOG(LOG_NOTICE, "[GST][%s:%d] cam_ch%d:%d", _FILE_, __LINE__, i, arg.cam_en[i]);
         }
 
     } while(0);
@@ -163,36 +174,36 @@ gint ParserClass::arg_parser(int *argc, char **argv[])
     gint ret = 0;
 
     GOptionEntry entries[] = {
-        {"mode", 'M', 0, G_OPTION_ARG_INT, &arg.ioMode, "io mode select 0(auto), 1(rw), 2(mmap), 3(userptr), 4(dmabuf), 5(dmabuf-import), default(0)", "INT"},
-        {"test", 't', 0, G_OPTION_ARG_INT, &arg.testMode, "test mode select 0(normal), 1(test), default(0)", "INT"},
-        {"debug", 'd', 0, G_OPTION_ARG_INT, &arg.dbg_level, "debug level, default(5)", "INT"},
+        {"mode", 'm', 0, G_OPTION_ARG_INT, &arg.ioMode, "io mode select 0(auto), 1(rw), 2(mmap), 3(userptr), 4(dmabuf), 5(dmabuf-import), default(0)", "INT"},
+        {"test", 't', 0, G_OPTION_ARG_INT, &arg.levelMode, "test mode select 0(normal), 1(test), default(0)", "INT"},
+        {"debug", 'D', 0, G_OPTION_ARG_INT, &arg.dbg_level, "debug level, default(5)", "INT"},
         {"log", 'l', 0, G_OPTION_ARG_INT, &arg.log_level, "log level, default(6)", "INT"},
         {"dot", 'T', 0, G_OPTION_ARG_STRING, &arg.dotDir, "save dot representation of pipeline to FILE and exit, default(/tmp)", "STRING"},
-        {"channel", 'a', 0, G_OPTION_ARG_INT, &arg.ch_enable, "cam channel enable bit, default(0x0f)", "HEX"},
+        {"channel", 'c', 0, G_OPTION_ARG_INT, &arg.ch_enable, "cam channel enable bit, default(0x0f)", "HEX"},
         {"rotation", 'A', 0, G_OPTION_ARG_INT, &arg.ch_rotate, "cam channel rotation bit, default(0x00)", "HEX"},
         {"output", 'O', 0, G_OPTION_ARG_STRING, &arg.mntDir, "save video & audio file to directory, default(/mnt/sd_cam)", "STRING"},
         {"width", 'w', 0, G_OPTION_ARG_INT, &arg.width, "cam width HD(1280), FHD(1920), default(1920)", "INT"},
         {"height", 'h', 0, G_OPTION_ARG_INT, &arg.height, "cam height HD(720), FHD(1080), default(1080)", "INT"},
-        {"fmain", 'm', 0, G_OPTION_ARG_INT, &arg.main_fps, "main frame per second, default(15)", "INT"},
+        {"fmain", 'M', 0, G_OPTION_ARG_INT, &arg.main_fps, "main frame per second, default(15)", "INT"},
         {"frec", 'f', 0, G_OPTION_ARG_INT, &arg.fps[STREAM_REC], "record frame per second, default(15)", "INT"},
         {"frtsp", 'F', 0, G_OPTION_ARG_INT, &arg.fps[STREAM_RTSP], "rtsp frame per second, default(15)", "INT"},
         {"brec", 'b', 0, G_OPTION_ARG_INT, &arg.bps[STREAM_REC], "record Kbyte per second, default(4096)", "INT"},
         {"brtsp", 'B', 0, G_OPTION_ARG_INT, &arg.bps[STREAM_RTSP], "rtsp Kbyte per second, default(1024)", "INT"},
         {"oht", 'o', 0, G_OPTION_ARG_STRING, &arg.ohtName, "oht name, default(APPNAME)", "STRING"},
-        {"delay", 'D', 0, G_OPTION_ARG_INT, &arg.play_delay, "from pause to play delay, default(0)", "SECOND"},
+        {"delay", 'd', 0, G_OPTION_ARG_INT, &arg.play_delay, "from pause to play delay, default(0)", "SECOND"},
         {"fault", 0, 0, G_OPTION_ARG_NONE, &arg.fault, "no fault setup, default(FALSE)", "NONE"},
         {"duration", 's', 0, G_OPTION_ARG_INT, &arg.duration, "recoding file split duration, default(1)", "MINUTE"},
         {"erec", 'r', 0, G_OPTION_ARG_INT, &arg.stream_en[STREAM_REC], "video recording enable, default(1)", "INT"},
         {"ertsp", 'R', 0, G_OPTION_ARG_INT, &arg.stream_en[STREAM_RTSP], "rtsp streaming enable, default(1)", "INT"},
         {"eaudio", 'u', 0, G_OPTION_ARG_NONE, &arg.audio_en, "audio recording enable, default(FALSE)", "NONE"},
-        {"ecap", 'c', 0, G_OPTION_ARG_NONE, &arg.capture_en, "video capturing enable, default(FALSE)", "NONE"},
+        {"ecap", 'a', 0, G_OPTION_ARG_NONE, &arg.capture_en, "video capturing enable, default(FALSE)", "NONE"},
         {"ein", 'i', 0, G_OPTION_ARG_NONE, &arg.input_en, "terminal input enable, default(FALSE)", "NONE"},
         {"port", 'p', 0, G_OPTION_ARG_STRING, &arg.rtsp_port, "rtsp port number, default(8554)", "STRING"},
-        {"id", 'I', 0, G_OPTION_ARG_STRING, &arg.rtsp_id, "rtsp id, default(semes)", "STRING"},
-        {"passwd", 'P', 0, G_OPTION_ARG_STRING, &arg.rtsp_passwd, "rtsp passwd, default(semes)", "STRING"},
+        {"id", 'I', 0, G_OPTION_ARG_STRING, &arg.rtsp_id, "rtsp id, default(user)", "STRING"},
+        {"passwd", 'P', 0, G_OPTION_ARG_STRING, &arg.rtsp_passwd, "rtsp passwd, default(user)", "STRING"},
         {"cmax", 'x', 0, G_OPTION_ARG_INT, &arg.captureMaxCnt, "capture max count, default(3)", "INT"},
         {"eover", 'v', 0, G_OPTION_ARG_NONE, &arg.overlay_en, "overlay enable, default(FALSE)", "NONE"},
-        {"split", 'n', 0, G_OPTION_ARG_INT, &arg.split_margin_msec, "split margin msec, default(100)", "INT"},
+        {"split", 'n', 0, G_OPTION_ARG_INT, &arg.split_diff_msec, "split diff msec, default(100)", "INT"},
         {"split", 'S', 0, G_OPTION_ARG_INT, &arg.split_max_msec, "split max msec, default(2000)", "INT"},
         {"grec", 'g', 0, G_OPTION_ARG_INT, &arg.gop[STREAM_REC], "rec gop size, default(15)", "INT"},
         {"grtsp", 'G', 0, G_OPTION_ARG_INT, &arg.gop[STREAM_RTSP], "rtsp gop size, default(15)", "INT"},
@@ -203,36 +214,30 @@ gint ParserClass::arg_parser(int *argc, char **argv[])
     g_option_context_add_main_entries(ctx, entries, NULL);
     g_option_context_add_group(ctx, gst_init_get_option_group());
 
-    if(!g_option_context_parse(ctx, argc, argv, &err))
+    ret = g_option_context_parse(ctx, argc, argv, &err);
+    if(!ret)
     {
         __LOG(LOG_CRIT, "[GST][%s:%d] Failed to initialize : %s", _FILE_, __LINE__, err->message);
         g_error_free(err);
         return ret;
     }
 
-    if(arg.width != 1920 && arg.width != 1280)
-    {
-        __LOG(LOG_ERR, "[GST][%s:%d] width %d not supported", _FILE_, __LINE__, arg.width);
-        return ret;
-    }
-
-    if(arg.height != 1080 && arg.height != 720)
-    {
-        __LOG(LOG_ERR, "[GST][%s:%d] height %d not supported", _FILE_, __LINE__, arg.height);
-        return ret;
-    }
+    if(arg.fps[STREAM_REC] > arg.fps[STREAM_RTSP])
+        arg.main_fps = arg.fps[STREAM_REC];
+    else
+        arg.main_fps = arg.fps[STREAM_RTSP];
 
     //__LOG(LOG_CRIT, "[GST][%s:%d] arg.ch_enable : 0x%02x", _FILE_, __LINE__, arg.ch_enable);
     for(guint8 i=0; i<MAX_CHANNEL; i++)
     {
         if(arg.ch_enable & (0x1 << i)) arg.cam_en[i] = TRUE;
         else arg.cam_en[i] = FALSE;
-        if(arg.ch_rotate & (0x1 << i)) arg.cam_rotate[i] = TRUE;
-        else arg.cam_rotate[i] = FALSE;
+        if(arg.ch_rotate>>(i*4) & 0x01) arg.hflip[i] = TRUE;
+        if(arg.ch_rotate>>(i*4) & 0x02) arg.vflip[i] = TRUE;
         //__LOG(LOG_CRIT, "[GST][%s:%d] arg.cam_en : %d", _FILE_, __LINE__, arg.cam_en[i]);
     }
 
-    sprintf(str, "echo %d > %s", (arg.cam_rotate[1]<<1 | arg.cam_rotate[0]) & 0x3, DEFAULT_ROTATE_PATH_01);
+    sprintf(str, "echo %d > %s", arg.ch_rotate&0x0f, DEFAULT_ROTATE_PATH_01);
     __LOG(LOG_NOTICE, "[GST][%s:%d] %s", _FILE_, __LINE__, str);
     ret = system(str);
     if (ret < 0) {
@@ -240,7 +245,7 @@ gint ParserClass::arg_parser(int *argc, char **argv[])
         return ret;
     }
 
-    sprintf(str, "echo %d > %s", (arg.cam_rotate[3]<<1 | arg.cam_rotate[2]) & 0x3, DEFAULT_ROTATE_PATH_23);
+    sprintf(str, "echo %d > %s", (arg.ch_rotate>>4)&0x0f, DEFAULT_ROTATE_PATH_23);
     __LOG(LOG_NOTICE, "[GST][%s:%d] %s", _FILE_, __LINE__, str);
     ret = system(str);
     if (ret < 0) {
@@ -272,8 +277,8 @@ void ParserClass::init_arg(gchar *argv)
     arg.width = DEFAULT_WIDTH;
     arg.height = DEFAULT_HEIGHT;
 
-    arg.ioMode = USERPTR_MODE;
-    arg.testMode = NORMAL_MODE;
+    arg.ioMode = IO_USERPTR;
+    arg.levelMode = MODE_NORMAL;
     arg.dotDir = DEFAULT_DOT_PATH;
     arg.captureDir = DEFAULT_CAPTURE_PATH;
     arg.play_delay = DEFAULT_PLAY_DELAY;
@@ -283,7 +288,7 @@ void ParserClass::init_arg(gchar *argv)
     arg.captureMaxCnt = DEFAULT_CAPTURE_MAX_CNT;
     arg.input_en = FALSE;
     arg.overlay_en = FALSE;
-    arg.split_margin_msec = DEFAULT_SPLIT_MARGIN_MSEC;
+    arg.split_diff_msec = DEFAULT_SPLIT_DIFF_MSEC;
     arg.split_max_msec = DEFAULT_SPLIT_MAX_MSEC;
     arg.stream_en[STREAM_REC] = TRUE;
     arg.stream_en[STREAM_RTSP] = TRUE;
@@ -293,17 +298,19 @@ void ParserClass::init_arg(gchar *argv)
     for(guint8 i=0; i<MAX_CHANNEL; i++)
     {
         arg.cam_en[i] = FALSE;
-        arg.cam_rotate[i] = FALSE;
+        arg.hflip[i] = FALSE;
+        arg.vflip[i] = FALSE;
     }
 }
 
-void ParserClass::print_option()
+gint ParserClass::check_arg()
 {
     const gchar *ioModeStr[6] = {"auto", "rw", "mmap", "useptr", "dmabuf", "dmabuf-import"};
+    gint i = 0;
 #if 0
     g_print("oht name : %s\n", arg.ohtName);
     g_print("io mode : %s\n", ioModeStr[arg.ioMode]);
-    g_print("test mode : %d\n", arg.testMode);
+    g_print("level mode : %d\n", arg.levelMode);
     g_print("log_level : %d\n", arg.log_level);
     g_print("debug_level : %d\n", arg.dbg_level);
     g_print("mount directory : %s\n", arg.mntDir);
@@ -335,7 +342,7 @@ void ParserClass::print_option()
     g_print("rtsp id : %s\n", arg.rtsp_id);
     g_print("rtsp passwd : %s\n", arg.rtsp_passwd);
     g_print("overlay enable : %s\n", arg.overlay_en? "TURE":"FALSE");
-    g_print("split margin msec : %d\n", arg.split_margin_msec);
+    g_print("split diff msec : %d\n", arg.split_diff_msec);
     g_print("split max msec : %d\n", arg.split_max_msec);
     for(guint8 i=0; i<MAX_CHANNEL; i++){
         //g_print("rec ch %d rotation : %d\n", i, arg.recRotationMode[i]);
@@ -346,7 +353,7 @@ void ParserClass::print_option()
 #endif
     //__LOG(LOG_NOTICE, "[RTSP][%s:%d] 0 : %s, 1 : %s, 2 : %s", _FILE_, __LINE__, test0, test1, test2);
     __LOG(LOG_NOTICE, "[GST][%s:%d] io:%s, test:%d, noFault:%d, delay:%d, logLevel:%d, dbgLevel:%d, mntDir:%s, dotDir:%s, ", \
-    _FILE_, __LINE__, ioModeStr[arg.ioMode], arg.testMode, arg.fault, arg.play_delay, arg.log_level, arg.dbg_level, arg.mntDir, arg.dotDir);
+    _FILE_, __LINE__, ioModeStr[arg.ioMode], arg.levelMode, arg.fault, arg.play_delay, arg.log_level, arg.dbg_level, arg.mntDir, arg.dotDir);
 
     __LOG(LOG_NOTICE, "[GST][%s:%d] oht_name:%s, duration:%d, width:%d, height:%d, mainFps:%d", _FILE_, __LINE__, \
                     arg.ohtName, arg.duration, arg.width, arg.height, arg.main_fps);
@@ -355,15 +362,42 @@ void ParserClass::print_option()
     _FILE_, __LINE__, arg.stream_en[STREAM_REC], arg.stream_en[STREAM_RTSP], arg.audio_en, arg.capture_en, arg.input_en, arg.overlay_en);
 
     if(arg.stream_en[STREAM_REC]) __LOG(LOG_NOTICE, "[GST][%s:%d] recFps:%d, recBps:%d, recGop:%d, splitMargin:%d, splitMax:%d", _FILE_, __LINE__, \
-                                        arg.fps[STREAM_REC], arg.bps[STREAM_REC], arg.gop[STREAM_REC], arg.split_margin_msec, arg.split_max_msec);
+                                        arg.fps[STREAM_REC], arg.bps[STREAM_REC], arg.gop[STREAM_REC], arg.split_diff_msec, arg.split_max_msec);
     if(arg.stream_en[STREAM_RTSP]) __LOG(LOG_NOTICE, "[GST][%s:%d] rtspFps:%d, rtspBps:%d, rtspGop:%d, rtspID:%s, rtspPW:%s, rtspPort:%s", _FILE_, __LINE__, \
                                         arg.fps[STREAM_RTSP], arg.bps[STREAM_RTSP], arg.gop[STREAM_RTSP], arg.rtsp_id, arg.rtsp_passwd, arg.rtsp_port);
     if(arg.capture_en) __LOG(LOG_NOTICE, "[GST][%s:%d] captureMaxCnt:%d, capDir:%s", _FILE_, __LINE__, arg.captureMaxCnt, arg.captureDir);
 
-    __LOG(LOG_NOTICE, "[GST][%s:%d] cam_en[0]:%d, rotate[0]:%d, cam_en[1]:%d, rotate[1]:%d, cam_en[2]:%d, rotate[2]:%d, cam_en[3]:%d, rotate[3]:%d", \
-    _FILE_, __LINE__, arg.cam_en[0], arg.cam_rotate[0], arg.cam_en[1], arg.cam_rotate[1], arg.cam_en[2], arg.cam_rotate[2], arg.cam_en[3], arg.cam_rotate[3]);
+    for(i=0; i<MAX_CHANNEL; i++)
+        __LOG(LOG_NOTICE, "[GST][%s:%d] cam_en[%d]:%d, hflip[%d]:%d, vflip[%d]:%d",  _FILE_, __LINE__, i, arg.cam_en[i], i, arg.hflip[i], i, arg.vflip[i]);
 
-    return;
+    gint total_fps = 0;
+    total_fps += arg.stream_en[STREAM_REC]*arg.fps[STREAM_REC]*(arg.cam_en[0]+arg.cam_en[1]+arg.cam_en[2]+arg.cam_en[3]);
+    total_fps += arg.stream_en[STREAM_RTSP]*arg.fps[STREAM_RTSP]*(arg.cam_en[0]+arg.cam_en[1]+arg.cam_en[2]+arg.cam_en[3]);
+    total_fps += arg.capture_en*0;
+    total_fps += arg.audio_en*0;
+
+    if(arg.width == 1280 && arg.height == 720) {
+        if(total_fps > MAX_FPS_HD)
+        {
+            __LOG(LOG_CRIT, "[GST][%s:%d] HD max fps over : total_fps(%d) > MAX_FPS_HD(%d)", _FILE_, __LINE__, total_fps, MAX_FPS_HD);
+            return 0;
+        }
+    }
+    else if(arg.width == 1920 && arg.height == 1080) {
+        if(total_fps > MAX_FPS_FHD)
+        {
+            __LOG(LOG_CRIT, "[GST][%s:%d] FHD max fps over : total_fps(%d) > MAX_FPS_FHD(%d)", _FILE_, __LINE__, total_fps, MAX_FPS_FHD);
+            return 0;
+        }
+    }
+    else {
+        __LOG(LOG_CRIT, "[GST][%s:%d] width %d not supported", _FILE_, __LINE__, arg.width);
+        return 0;
+    }
+
+    __LOG(LOG_NOTICE, "[GST][%s:%d] total_fps : %d", _FILE_, __LINE__, total_fps);
+
+    return 1;
 }
 
 gint ParserClass::cmd_parser(gchar* buffer, gpointer data)

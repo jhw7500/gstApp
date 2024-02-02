@@ -20,7 +20,7 @@
 #include "util.h"
 
 #define GST_API_VERSION "1.0"
-#define APP_VERSION "0.0"
+#define APP_VERSION "0.1"
 
 #define CHANNEL_EACH_CROP
 #define DEBUG_TIMESTAMP
@@ -62,35 +62,36 @@ typedef enum
 
 typedef enum
 {
-    ResFHD = 0,
-    ResHD = 1
+    RES_NONE = 0,
+    RES_HD = 1,
+    RES_FHD = 2
 } ResMode;
 
 typedef enum
 {
-    NORMAL_MODE = 0,
-    TEST_MODE = 1
-} TestMode;
+    MODE_NORMAL = 0,
+    MODE_TEST = 1
+} LevelMode;
 
 typedef enum
 {
-    AUTO_MODE = 0,
-    RW_MODE = 1,
-    MMAP_MODE =2,
-    USERPTR_MODE =3,
-    DMABUF_MODE = 4,
-    DMABUF_IMPORT_MODE = 5
+    IO_AUTO = 0,
+    IO_RW_ = 1,
+    IO_MMAP =2,
+    IO_USERPTR =3,
+    IO_DMABUF = 4,
+    IO_DMABUF_IMPORT = 5
 } IoMode;
 
 typedef enum
 {
-    NONE_MODE = 0,
-    ROTATE_90_MODE = 1,
-    ROTATE_180_MODE =2,
-    ROTATE_270_MODE =3,
-    HORIZONTAL_FLIP_MODE = 4,
-    VERTICAL_FLIP_MODE = 5
-} RotationMode;
+    ROTATE_NONE = 0,
+    ROTATE_90 = 1,
+    ROTATE_180 =2,
+    ROTATE_270 =3,
+    ROTATE_HORIZONTAL_FLIP = 4,
+    ROTATE_VERTICAL_FLIP = 5
+} Rotation;
 
 typedef struct _Resolution
 {
@@ -110,9 +111,10 @@ typedef struct {
 
 typedef struct _CmdArg
 {
-    TestMode testMode;
+    LevelMode levelMode;
     IoMode ioMode;
-    gboolean cam_rotate[MAX_CHANNEL];
+    gboolean hflip[MAX_CHANNEL];
+    gboolean vflip[MAX_CHANNEL];
     gboolean cam_en[MAX_CHANNEL];
     gint fps[MAX_CHANNEL/2];
     gint bps[MAX_CHANNEL/2];
@@ -124,7 +126,7 @@ typedef struct _CmdArg
     const gchar *mntDir;
     const gchar *ohtName;
     guint8 ch_enable;
-    guint8 ch_rotate;
+    guint16 ch_rotate;
     ResMode resMode;
     gint main_fps;
     gint play_delay;
@@ -134,7 +136,7 @@ typedef struct _CmdArg
     gboolean audio_en;
     const gchar *appname;
     gint captureMaxCnt;
-    gint split_margin_msec;
+    gint split_diff_msec;
     gint split_max_msec;
     gboolean input_en;
     const gchar *rtsp_port;

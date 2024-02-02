@@ -262,14 +262,10 @@ gboolean bus_message_parse(GstBus *bus, GstMessage *message, gpointer data)
 
         case GST_MESSAGE_NEW_CLOCK:
         {
-            GDateTime *datetime = g_date_time_new_now_local();
-            gchar *date_str = g_date_time_format(datetime, "%Y%m%d %H:%M:%S");
-            gchar *str = g_strdup_printf("echo '%s' > %s &", date_str, DEFAULT_START_VIDEO_TIME_PATH);
+            gchar *str = g_strdup_printf("echo '%s' > %s &", g_date_time_format(g_date_time_new_now_local(), "%Y%m%d %H:%M:%S"), DEFAULT_START_VIDEO_TIME_PATH);
             __LOG(LOG_NOTICE, "[GST][%s:%d] %s", _FILE_, __LINE__, str);
             if(system(str) < 0) __LOG(LOG_ERR, "[GST][%s:%d] write error", _FILE_, __LINE__);
-
-            g_date_time_unref(datetime);
-            g_free(date_str);
+            g_free(str);
 #if 0
             FILE *fp = NULL;
             fp = fopen(DEFAULT_START_VIDEO_TIME_PATH, "wb");
@@ -382,7 +378,7 @@ static void splitCheck(gpointer data, guint8 startSec)
             }
             __LOG(LOG_INFO, "[GST][%s:%d] splitMax : %d, splitMin : %d", _FILE_, __LINE__, splitMax, splitMin);
 
-            if(splitMax - splitMin > cmdArg.split_margin_msec || splitMax > cmdArg.split_max_msec)
+            if(splitMax - splitMin > cmdArg.split_diff_msec || splitMax > cmdArg.split_max_msec)
             {
                 __LOG(LOG_ERR, "[GST][%s:%d] split time check error : max:%d, min:%d", _FILE_, __LINE__, splitMax, splitMin);
                 __LOG(LOG_NOTICE, "[GST][%s:%d] split now", _FILE_, __LINE__);
@@ -466,7 +462,7 @@ static gboolean setSRT(gpointer arg)
     return TRUE;
 }
 
-gint getPasswdWithAES(void)
+gint getPasswdWithAES(CmdArg arg)
 {
 	gint ret = 0;
 	gchar passwd[1024] = { 0, };
@@ -480,24 +476,25 @@ gint getPasswdWithAES(void)
 		if(ret < 0) {
 			__LOG(LOG_ERR, "[CFG][%s:%d] Error change passwd .. ", _FILE_, __LINE__);
 		}
-		cmdArg.rtsp_passwd = strdup(DEFAULT_RTSP_PASSWD);
+		arg.rtsp_passwd = strdup(DEFAULT_RTSP_PASSWD);
 	}
 	else
-		cmdArg.rtsp_passwd = strdup(passwd);
+		arg.rtsp_passwd = strdup(passwd);
 
-	__LOG(LOG_NOTICE, "[CFG][%s:%d] id : %s, passwd : %s", _FILE_, __LINE__, cmdArg.rtsp_id, cmdArg.rtsp_passwd);
+	__LOG(LOG_NOTICE, "[CFG][%s:%d] id : %s, passwd : %s", _FILE_, __LINE__, arg.rtsp_id, arg.rtsp_passwd);
 
 	return ret;
 }
 
 gint main(gint argc, gchar *argv[]) 
 {
-    atexit(gst_deinit);
-    gst_init(&argc, &argv);
-    
     guint major, minor, micro, nano;
     const gchar *nano_str;
+
+    atexit(gst_deinit);
+    gst_init(&argc, &argv);
     gst_version(&major, &minor, &micro, &nano);
+
     if(nano == 1)
         nano_str="(CVS)";
     else if(nano ==2)
@@ -510,15 +507,19 @@ gint main(gint argc, gchar *argv[])
     //cmdArg.appname = CHARNEXT(argv[0], '/');
     parser->init_arg(argv[0]);
     //attachInterruptHandlers();
-    parser->json_parser(DEFAULT_PATH_JSON);
+    parser->json_parser(DEFAULT_JSON_PATH, DEFAULT_JSON_HEADER);
+
     if(parser->arg_parser(&argc, &argv) < 0)
         return -1;
 
-    getPasswdWithAES();
-    cmdArg = parser->arg;
+    if(strcmp(parser->arg.rtsp_passwd, DEFAULT_RTSP_PASSWD) == 0)
+        getPasswdWithAES(parser->arg);
+    
+    __LOG(LOG_NOTICE, "[GST][%s:%d] %s version : %s linked against Gstreamer %d.%d.%d %s", __FILE__, __LINE__, parser->arg.appname, APP_VERSION, major, minor, micro, nano_str);
 
-    __LOG(LOG_NOTICE, "[GST][%s:%d] %s version : %s linked against Gstreamer %d.%d.%d %s", __FILE__, __LINE__, cmdArg.appname, APP_VERSION, major, minor, micro, nano_str);
-    parser->print_option();
+    cmdArg = parser->arg;
+    if(!parser->check_arg())
+        return -1;
     
     //MuxBin* muxBin = MuxBin::getInstance();
     GstBus *bus;
@@ -542,7 +543,7 @@ gint main(gint argc, gchar *argv[])
     thraedArgs->arg3 = muxSinkBin;
     thraedArgs->arg4 = captureBin;
 
-    pipeline = gst_pipeline_new(g_strdup_printf("pipeline-%s", cmdArg.appname));
+    pipeline = gst_pipeline_new(g_strdup_printf("%s-%s", cmdArg.appname, g_date_time_format(g_date_time_new_now_local(), "%Y%m%d%H%M%S")));
     //muxBin.init();
     //g_print("width : %d\n", cmdArg.res[cmdArg.resolution_mode].height);
 
@@ -579,14 +580,19 @@ gint main(gint argc, gchar *argv[])
 #endif
 
     //if(cmdArg.stream_en[STREAM_RTSP]) rtspServerStart();
+    gboolean crop_en[2] = {FALSE, FALSE};
+    CsiNum csiNum;
+    crop_en[0] = cmdArg.cam_en[0]&&cmdArg.cam_en[1];
+    crop_en[1] = cmdArg.cam_en[2]&&cmdArg.cam_en[3];
 
     for(i=0; i<MAX_CHANNEL; i++)
     {
         //if(!(cmdArg.ch_enable & (0x1 << i))) continue;
         if(!cmdArg.cam_en[i]) continue;
         chNum = (ChannelNum)i;
+        csiNum = (CsiNum)(chNum/2);
         __LOG(LOG_INFO, "[GST][%s:%d] ch[%d] enable", _FILE_, __LINE__, chNum);
-        videoBin[chNum/2].init((CsiNum)(chNum/2));
+        videoBin[chNum/2].init(csiNum, crop_en[csiNum]);
 //#if !defined(CHANNEL_EACH_CROP)
 #ifndef CHANNEL_EACH_CROP
         videoBin[chNum/2].addCrop((CropDir)(chNum%2));
@@ -594,7 +600,7 @@ gint main(gint argc, gchar *argv[])
         if(cmdArg.stream_en[STREAM_REC])
         {
             videoBin[chNum/2].addBinRecordSrcPad(chNum);
-            recordBin[chNum].init(chNum);
+            recordBin[chNum].init(chNum, crop_en[csiNum]);
 
             if(gst_pad_link(videoBin[chNum/2].getBinRecordSrcPad(chNum), recordBin[chNum].getBinSinkPad()) != GST_PAD_LINK_OK)
             {
@@ -616,13 +622,13 @@ gint main(gint argc, gchar *argv[])
             //else __LOG(LOG_NOTICE, "[GST][%s:%d] mux video ch[%d] pad link", _FILE_, __LINE__, chNum);
             //g_thread_new("split-timer-thread", (GThreadFunc)splitTimerStart, &muxSinkBin[chNum]);
         }
-        //json_parser(DEFAULT_PATH_JSON);
+        //json_parser(DEFAULT_JSON_PATH);
         //print_option();
         if(cmdArg.stream_en[STREAM_RTSP])
         {
             rtspServerStart();
             videoBin[chNum/2].addBinRtspSrcPad(chNum);
-            rtspServerBin[chNum].init(chNum);
+            rtspServerBin[chNum].init(chNum, crop_en[csiNum]);
 
             if(gst_pad_link(videoBin[chNum/2].getBinRtspSrcPad(chNum), rtspServerBin[chNum].getBinSinkPad()) != GST_PAD_LINK_OK)
             {
@@ -702,7 +708,7 @@ gint main(gint argc, gchar *argv[])
 
     //gst_element_set_state(pipeline, GST_STATE_PLAYING);
 
-    GST_DEBUG_BIN_TO_DOT_FILE(GST_BIN(pipeline), GST_DEBUG_GRAPH_SHOW_FULL_PARAMS, gst_element_get_name(pipeline));
+    GST_DEBUG_BIN_TO_DOT_FILE(GST_BIN(pipeline), GST_DEBUG_GRAPH_SHOW_ALL, gst_element_get_name(pipeline));
     //GST_DEBUG_BIN_TO_DOT_FILE_WITH_TS(GST_BIN(pipeline), GST_DEBUG_GRAPH_SHOW_VERBOSE, gst_element_get_name(pipeline));
 
     bus = gst_element_get_bus(pipeline);
@@ -733,6 +739,63 @@ gint main(gint argc, gchar *argv[])
 
     __LOG(LOG_NOTICE, "[GST][%s:%d] delay %d sec for play", __FILE__, __LINE__, cmdArg.play_delay);
     sleep(cmdArg.play_delay);
+
+	for(i = 0; i < MAX_VIDEO_SRC; ++i)
+	{
+		if(videoBin[i].be.bin != NULL)
+		{
+			gchar *cmd;
+			if(cmdArg.cam_en[i*2] && cmdArg.cam_en[i*2+1]) 
+			{
+				cmd = g_strdup_printf("i2cwrite %d 0x11 0x100c 0x%04x", i? 1:2, (cmdArg.ch_rotate>>(i*4))&0x03);
+				__LOG(LOG_NOTICE, "[CFG][%s:%d] ch%d enable : %s", _FILE_, __LINE__, i*2, cmd);
+				if(system(cmd) < 0) __LOG(LOG_ERR, "[CFG][%s:%d] ch%d rotation fail", __FILE__, __LINE__, i*2);
+				cmd = g_strdup_printf("i2cwrite %d 0x12 0x100c 0x%04x", i? 1:2, (cmdArg.ch_rotate>>(i*4+2))&0x03);
+				__LOG(LOG_NOTICE, "[CFG][%s:%d] ch%d enable %s", _FILE_, __LINE__, i*2+1, cmd);
+				if(system(cmd) < 0) __LOG(LOG_ERR, "[CFG][%s:%d] ch%d rotation fail", __FILE__, __LINE__, i*2+1);
+			}
+			else
+			{
+#define STR_LEN	8
+				FILE *fp;
+				gchar str[STR_LEN];
+				gchar val[4] = {0,0,0,0};
+				//memset(str, 0, STR_LEN);
+				cmd = g_strdup_printf("i2cread %d 0x48 0x0013 1", i ? 1 : 2);
+				fp = popen(cmd, "r");
+				if (NULL == fp)
+				{
+					perror("popen() fail");
+					continue;
+				}
+				while (fgets(str, STR_LEN, fp));
+				pclose(fp);
+				str[4] = 0;
+				//__LOG(LOG_NOTICE, "[CFG][%s:%d] link byte : %s", _FILE_, __LINE__, str);
+
+				if (strstr(str, "0xea")) val[i*2] = 1;
+				else if (strstr(str, "0xda")) val[i*2+1] = 1;
+				else __LOG(LOG_CRIT, "[CFG][%s:%d] csi[%d] not display", _FILE_, __LINE__, i);
+
+				if(cmdArg.cam_en[i*2] & 0x01)
+				{
+					cmd = g_strdup_printf("i2cwrite %d 0x3c 0x100c 0x%04x", i? 1:2, (cmdArg.ch_rotate>>(i*4))&0x03);
+					__LOG(LOG_NOTICE, "[CFG][%s:%d] %s", _FILE_, __LINE__, cmd);
+				    if(system(cmd) < 0) __LOG(LOG_ERR, "[CFG][%s:%d] ch%d rotation fail", __FILE__, __LINE__, i*2);
+					if(val[i*2] == 0) __LOG(LOG_ERR, "[CFG][%s:%d] swap : ch%d enable but ch%d display", _FILE_, __LINE__, i*2, i*2+1);
+				}
+				else if(cmdArg.cam_en[i*2+1] & 0x01)
+				{
+					cmd = g_strdup_printf("i2cwrite %d 0x3c 0x100c 0x%04x", i? 1:2, (cmdArg.ch_rotate>>(i*4+2))&0x03);
+					__LOG(LOG_NOTICE, "[CFG][%s:%d] %s", _FILE_, __LINE__, cmd);
+					if(system(cmd) < 0) __LOG(LOG_ERR, "[CFG][%s:%d] ch%d rotation fail", __FILE__, __LINE__, i*2+1);
+					if(val[i*2+1] == 0) __LOG(LOG_ERR, "[CFG][%s:%d] swap : ch%d enable but ch%d display", _FILE_, __LINE__, i*2+1, i*2);
+				}
+			}
+			
+			g_free(cmd);
+        }
+    }
 
     ret = gst_element_set_state(pipeline, GST_STATE_PLAYING);
     __LOG(LOG_NOTICE, "[GST][%s:%d] playing : %s", _FILE_, __LINE__, stateChangeReturnStr[ret]);

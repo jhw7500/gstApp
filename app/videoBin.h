@@ -42,7 +42,7 @@ public :
 	static VideoBin* getInstance();
     VideoBin();
     ~VideoBin();
-	gint init(CsiNum num) ;
+	gint init(CsiNum num, gboolean crop_en) ;
 	gint destroy() ;
     gint addCrop(CropDir dir);
     gint addBinRtspSrcPad(ChannelNum ch);
@@ -58,10 +58,10 @@ private :
 	
 public :
 	gboolean m_flagDestroy;
+    VideoElement be;
     //GstElement *pipeline[2];
 	
 private :
-    VideoElement be;
     guint8 csi;
     GstPad *srcRtspPad;
     GstPad *srcRecordPad;

@@ -42,9 +42,9 @@ void RecordBin::getBitrate()
     gint bps;
 
     //g_object_get(re.enc, "bitrate", &bps, NULL);
-    //__LOG(LOG_NOTICE, "[GST][%s:%d] ch%d get bitrate : %d", _FILE_, __LINE__, ch, bps);
     g_object_get(re.enc, "bitrate", &bps, NULL);
-    __LOG(LOG_NOTICE, "[GST][%s:%d] ch%d get bitrate : %d", _FILE_, __LINE__, ch, bps);
+    //__LOG(LOG_NOTICE, "[GST][%s:%d] ch%d get bitrate : %d", _FILE_, __LINE__, ch, bps);
+     g_print("rec ch%d get bitrate : %d\n", ch, bps);
 }
 
 void RecordBin::setBitrate(guint16 data)
@@ -52,10 +52,10 @@ void RecordBin::setBitrate(guint16 data)
     gint bps;
 
     //g_object_get(re.enc, "bitrate", &bps, NULL);
-    //__LOG(LOG_NOTICE, "[GST][%s:%d] ch%d get bitrate : %d", _FILE_, __LINE__, ch, bps);
     g_object_set(re.enc, "bitrate", data, NULL);
     g_object_get(re.enc, "bitrate", &bps, NULL);
     __LOG(LOG_NOTICE, "[GST][%s:%d] ch%d set bitrate : %d", _FILE_, __LINE__, ch, bps);
+    g_print("rec ch%d set bitrate : %d\n", ch, bps);
 }
 
 void RecordBin::getFps()
@@ -67,7 +67,8 @@ void RecordBin::getFps()
     g_object_get(re.capsfilter, "caps", &caps, NULL);
     caps_str = gst_caps_to_string(caps);
 
-    __LOG(LOG_NOTICE, "[GST][%s:%d] ch%d get caps : %s", _FILE_, __LINE__, ch, caps_str);
+    //__LOG(LOG_NOTICE, "[GST][%s:%d] ch%d get caps : %s", _FILE_, __LINE__, ch, caps_str);
+    g_print("rec ch%d get caps : %s\n", ch, caps_str);
 
     gst_caps_unref(caps);
     g_free(caps_str);
@@ -95,6 +96,7 @@ void RecordBin::setFps(guint16 data)
     //g_object_get(re.capsfilter, "caps", caps, NULL);
     caps_str = gst_caps_to_string(caps);
     __LOG(LOG_NOTICE, "[GST][%s:%d] ch%d set caps : %s", _FILE_, __LINE__, ch, caps_str);
+    g_print("rec ch%d set caps : %s\n", ch, caps_str);
 
     gst_caps_unref(caps);
     g_free(caps_str);
@@ -109,6 +111,7 @@ void RecordBin::setRotation(guint16 data)
     g_object_set(re.convert, "rotation", data, NULL);
     g_object_get(re.convert, "rotation", &rotation, NULL);
     __LOG(LOG_NOTICE, "[GST][%s:%d] ch%d set rotation : %d", _FILE_, __LINE__, ch, rotation);
+    g_print("rec ch%d set rotation : %d\n", ch, rotation);
 }
 
 void RecordBin::getRotation()
@@ -116,7 +119,8 @@ void RecordBin::getRotation()
     gint rotation;
 
     g_object_get(re.convert, "rotation", &rotation, NULL);
-    __LOG(LOG_NOTICE, "[GST][%s:%d] ch%d get rotation : %d", _FILE_, __LINE__, ch, rotation);
+    //__LOG(LOG_NOTICE, "[GST][%s:%d] ch%d get rotation : %d", _FILE_, __LINE__, ch, rotation);
+    g_print("rec ch%d get rotation : %d\n", ch, rotation);
 }
 
 void RecordBin::setGop(guint16 data)
@@ -128,6 +132,7 @@ void RecordBin::setGop(guint16 data)
     g_object_set(re.enc, "gop-size", data, NULL);
     g_object_get(re.enc, "gop-size", &gop, NULL);
     __LOG(LOG_NOTICE, "[GST][%s:%d] ch%d set gop_size : %d", _FILE_, __LINE__, ch, gop);
+    g_print("rec ch%d set gop_size : %d\n", ch, gop);
 }
 
 void RecordBin::getGop()
@@ -135,7 +140,8 @@ void RecordBin::getGop()
     gint gop;
 
     g_object_get(re.enc, "gop-size", &gop, NULL);
-    __LOG(LOG_NOTICE, "[GST][%s:%d] ch%d get gop_size : %d", _FILE_, __LINE__, ch, gop);
+    //__LOG(LOG_NOTICE, "[GST][%s:%d] ch%d get gop_size : %d", _FILE_, __LINE__, ch, gop);
+    g_print("rec ch%d get gop_size : %d\n", ch, gop);
 }
 
 void RecordBin::getKeyframe()
@@ -145,7 +151,8 @@ void RecordBin::getKeyframe()
     //g_object_get(re.enc, "bitrate", &bps, NULL);
     //__LOG(LOG_NOTICE, "[GST][%s:%d] ch%d get bitrate : %d", _FILE_, __LINE__, ch, bps);
     g_object_get(re.enc, "set-keyframe", &key, NULL);
-    __LOG(LOG_NOTICE, "[GST][%s:%d] ch%d get keyframe : %d", _FILE_, __LINE__, ch, key);
+    //__LOG(LOG_NOTICE, "[GST][%s:%d] ch%d get keyframe : %d", _FILE_, __LINE__, ch, key);
+    g_print("rec ch%d get keyframe : %d\n", ch, key);
 }
 
 void RecordBin::setkeyframe(guint16 data)
@@ -157,6 +164,7 @@ void RecordBin::setkeyframe(guint16 data)
     g_object_set(re.enc, "set-keyframe", data, NULL);
     g_object_get(re.enc, "set-keyframe", &key, NULL);
     __LOG(LOG_NOTICE, "[GST][%s:%d] ch%d set keyframe : %d", _FILE_, __LINE__, ch, key);
+    g_print("rec ch%d set keyframe : %d\n", ch, key);
 }
 
 RecordBin::RecordBin()
@@ -175,12 +183,12 @@ RecordBin::~RecordBin()
     __LOG(LOG_INFO, "[GST][%s:%d] %s[%d]", _FILE_, __LINE__, __FUNCTION__, ch);
 }
 
-gint RecordBin::init(guint8 num)
+gint RecordBin::init(guint8 num, gboolean crop_en)
 {
     gint ret = 0;
     ch = num;
     //sinkPad = NULL;
-    __LOG(LOG_INFO, "[GST][%s:%d] %s ch : %d", _FILE_, __LINE__, __FUNCTION__, ch);
+    __LOG(LOG_INFO, "[GST][%s:%d] %s ch : %d, crop %s", _FILE_, __LINE__, __FUNCTION__, ch, crop_en? "enable":"disable");
 
     re.bin = gst_bin_new(g_strdup_printf("recordBin%d", ch));
     re.queue = gst_element_factory_make(QUEUE_TYPE, "queue");
@@ -190,16 +198,15 @@ gint RecordBin::init(guint8 num)
     re.enc = gst_element_factory_make("vpuenc_h264", "vpuenc_h264");
     re.rate = gst_element_factory_make("videorate", "videorate");
     re.convert = gst_element_factory_make("imxvideoconvert_g2d", "convert");
-    re.convert2 = gst_element_factory_make("imxvideoconvert_g2d", "convert2");
     re.crop = gst_element_factory_make("videocrop", "crop");
     re.overlay = gst_element_factory_make("textoverlay", "overlay");
 
-    if (!re.bin || !re.queue || !re.queue2 || !re.parse || !re.enc || !re.rate || !re.convert || !re.capsfilter || !re.crop || !re.overlay || !re.convert2) {
+    if (!re.bin || !re.queue || !re.queue2 || !re.parse || !re.enc || !re.rate || !re.convert || !re.capsfilter || !re.crop || !re.overlay) {
         __LOG(LOG_CRIT, "[GST][%s:%d] record element create error", _FILE_, __LINE__);
         return ret;
     }
 
-    gst_bin_add_many(GST_BIN(re.bin), re.queue, re.rate, re.convert, re.capsfilter, re.enc, re.parse, re.queue2, re.crop, re.overlay, re.convert2, NULL);
+    gst_bin_add_many(GST_BIN(re.bin), re.queue, re.rate, re.convert, re.capsfilter, re.enc, re.parse, re.queue2, re.crop, re.overlay, NULL);
     ret = gst_bin_add(GST_BIN(pipeline), re.bin);
     if(!ret) {
         __LOG(LOG_CRIT, "[GST][%s:%d] record bin add error in pipeline", _FILE_, __LINE__);
@@ -207,11 +214,13 @@ gint RecordBin::init(guint8 num)
     }
 
 #ifdef CHANNEL_EACH_CROP
-    if(cmdArg.overlay_en) ret = gst_element_link_many(re.queue, re.crop, re.overlay, re.convert, re.rate, re.capsfilter, re.enc, re.parse, re.queue2, NULL);
-    else ret = gst_element_link_many(re.queue, re.crop, re.convert, re.rate, re.capsfilter, re.enc, re.parse, re.queue2, NULL);
+    if(crop_en && cmdArg.overlay_en) ret = gst_element_link_many(re.queue, re.crop, re.overlay, re.convert, re.rate, re.capsfilter, re.enc, re.parse, re.queue2, NULL);
+    else if(cmdArg.overlay_en) ret = gst_element_link_many(re.queue, re.overlay, re.convert, re.rate, re.capsfilter, re.enc, re.parse, re.queue2, NULL);
+    else if(crop_en) ret = gst_element_link_many(re.queue, re.crop, re.convert, re.rate, re.capsfilter, re.enc, re.parse, re.queue2, NULL);
+    else ret = gst_element_link_many(re.queue, re.rate, re.capsfilter, re.enc, re.parse, re.queue2, NULL);
     //if(cmdArg.mode) ret = gst_element_link_many(re.queue, re.crop, re.convert, re.enc, re.parse, re.queue2, NULL);
 #else
-    ret = gst_element_link_many(re.queue, re.rate, re.capsfilter, re.convert, re.enc, re.parse, re.queue2, NULL);
+    ret = gst_element_link_many(re.queue, re.rate, re.capsfilter, re.enc, re.parse, re.queue2, NULL);
 #endif
     if (!ret) {
         __LOG(LOG_CRIT, "[GST][%s:%d] record link err", _FILE_, __LINE__);
@@ -243,7 +252,7 @@ gint RecordBin::init(guint8 num)
 
     sinkPad = gst_ghost_pad_new(g_strdup_printf("recordBin_sink_ch%d", ch), gst_element_get_static_pad(re.queue, "sink"));
 
-    if(cmdArg.testMode == TEST_MODE)
+    if(cmdArg.levelMode == MODE_TEST)
     {
         gst_pad_add_probe(gst_element_get_static_pad(re.enc, "src"), GST_PAD_PROBE_TYPE_BUFFER, (GstPadProbeCallback)probe_function, re.enc, NULL);
         //gst_pad_add_probe(gst_element_get_static_pad(re.enc, "src"), GST_PAD_PROBE_TYPE_BUFFER, (GstPadProbeCallback)probe_function, re.enc, NULL);

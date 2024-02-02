@@ -255,7 +255,8 @@ void RtspServerBin::getBitrate()
     gint bps;
 
     g_object_get(re.enc, "bitrate", &bps, NULL);
-    __LOG(LOG_NOTICE, "[GST][%s:%d] ch%d get bitrate : %d", _FILE_, __LINE__, ch, bps);
+    //__LOG(LOG_NOTICE, "[GST][%s:%d] ch%d get bitrate : %d", _FILE_, __LINE__, ch, bps);
+    g_print("rtsp ch%d get bitrate : %d\n", ch, bps);
 }
 
 void RtspServerBin::setBitrate(guint16 data)
@@ -265,6 +266,7 @@ void RtspServerBin::setBitrate(guint16 data)
     g_object_set(re.enc, "bitrate", data, NULL);
     g_object_get(re.enc, "bitrate", &bps, NULL);
     __LOG(LOG_NOTICE, "[GST][%s:%d] ch%d set bitrate : %d", _FILE_, __LINE__, ch, bps);
+    g_print("rtsp ch%d set bitrate : %d\n", ch, bps);
     rtspServerData.caps = NULL;
 }
 
@@ -274,7 +276,8 @@ void RtspServerBin::getFps()
     GstCaps *caps;
 
     g_object_get(re.capsfilter, "caps", &caps, NULL);
-    __LOG(LOG_NOTICE, "[GST][%s:%d] ch%d get fps : %s", _FILE_, __LINE__, ch, gst_caps_to_string(caps));
+    //__LOG(LOG_NOTICE, "[GST][%s:%d] ch%d get fps : %s", _FILE_, __LINE__, ch, gst_caps_to_string(caps));
+    g_print("rtsp ch%d get fps : %s\n", ch, gst_caps_to_string(caps));
 
     gst_caps_unref(caps);
 }
@@ -299,6 +302,7 @@ void RtspServerBin::setFps(guint16 data)
     g_object_set(re.capsfilter, "caps", caps, NULL);
     //g_object_get(re.capsfilter, "caps", caps, NULL);
     __LOG(LOG_NOTICE, "[GST][%s:%d] ch%d set fps : %s", _FILE_, __LINE__, ch, gst_caps_to_string(caps));
+    g_print("rtsp ch%d set fps : %s\n", ch, gst_caps_to_string(caps));
     rtspServerData.caps = NULL;
 
     gst_caps_unref(caps);
@@ -312,8 +316,8 @@ void RtspServerBin::getCaps()
 
     g_object_get(rtspServerData.appsrc, "caps", &caps, NULL);
     //g_object_get(info->appsrc, "caps", &caps, NULL);
-    __LOG(LOG_NOTICE, "[GST][%s:%d] ch%d get caps : %s", _FILE_, __LINE__, ch, gst_caps_to_string(caps));
-
+    //__LOG(LOG_NOTICE, "[GST][%s:%d] ch%d get caps : %s", _FILE_, __LINE__, ch, gst_caps_to_string(caps));
+    g_print("rtsp ch%d get caps : %s\n", ch, gst_caps_to_string(caps));
     gst_caps_unref(caps);
 }
 
@@ -326,6 +330,7 @@ void RtspServerBin::setRotation(guint16 data)
     g_object_set(re.convert, "rotation", data, NULL);
     g_object_get(re.convert, "rotation", &rotation, NULL);
     __LOG(LOG_NOTICE, "[GST][%s:%d] ch%d set rotation : %d", _FILE_, __LINE__, ch, rotation);
+    g_print("rtsp ch%d set rotation : %d\n", ch, rotation);
 }
 
 void RtspServerBin::getRotation()
@@ -333,7 +338,8 @@ void RtspServerBin::getRotation()
     gint rotation;
 
     g_object_get(re.convert, "rotation", &rotation, NULL);
-    __LOG(LOG_NOTICE, "[GST][%s:%d] ch%d get rotation : %d", _FILE_, __LINE__, ch, rotation);
+    //__LOG(LOG_NOTICE, "[GST][%s:%d] ch%d get rotation : %d", _FILE_, __LINE__, ch, rotation);
+    g_print("rtsp ch%d get rotation : %d\n", ch, rotation);
 }
 
 void RtspServerBin::setGop(guint16 data)
@@ -345,6 +351,7 @@ void RtspServerBin::setGop(guint16 data)
     g_object_set(re.enc, "gop-size", data, NULL);
     g_object_get(re.enc, "gop-size", &gop, NULL);
     __LOG(LOG_NOTICE, "[GST][%s:%d] ch%d set gop_size : %d", _FILE_, __LINE__, ch, gop);
+    g_print("rtsp ch%d set gop_size : %d\n", ch, gop);
 }
 
 void RtspServerBin::getGop()
@@ -352,7 +359,8 @@ void RtspServerBin::getGop()
     gint gop;
 
     g_object_get(re.enc, "gop-size", &gop, NULL);
-    __LOG(LOG_NOTICE, "[GST][%s:%d] ch%d get gop_size : %d", _FILE_, __LINE__, ch, gop);
+    //__LOG(LOG_NOTICE, "[GST][%s:%d] ch%d get gop_size : %d", _FILE_, __LINE__, ch, gop);
+    g_print("rtsp ch%d get gop_size : %d\n", ch, gop);
 }
 
 void RtspServerBin::getKeyframe()
@@ -362,7 +370,8 @@ void RtspServerBin::getKeyframe()
     //g_object_get(re.enc, "bitrate", &bps, NULL);
     //__LOG(LOG_NOTICE, "[GST][%s:%d] ch%d get bitrate : %d", _FILE_, __LINE__, ch, bps);
     g_object_get(re.enc, "set-keyframe", &key, NULL);
-    __LOG(LOG_NOTICE, "[GST][%s:%d] ch%d get keyframe : %d", _FILE_, __LINE__, ch, key);
+    //__LOG(LOG_NOTICE, "[GST][%s:%d] ch%d get keyframe : %d", _FILE_, __LINE__, ch, key);
+    g_print("rtsp ch%d get keyframe : %d\n", ch, key);
 }
 
 void RtspServerBin::setkeyframe(guint16 data)
@@ -374,6 +383,7 @@ void RtspServerBin::setkeyframe(guint16 data)
     g_object_set(re.enc, "set-keyframe", data, NULL);
     g_object_get(re.enc, "set-keyframe", &key, NULL);
     __LOG(LOG_NOTICE, "[GST][%s:%d] ch%d set keyframe : %d", _FILE_, __LINE__, ch, key);
+    g_print("rtsp ch%d set keyframe : %d\n", ch, key);
 }
 
 RtspServerBin* RtspServerBin::getInstance()
@@ -405,7 +415,7 @@ GstPad* RtspServerBin::getBinSinkPad()
     return sinkPad;
 }
 
-gint RtspServerBin::init(guint8 num)
+gint RtspServerBin::init(guint8 num, gboolean crop_en)
 {
     GstPad *staticPad;
     gint ret = 0;
@@ -444,11 +454,16 @@ gint RtspServerBin::init(guint8 num)
     }
 
 #ifdef CHANNEL_EACH_CROP
-    if(cmdArg.overlay_en) ret = gst_element_link_many(re.queue, re.crop, re.overlay, re.convert, re.rate, re.capsfilter, re.enc, re.parse, re.queue2, re.sink, NULL);
-    else ret = gst_element_link_many(re.queue, re.crop, re.convert, re.rate, re.capsfilter, re.enc, re.parse, re.queue2, re.sink, NULL);
+    if(crop_en && cmdArg.overlay_en) ret = gst_element_link_many(re.queue, re.crop, re.overlay, re.convert, re.rate, re.capsfilter, re.enc, re.parse, re.queue2, re.sink, NULL);
+    else if(cmdArg.overlay_en) ret = gst_element_link_many(re.queue, re.overlay, re.convert, re.rate, re.capsfilter, re.enc, re.parse, re.queue2, re.sink, NULL);
+    else if(crop_en) ret = gst_element_link_many(re.queue, re.crop, re.convert, re.rate, re.capsfilter, re.enc, re.parse, re.queue2, re.sink, NULL);
+    else ret = gst_element_link_many(re.queue, re.rate, re.capsfilter, re.enc, re.parse, re.queue2, re.sink, NULL);
+
+    //if(cmdArg.overlay_en) ret = gst_element_link_many(re.queue, re.crop, re.overlay, re.convert, re.rate, re.capsfilter, re.enc, re.parse, re.queue2, re.sink, NULL);
+    //else ret = gst_element_link_many(re.queue, re.crop, re.convert, re.rate, re.capsfilter, re.enc, re.parse, re.queue2, re.sink, NULL);
     //if(cmdArg.mode) ret = gst_element_link_many(re.queue, re.crop, re.convert, re.enc, re.parse, re.queue2, re.sink, NULL);
 #else
-    ret = gst_element_link_many(re.queue, re.rate, re.capsfilter, re.convert, re.enc, re.parse, re.queue2, NULL);
+    ret = gst_element_link_many(re.queue, re.rate, re.capsfilter, re.enc, re.parse, re.queue2, re.sink, NULL);
 #endif
     if (!ret) {
         __LOG(LOG_CRIT, "[GST][%s:%d] rtsp link err", _FILE_, __LINE__);
