@@ -20,6 +20,7 @@
 #include "captureBin.h"
 #include "parser.h"
 #include "aes.h"
+#include "tcpServer.h"
 #include <fcntl.h>
 //#include <signal.h>
 
@@ -46,7 +47,7 @@ gboolean bus_message_parse(GstBus *bus, GstMessage *message, gpointer data)
 
     if(mType == GST_MESSAGE_STREAM_STATUS) return TRUE;
     //printf("Got %s message\n", GST_MESSAGE_TYPE_NAME(message));
-    if(mType == GST_MESSAGE_STATE_CHANGED) return TRUE;
+    //if(mType == GST_MESSAGE_STATE_CHANGED) return TRUE;
 
     //__LOG(LOG_NOTICE, "[GST][%s:%d] Got %s message from %s", _FILE_, __LINE__, GST_MESSAGE_TYPE_NAME(message), GST_OBJECT_NAME (message->src));
 
@@ -58,10 +59,11 @@ gboolean bus_message_parse(GstBus *bus, GstMessage *message, gpointer data)
             gst_message_parse_state_changed(message, &old_state, &new_state, &pending_state);
             if(state != old_state)
             {
-                //__LOG(LOG_INFO, "[GST][%s:%d] from %s to %s", _FILE_, __LINE__, gst_element_state_get_name(old_state), gst_element_state_get_name(new_state));
+                //__LOG(LOG_NOTICE, "[GST][%s:%d] from %s to %s in %s", _FILE_, __LINE__, gst_element_state_get_name(old_state), gst_element_state_get_name(new_state), GST_OBJECT_NAME (message->src));
+                //g_print("from %s to %s at %s\n", gst_element_state_get_name(old_state), gst_element_state_get_name(new_state), GST_OBJECT_NAME (message->src));
                 state = old_state;
             }
-            __LOG(LOG_INFO, "[GST][%s:%d] in %s", _FILE_, __LINE__, GST_OBJECT_NAME (message->src));
+            __LOG(LOG_INFO, "[GST][%s:%d] from %s to %s int %s", _FILE_, __LINE__, gst_element_state_get_name(old_state), gst_element_state_get_name(new_state), GST_OBJECT_NAME (message->src));
             break;
         }
 
@@ -486,6 +488,74 @@ gint getPasswdWithAES(CmdArg arg)
 	return ret;
 }
 
+gint rotate_camera(CsiNum csiNum)
+{
+    guint8 i = (guint8)csiNum;
+    gchar *cmd;
+
+    if (cmdArg.cam_en[i * 2] && cmdArg.cam_en[i * 2 + 1])
+    {
+        cmd = g_strdup_printf("i2cwrite %d 0x11 0x100c 0x%04x", i ? 1 : 2, (cmdArg.ch_rotate >> (i * 4)) & 0x03);
+        __LOG(LOG_NOTICE, "[CFG][%s:%d] ch%d enable : %s", _FILE_, __LINE__, i * 2, cmd);
+        if (system(cmd) < 0)
+            __LOG(LOG_ERR, "[CFG][%s:%d] ch%d rotation fail", __FILE__, __LINE__, i * 2);
+            
+        cmd = g_strdup_printf("i2cwrite %d 0x12 0x100c 0x%04x", i ? 1 : 2, (cmdArg.ch_rotate >> (i * 4 + 2)) & 0x03);
+        __LOG(LOG_NOTICE, "[CFG][%s:%d] ch%d enable %s", _FILE_, __LINE__, i * 2 + 1, cmd);
+        if (system(cmd) < 0)
+            __LOG(LOG_ERR, "[CFG][%s:%d] ch%d rotation fail", __FILE__, __LINE__, i * 2 + 1);
+    }
+    else
+    {
+#define STR_LEN 8
+        FILE *fp;
+        gchar str[STR_LEN];
+        gchar val[4] = {0, 0, 0, 0};
+        // memset(str, 0, STR_LEN);
+        cmd = g_strdup_printf("i2cread %d 0x48 0x0013 1", i ? 1 : 2);
+        fp = popen(cmd, "r");
+        if (NULL == fp)
+        {
+            perror("popen() fail");
+            return - 1;
+        }
+        while (fgets(str, STR_LEN, fp));
+        pclose(fp);
+        str[4] = 0;
+        //__LOG(LOG_NOTICE, "[CFG][%s:%d] link byte : %s", _FILE_, __LINE__, str);
+
+        if (strstr(str, "0xea"))
+            val[i * 2] = 1;
+        else if (strstr(str, "0xda"))
+            val[i * 2 + 1] = 1;
+        else
+            __LOG(LOG_CRIT, "[CFG][%s:%d] csi[%d] not display", _FILE_, __LINE__, i);
+
+        if (cmdArg.cam_en[i * 2] & 0x01)
+        {
+            cmd = g_strdup_printf("i2cwrite %d 0x3c 0x100c 0x%04x", i ? 1 : 2, (cmdArg.ch_rotate >> (i * 4)) & 0x03);
+            __LOG(LOG_NOTICE, "[CFG][%s:%d] %s", _FILE_, __LINE__, cmd);
+            if (system(cmd) < 0)
+                __LOG(LOG_ERR, "[CFG][%s:%d] ch%d rotation fail", __FILE__, __LINE__, i * 2);
+            if (val[i * 2] == 0)
+                __LOG(LOG_ERR, "[CFG][%s:%d] swap : ch%d enable but ch%d display", _FILE_, __LINE__, i * 2, i * 2 + 1);
+        }
+        else if (cmdArg.cam_en[i * 2 + 1] & 0x01)
+        {
+            cmd = g_strdup_printf("i2cwrite %d 0x3c 0x100c 0x%04x", i ? 1 : 2, (cmdArg.ch_rotate >> (i * 4 + 2)) & 0x03);
+            __LOG(LOG_NOTICE, "[CFG][%s:%d] %s", _FILE_, __LINE__, cmd);
+            if (system(cmd) < 0)
+                __LOG(LOG_ERR, "[CFG][%s:%d] ch%d rotation fail", __FILE__, __LINE__, i * 2 + 1);
+            if (val[i * 2 + 1] == 0)
+                __LOG(LOG_ERR, "[CFG][%s:%d] swap : ch%d enable but ch%d display", _FILE_, __LINE__, i * 2 + 1, i * 2);
+        }
+    }
+
+    g_free(cmd);
+
+    return 1;
+}
+
 gint main(gint argc, gchar *argv[]) 
 {
     guint major, minor, micro, nano;
@@ -529,6 +599,7 @@ gint main(gint argc, gchar *argv[])
     MuxSinkBin muxSinkBin[MAX_CHANNEL];
     CaptureBin captureBin[MAX_CHANNEL];
     TestBin audioBin;
+    CTCPServer *tcpServer = CTCPServer::getInstance();
     ChannelNum chNum;
     GThread *splitThread = NULL, *terminalThread = NULL;
     GstStateChangeReturn ret;
@@ -543,7 +614,7 @@ gint main(gint argc, gchar *argv[])
     thraedArgs->arg3 = muxSinkBin;
     thraedArgs->arg4 = captureBin;
 
-    pipeline = gst_pipeline_new(g_strdup_printf("%s-%s", cmdArg.appname, g_date_time_format(g_date_time_new_now_local(), "%Y%m%d%H%M%S")));
+    pipeline = gst_pipeline_new(g_strdup_printf("%s_%s", cmdArg.appname, g_date_time_format(g_date_time_new_now_local(), "%Y%m%d_%H%M%S")));
     //muxBin.init();
     //g_print("width : %d\n", cmdArg.res[cmdArg.resolution_mode].height);
 
@@ -639,6 +710,21 @@ gint main(gint argc, gchar *argv[])
             //else __LOG(LOG_NOTICE, "[GST][%s:%d] Record ch[%d] pad link", _FILE_, __LINE__, chNum);
         }
 
+        if(cmdArg.stream_en[STREAM_CAP])
+        {
+            videoBin[chNum/2].addBinCaptureSrcPad(chNum);
+            captureBin[chNum].init(chNum, crop_en[csiNum]);
+            //captureBin[chNum].addBinToPipe(pipeline);
+#if 0
+            if(gst_pad_link(videoBin[chNum/2].getBinCaptureSrcPad(chNum), captureBin[chNum].getBinSinkPad()) != GST_PAD_LINK_OK)
+            {
+                __LOG(LOG_CRIT, "[GST][%s:%d] capture ch[%d] pad link err", _FILE_, __LINE__, chNum);
+                //return -1;
+                goto main_end;
+            }
+#endif
+        }
+
         if(cmdArg.audio_en)
         {
             if(audioBin.init())
@@ -667,19 +753,6 @@ gint main(gint argc, gchar *argv[])
                 goto main_end;
             }
             else __LOG(LOG_NOTICE, "[GST][%s:%d] mux audio ch[%d] pad link", _FILE_, __LINE__, chNum);
-        }
-
-        if(cmdArg.capture_en)
-        {
-            videoBin[chNum/2].addBinCaptureSrcPad(chNum);
-            captureBin[chNum].init(chNum);
-
-            if(gst_pad_link(videoBin[chNum/2].getBinCaptureSrcPad(chNum), captureBin[chNum].getBinSinkPad()) != GST_PAD_LINK_OK)
-            {
-                __LOG(LOG_CRIT, "[GST][%s:%d] capture ch[%d] pad link err", _FILE_, __LINE__, chNum);
-                //return -1;
-                goto main_end;
-            }
         }
 
 #ifdef MUXBIN_ENABLE
@@ -744,56 +817,7 @@ gint main(gint argc, gchar *argv[])
 	{
 		if(videoBin[i].be.bin != NULL)
 		{
-			gchar *cmd;
-			if(cmdArg.cam_en[i*2] && cmdArg.cam_en[i*2+1]) 
-			{
-				cmd = g_strdup_printf("i2cwrite %d 0x11 0x100c 0x%04x", i? 1:2, (cmdArg.ch_rotate>>(i*4))&0x03);
-				__LOG(LOG_NOTICE, "[CFG][%s:%d] ch%d enable : %s", _FILE_, __LINE__, i*2, cmd);
-				if(system(cmd) < 0) __LOG(LOG_ERR, "[CFG][%s:%d] ch%d rotation fail", __FILE__, __LINE__, i*2);
-				cmd = g_strdup_printf("i2cwrite %d 0x12 0x100c 0x%04x", i? 1:2, (cmdArg.ch_rotate>>(i*4+2))&0x03);
-				__LOG(LOG_NOTICE, "[CFG][%s:%d] ch%d enable %s", _FILE_, __LINE__, i*2+1, cmd);
-				if(system(cmd) < 0) __LOG(LOG_ERR, "[CFG][%s:%d] ch%d rotation fail", __FILE__, __LINE__, i*2+1);
-			}
-			else
-			{
-#define STR_LEN	8
-				FILE *fp;
-				gchar str[STR_LEN];
-				gchar val[4] = {0,0,0,0};
-				//memset(str, 0, STR_LEN);
-				cmd = g_strdup_printf("i2cread %d 0x48 0x0013 1", i ? 1 : 2);
-				fp = popen(cmd, "r");
-				if (NULL == fp)
-				{
-					perror("popen() fail");
-					continue;
-				}
-				while (fgets(str, STR_LEN, fp));
-				pclose(fp);
-				str[4] = 0;
-				//__LOG(LOG_NOTICE, "[CFG][%s:%d] link byte : %s", _FILE_, __LINE__, str);
-
-				if (strstr(str, "0xea")) val[i*2] = 1;
-				else if (strstr(str, "0xda")) val[i*2+1] = 1;
-				else __LOG(LOG_CRIT, "[CFG][%s:%d] csi[%d] not display", _FILE_, __LINE__, i);
-
-				if(cmdArg.cam_en[i*2] & 0x01)
-				{
-					cmd = g_strdup_printf("i2cwrite %d 0x3c 0x100c 0x%04x", i? 1:2, (cmdArg.ch_rotate>>(i*4))&0x03);
-					__LOG(LOG_NOTICE, "[CFG][%s:%d] %s", _FILE_, __LINE__, cmd);
-				    if(system(cmd) < 0) __LOG(LOG_ERR, "[CFG][%s:%d] ch%d rotation fail", __FILE__, __LINE__, i*2);
-					if(val[i*2] == 0) __LOG(LOG_ERR, "[CFG][%s:%d] swap : ch%d enable but ch%d display", _FILE_, __LINE__, i*2, i*2+1);
-				}
-				else if(cmdArg.cam_en[i*2+1] & 0x01)
-				{
-					cmd = g_strdup_printf("i2cwrite %d 0x3c 0x100c 0x%04x", i? 1:2, (cmdArg.ch_rotate>>(i*4+2))&0x03);
-					__LOG(LOG_NOTICE, "[CFG][%s:%d] %s", _FILE_, __LINE__, cmd);
-					if(system(cmd) < 0) __LOG(LOG_ERR, "[CFG][%s:%d] ch%d rotation fail", __FILE__, __LINE__, i*2+1);
-					if(val[i*2+1] == 0) __LOG(LOG_ERR, "[CFG][%s:%d] swap : ch%d enable but ch%d display", _FILE_, __LINE__, i*2+1, i*2);
-				}
-			}
-			
-			g_free(cmd);
+            rotate_camera((CsiNum)i);
         }
     }
 
@@ -817,6 +841,11 @@ gint main(gint argc, gchar *argv[])
     if(cmdArg.overlay_en) {
         srtTimer_id = g_timeout_add(500, (GSourceFunc)setSRT, thraedArgs);
     }
+
+    if(cmdArg.tcp_en) {
+        tcpServer->init(thraedArgs);
+    }
+
 
     loop = g_main_loop_new(NULL, FALSE);
 

@@ -2,7 +2,7 @@
 #TOP_DIR = $(shell pwd)
 OUTPUT = bin
 
-SOURCE=main.cpp util.cpp util.h videoBin.cpp videoBin.h recordBin.cpp recordBin.h audioBin.cpp audioBin.h muxSinkBin.cpp muxSinkBin.h rtspServerBin.cpp rtspServerBin.h captureBin.cpp captureBin.h
+#SOURCE=main.cpp util.cpp util.h videoBin.cpp videoBin.h recordBin.cpp recordBin.h audioBin.cpp audioBin.h muxSinkBin.cpp muxSinkBin.h rtspServerBin.cpp rtspServerBin.h captureBin.cpp captureBin.h
 
 #ROOTFS += /opt/desktop/build-desktop/tmp/work/imx8mpevk-fsl-linux/imx-image-desktop/20.04.2-r0/rootfs
 #SYSROOT += /shared/fsl-imx-xwayland/5.10-hardknott/sysroots/cortexa53-crypto-poky-linux
@@ -34,7 +34,7 @@ ALL_CFLAGS=-I$(IDIR) $(CFLAGS)
 
 ALLFLAGS=$(ALL_CFLAGS) $(ALL_LDFLAGS)
 #OBJS = videoBin.o recordBin.o muxSinkBin.o rtspServerBin.o audioBin.o muxBin.o
-OBJS = videoBin.o recordBin.o muxSinkBin.o rtspServerBin.o testBin.o captureBin.o util.o parser.o aes.o
+OBJS = videoBin.o recordBin.o muxSinkBin.o rtspServerBin.o testBin.o captureBin.o util.o parser.o aes.o tcpServer.o
 
 gstApp : $(OBJS) main.cpp
 	$(CXX) -o $@ $^ $(ALLFLAGS)
@@ -70,6 +70,9 @@ parser.o : parser.cpp parser.h
 
 aes.o : aes.cpp aes.h
 	$(CXX) $(ALLFLAGS) -c aes.cpp
+
+tcpServer.o : tcpServer.cpp tcpServer.h
+	$(CXX) $(ALLFLAGS) -c tcpServer.cpp
 
 #json_c.o : json_c.cpp json_c.h
 #	$(CXX) $(ALLFLAGS) -c json_c.cpp

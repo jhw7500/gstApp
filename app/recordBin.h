@@ -51,6 +51,8 @@ public :
     void getGop();
     void getKeyframe();
     void setkeyframe(guint16 data);
+    GstStateChangeReturn setState(GstState state);
+    GstState getState();
 
 private :
 	

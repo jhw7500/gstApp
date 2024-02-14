@@ -17,15 +17,15 @@
 //#include <cstdio>
 #include <gst/gst.h>
 #include <stdio.h>
-#include "util.h"
 
 #define GST_API_VERSION "1.0"
-#define APP_VERSION "0.1"
+#define APP_VERSION "0.2"
 
 #define CHANNEL_EACH_CROP
 #define DEBUG_TIMESTAMP
 #define MAX_CHANNEL 4
 #define MAX_VIDEO_SRC 2
+#define MAX_MODE    3
 
 #define DEFAULT_OVERLAY_FONT "Times New Roman Italic, 12"
 
@@ -43,7 +43,8 @@ typedef enum
 typedef enum
 {
     STREAM_REC = 0,
-    STREAM_RTSP = 1
+    STREAM_RTSP = 1,
+    STREAM_CAP = 2
 } StreamMode;
 
 typedef enum
@@ -116,10 +117,10 @@ typedef struct _CmdArg
     gboolean hflip[MAX_CHANNEL];
     gboolean vflip[MAX_CHANNEL];
     gboolean cam_en[MAX_CHANNEL];
-    gint fps[MAX_CHANNEL/2];
-    gint bps[MAX_CHANNEL/2];
-    gboolean stream_en[MAX_CHANNEL/2];
-    gint gop[MAX_CHANNEL/2];
+    gint fps[MAX_MODE];
+    gint bps[MAX_MODE];
+    gboolean stream_en[MAX_MODE];
+    gint gop[MAX_MODE];
     gint log_level;
     gint dbg_level;
     const gchar *dotDir;
@@ -132,7 +133,9 @@ typedef struct _CmdArg
     gint play_delay;
     gboolean fault;
     gint duration;
-    gboolean capture_en;
+    gboolean capture_encoder_en;
+    gboolean tcp_en;
+    gint tcp_port;
     gboolean audio_en;
     const gchar *appname;
     gint captureMaxCnt;
@@ -156,9 +159,6 @@ extern GMainLoop *loop;
 extern volatile sig_atomic_t is_interrupted;
 extern CmdArg cmdArg;
 extern gboolean is_live;
-extern const char *test0;
-extern const char *test1;
-extern const char *test2;
 
 void fault_setup (void);
 void addSignalHandler();

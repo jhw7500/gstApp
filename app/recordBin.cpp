@@ -167,6 +167,20 @@ void RecordBin::setkeyframe(guint16 data)
     g_print("rec ch%d set keyframe : %d\n", ch, key);
 }
 
+GstState RecordBin::getState()
+{
+    GstState state;
+
+    gst_element_get_state(re.bin, &state, NULL, GST_CLOCK_TIME_NONE);
+ 
+    return state;
+}
+
+GstStateChangeReturn RecordBin::setState(GstState state)
+{
+    return gst_element_set_state(re.bin , state);
+}
+
 RecordBin::RecordBin()
 {
     // 생성자 코드 추가

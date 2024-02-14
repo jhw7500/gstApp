@@ -74,6 +74,8 @@ public :
     void getGop();
     void getKeyframe();
     void setkeyframe(guint16 data);
+    GstStateChangeReturn setState(GstState state);
+    GstState getState();
 
 private :
 	
@@ -83,7 +85,6 @@ public :
     //GstElement *pipeline[2];
 	
 private :
-    guint8 ch;
     RtspServerElement re;
     GstPad *sinkPad;
     RtspServerData rtspServerData;
