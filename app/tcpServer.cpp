@@ -15,7 +15,7 @@
 #include <unistd.h>
 #include <sys/ioctl.h>
 #include <arpa/inet.h>
-#include "captureBin.h"
+#include "parser.h"
 
 #ifdef SEGFAULT_DEBUG
 #include <signal.h>
@@ -205,7 +205,7 @@ int CTCPServer::sendDataTCP(int fd, char* data, int len)
 		__LOG(LOG_ERR, "[TCP][%s:%d] fd(%d) is not accept", _FILE_, __LINE__, fd);
 		return fd;
 	}
-	
+
 	ret = send(fd, data, len, MSG_DONTWAIT);
 	if(ret < 0) {
 		perror("tcpsnd fail");
@@ -378,23 +378,11 @@ int CTCPServer::waitingConnect(void* pData)
 int CTCPServer::parseRecvData(int fd, char* data, int len, void* pData)
 {
 	int ret = 0;
-	GstState state;
-	
-    ThreadArgs *thraedArgs = (ThreadArgs *)pData;
-    CaptureBin *captureBin = (CaptureBin *)(thraedArgs->arg0);
+    //ThreadArgs *thraedArgs = (ThreadArgs *)pData;
 
-	if(data[0] == 0x30)
-	{
-    	gst_element_get_state(pipeline, &state, NULL, GST_CLOCK_TIME_NONE);
-		if(state == GST_STATE_PLAYING) 
-		{
-			//cap_step = 1;
-			for (guint i = 0; i < MAX_CHANNEL; i++)
-				if (captureBin[i].getBinSinkPad()) captureBin[i].startCapture(2);
-			//__LOG(LOG_NOTICE, "[TCP][%s:%d] cap_step : 1", _FILE_, __LINE__);
-		}
-	}
-	
+	ParserClass* parser = ParserClass::getInstance();
+	parser->cmd_parser(data, pData);
+
     return ret;
 }
 

@@ -441,6 +441,12 @@ gint ParserClass::cmd_parser(gchar* buffer, gpointer data)
     guint key;
     GstState state;
 
+    gint len = strlen(buffer);
+
+    if (len > 1 && buffer[len-1] == '\n') {
+        buffer[len-1] = '\0';
+    }
+
     token = strtok(buffer, " ");
 
     if (!strcmp(token, "get"))
@@ -448,7 +454,7 @@ gint ParserClass::cmd_parser(gchar* buffer, gpointer data)
         token = strtok(NULL, " ");
         if (!strcmp(token, "bps"))
         {
-            token = strtok(NULL, "\n");
+            token = strtok(NULL, "\0");
             if (!strcmp(token, "rec"))
             {
                 for (i = 0; i < MAX_CHANNEL; i++)
@@ -461,10 +467,12 @@ gint ParserClass::cmd_parser(gchar* buffer, gpointer data)
                     if (rtspServerBin[i].getBinSinkPad())
                         rtspServerBin[i].getBitrate();
             }
+            else
+                g_print("wrong cmd!\n");
         }
         else if (!strcmp(token, "fps"))
         {
-            token = strtok(NULL, "\n");
+            token = strtok(NULL, "\0");
             if (!strcmp(token, "rec"))
             {
                 for (i = 0; i < MAX_CHANNEL; i++)
@@ -477,10 +485,12 @@ gint ParserClass::cmd_parser(gchar* buffer, gpointer data)
                     if (rtspServerBin[i].getBinSinkPad())
                         rtspServerBin[i].getFps();
             }
+            else
+                g_print("wrong cmd!\n");
         }
         else if (!strcmp(token, "cap"))
         {
-            token = strtok(NULL, "\n");
+            token = strtok(NULL, "\0");
             if (!strcmp(token, "rec"))
             {
                 // for (i = 0; i < MAX_CHANNEL; i++)
@@ -492,10 +502,12 @@ gint ParserClass::cmd_parser(gchar* buffer, gpointer data)
                     if (rtspServerBin[i].getBinSinkPad())
                         rtspServerBin[i].getCaps();
             }
+            else
+                g_print("wrong cmd!\n");
         }
         else if (!strcmp(token, "rotation"))
         {
-            token = strtok(NULL, "\n");
+            token = strtok(NULL, "\0");
             if (!strcmp(token, "rec"))
             {
                 for (i = 0; i < MAX_CHANNEL; i++)
@@ -508,10 +520,12 @@ gint ParserClass::cmd_parser(gchar* buffer, gpointer data)
                     if (rtspServerBin[i].getBinSinkPad())
                         rtspServerBin[i].getRotation();
             }
+            else
+                g_print("wrong cmd!\n");
         }
         else if (!strcmp(token, "state"))
         {
-            token = strtok(NULL, "\n");
+            token = strtok(NULL, "\0");
             if (!strcmp(token, "rec"))
             {
                 for (i = 0; i < MAX_CHANNEL; i++)
@@ -550,10 +564,12 @@ gint ParserClass::cmd_parser(gchar* buffer, gpointer data)
                 gst_element_get_state(pipeline, &state, NULL, GST_CLOCK_TIME_NONE);
                 g_print("pipe state : %s\n", stateStr[state]);
             }
+            else
+                g_print("wrong cmd!\n");
         }
         else if (!strcmp(token, "iomode"))
         {
-            token = strtok(NULL, "\n");
+            token = strtok(NULL, "\0");
             if (!strcmp(token, "0"))
             {
                 videoBin[0].getIoMode();
@@ -562,10 +578,12 @@ gint ParserClass::cmd_parser(gchar* buffer, gpointer data)
             {
                 videoBin[1].getIoMode();
             }
+            else
+                g_print("wrong cmd!\n");
         }
         else if (!strcmp(token, "gop"))
         {
-            token = strtok(NULL, "\n");
+            token = strtok(NULL, "\0");
             if (!strcmp(token, "rec"))
             {
                 for (i = 0; i < MAX_CHANNEL; i++)
@@ -578,10 +596,12 @@ gint ParserClass::cmd_parser(gchar* buffer, gpointer data)
                     if (rtspServerBin[i].getBinSinkPad())
                         rtspServerBin[i].getGop();
             }
+            else
+                g_print("wrong cmd!\n");
         }
         else if (!strcmp(token, "key"))
         {
-            token = strtok(NULL, "\n");
+            token = strtok(NULL, "\0");
             if (!strcmp(token, "rec"))
             {
                 for (i = 0; i < MAX_CHANNEL; i++)
@@ -594,7 +614,11 @@ gint ParserClass::cmd_parser(gchar* buffer, gpointer data)
                     if (rtspServerBin[i].getBinSinkPad())
                         rtspServerBin[i].getKeyframe();
             }
+            else
+                g_print("wrong cmd!\n");
         }
+        else
+            g_print("wrong cmd!\n");
     } // get
     else if (!strcmp(token, "set"))
     {
@@ -632,6 +656,8 @@ gint ParserClass::cmd_parser(gchar* buffer, gpointer data)
                     if (rtspServerBin[i].getBinSinkPad())
                         rtspServerBin[i].setBitrate(key);
             }
+            else
+                g_print("wrong cmd!\n");
         }
         else if (!strcmp(token, "fps"))
         {
@@ -666,6 +692,8 @@ gint ParserClass::cmd_parser(gchar* buffer, gpointer data)
                     if (rtspServerBin[i].getBinSinkPad())
                         rtspServerBin[i].setFps(key);
             }
+            else
+                g_print("wrong cmd!\n");
         }
         else if (!strcmp(token, "rotation"))
         {
@@ -700,6 +728,8 @@ gint ParserClass::cmd_parser(gchar* buffer, gpointer data)
                     if (rtspServerBin[i].getBinSinkPad())
                         rtspServerBin[i].setRotation(key);
             }
+            else
+                g_print("wrong cmd!\n");
         }
         else if (!strcmp(token, "state"))
         {
@@ -798,6 +828,8 @@ gint ParserClass::cmd_parser(gchar* buffer, gpointer data)
                 gst_element_set_state(pipeline, (GstState)key);
                 g_print("after pipe state : %s\n", stateStr[key]);
             }
+            else
+                g_print("wrong cmd!\n");
         }
         else if (!strcmp(token, "iomode"))
         {
@@ -828,6 +860,8 @@ gint ParserClass::cmd_parser(gchar* buffer, gpointer data)
 
                 videoBin[1].setIoMode(key);
             }
+            else
+                g_print("wrong cmd!\n");
         }
         else if (!strcmp(token, "gop"))
         {
@@ -862,6 +896,8 @@ gint ParserClass::cmd_parser(gchar* buffer, gpointer data)
                     if (rtspServerBin[i].getBinSinkPad())
                         rtspServerBin[i].setGop(key);
             }
+            else
+                g_print("wrong cmd!\n");
         }
         else if (!strcmp(token, "key"))
         {
@@ -896,10 +932,12 @@ gint ParserClass::cmd_parser(gchar* buffer, gpointer data)
                     if (rtspServerBin[i].getBinSinkPad())
                         rtspServerBin[i].setkeyframe(key);
             }
+            else
+                g_print("wrong cmd!\n");
         }
         else if (!strcmp(token, "dbg"))
         {
-            token = strtok(NULL, "\n");
+            token = strtok(NULL, "\0");
             if (!strcmp(token, "rtsp"))
             {
                 for (i = 0; i < MAX_CHANNEL; i++)
@@ -911,7 +949,7 @@ gint ParserClass::cmd_parser(gchar* buffer, gpointer data)
             }
         }
     } // set
-    else if (!strncmp(buffer, "start", 5))
+    else if (!strcmp(token, "start"))
     {
         token = strtok(NULL, " ");
         if (!strcmp(token, "cap"))
@@ -938,86 +976,64 @@ gint ParserClass::cmd_parser(gchar* buffer, gpointer data)
             } while (state != GST_STATE_PAUSED);    //((ret == GST_STATE_CHANGE_ASYNC) || (state != GST_STATE_PAUSED));
             g_print("%s\n",stateChangeReturnStr[ret]);
 #endif
-            if(key == 1)
+
+            for (i = 0; i < MAX_CHANNEL; i++)
             {
-                for (i = 0; i < MAX_CHANNEL; i++)
+                if (key == 1)
                 {
-                    if (captureBin[i].getBinSinkPad()) {
-                        //captureBin[i].addBinToPipe(pipeline);
-                        if(gst_pad_is_linked(videoBin[i/2].getBinCaptureSrcPad((ChannelNum)i)) != TRUE)
-                        {
-                            g_print("ch%d capture not linked\n", i);
-                            if(gst_pad_link(videoBin[i/2].getBinCaptureSrcPad((ChannelNum)i), captureBin[i].getBinSinkPad()) != GST_PAD_LINK_OK)
-                            {
-                                g_print("ch%d capture link error!\n", i);
-                                //captureBin[i].removeBinToPipe(pipeline);
-                                return -1;
-                            }
-                            else 
-                            {
-                                g_print("ch%d capture linking!\n", i);
-                                captureBin[i].startCapture(key);
-                            }
-                        }
-                        else
-                        {
-                            g_print("ch%d capture already linked!\n", i);
-                            captureBin[i].startCapture(key);
-                        }
-                    }
-                    if (recordBin[i].getBinSinkPad()) {
-                        if(gst_pad_unlink(videoBin[i/2].getBinRecordSrcPad((ChannelNum)i), recordBin[i].getBinSinkPad()) != TRUE)
+                    if (recordBin[i].getBinSinkPad())
+                    {
+                        if (gst_pad_unlink(videoBin[i / 2].getBinRecordSrcPad((ChannelNum)i), recordBin[i].getBinSinkPad()) != TRUE)
                         {
                             g_print("ch%d rec unlink error!\n", i);
                         }
-                        else g_print("ch%d rec unlink!\n", i);
+                        else
+                            g_print("ch%d rec unlink!\n", i);
                     }
-                    if (rtspServerBin[i].getBinSinkPad()) {
-                        if(gst_pad_unlink(videoBin[i/2].getBinRtspSrcPad((ChannelNum)i), rtspServerBin[i].getBinSinkPad()) != TRUE)
+                    if (rtspServerBin[i].getBinSinkPad())
+                    {
+                        if (gst_pad_unlink(videoBin[i / 2].getBinRtspSrcPad((ChannelNum)i), rtspServerBin[i].getBinSinkPad()) != TRUE)
                         {
                             g_print("ch%d rtsp unlink error!\n", i);
                         }
-                        else g_print("ch%d rtsp unlink!\n", i);
+                        else
+                            g_print("ch%d rtsp unlink!\n", i);
                     }
                 }
-            }
-            else
-            {
-                for (i = 0; i < MAX_CHANNEL; i++)
+
+                if (captureBin[i].getBinSinkPad())
                 {
-                    if (captureBin[i].getBinSinkPad()) 
+                    // captureBin[i].addBinToPipe(pipeline);
+                    if (gst_pad_is_linked(videoBin[i / 2].getBinCaptureSrcPad((ChannelNum)i)) != TRUE)
                     {
-                        //captureBin[i].addBinToPipe(pipeline);
-                        if(gst_pad_is_linked(videoBin[i/2].getBinCaptureSrcPad((ChannelNum)i)) != TRUE)
+                        g_print("ch%d capture not linked\n", i);
+                        if (gst_pad_link(videoBin[i / 2].getBinCaptureSrcPad((ChannelNum)i), captureBin[i].getBinSinkPad()) != GST_PAD_LINK_OK)
                         {
-                            g_print("ch%d capture not linked\n", i);
-                            if(gst_pad_link(videoBin[i/2].getBinCaptureSrcPad((ChannelNum)i), captureBin[i].getBinSinkPad()) != GST_PAD_LINK_OK)
-                            {
-                                g_print("ch%d capture link error!\n", i);
-                                //captureBin[i].removeBinToPipe(pipeline);
-                                return -1;
-                            }
-                            else 
-                            {
-                                g_print("ch%d capture linking!\n", i);
-                                captureBin[i].startCapture(key);
-                            }
+                            g_print("ch%d capture link error!\n", i);
+                            // captureBin[i].removeBinToPipe(pipeline);
+                            return -1;
                         }
                         else
                         {
-                            g_print("ch%d capture already linked!\n", i);
+                            g_print("ch%d capture linking!\n", i);
                             captureBin[i].startCapture(key);
-                            gst_element_sync_state_with_parent(captureBin[i].be.bin);
                         }
                     }
+                    else
+                    {
+                        g_print("ch%d capture already linked!\n", i);
+                        captureBin[i].startCapture(key);
+                    }
+                    gst_element_sync_state_with_parent(captureBin[i].be.bin);
                 }
             }
+
             gst_element_set_state(pipeline, GST_STATE_PLAYING);
 
             //for (i = 0; i < MAX_CHANNEL; i++) if (captureBin[i].getBinSinkPad()) captureBin[i].startCapture(key);
         }
     }
-    else if (!strncmp(buffer, "stop", 4))
+    else if (!strcmp(token, "stop"))
     {
         if (!strcmp(token, "cap"))
         {
@@ -1071,7 +1087,7 @@ gint ParserClass::cmd_parser(gchar* buffer, gpointer data)
             //for (i = 0; i < MAX_CHANNEL; i++) if (captureBin[i].getBinSinkPad()) captureBin[i].stopCapture();
         }
     }
-    else if (!strncmp(buffer, "split", 5))
+    else if (!strcmp(token, "split"))
     {
         token = strtok(NULL, " ");
         if (!strcmp(token, "start"))
@@ -1081,6 +1097,8 @@ gint ParserClass::cmd_parser(gchar* buffer, gpointer data)
             {
                 for (i = 0; i < MAX_CHANNEL; i++) if (muxSinkBin[i].getBinVideoSinkPad()) muxSinkBin[i].splitNow(NULL, FALSE);
             }
+            else
+                g_print("wrong cmd!\n");
         }
         else if (!strcmp(token, "set"))
         {
@@ -1117,25 +1135,27 @@ gint ParserClass::cmd_parser(gchar* buffer, gpointer data)
             g_date_time_unref(datetime);
         }
         else
-        {
             g_print("wrong cmd!\n");
-            
-        }
     }
-    else if (!strcmp(buffer, "add"))
+    else if (!strcmp(token, "add"))
     {
-        token = strtok(NULL, "\n");
+        token = strtok(NULL, "\0");
         if (!strcmp(token, "cap"))
         {
             for (i = 0; i < MAX_CHANNEL; i++)
             {
-                if (captureBin[i].getBinSinkPad()) captureBin[i].addBinToPipe(pipeline);
+                if (captureBin[i].getBinSinkPad()) {
+                    g_print("ch%d caputre bin add\n", i);
+                    captureBin[i].addBinToPipe(pipeline);
+                }
             }
         }
+        else
+            g_print("wrong cmd!\n");
     }
-    else if (!strcmp(buffer, "rm"))     //else if (!strncmp(buffer, "rm", 2))
+    else if (!strcmp(token, "rm"))     //else if (!strncmp(buffer, "rm", 2))
     {
-        token = strtok(NULL, "\n");
+        token = strtok(NULL, "\0");
         if (!strcmp(token, "cap"))
         {
             for (i = 0; i < MAX_CHANNEL; i++)
@@ -1150,6 +1170,18 @@ gint ParserClass::cmd_parser(gchar* buffer, gpointer data)
                 }
             }
         }
+        else
+            g_print("wrong cmd!\n");
+    }
+    else if (!strcmp(token, "cmd"))
+    {
+        token = strtok(NULL, "\0");
+        int ret;
+        gchar* str = g_strdup_printf("bash -ic 'source /root/.bashrc; %s'", token);
+        ret = system(str);
+        if(ret) g_print("cmd error ret:%d\n", ret);
+
+        g_free(str);
     }
     else
     {

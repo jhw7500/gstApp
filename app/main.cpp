@@ -265,8 +265,11 @@ gboolean bus_message_parse(GstBus *bus, GstMessage *message, gpointer data)
         case GST_MESSAGE_NEW_CLOCK:
         {
             gchar *str = g_strdup_printf("echo '%s' > %s &", g_date_time_format(g_date_time_new_now_local(), "%Y%m%d %H:%M:%S"), DEFAULT_START_VIDEO_TIME_PATH);
-            __LOG(LOG_NOTICE, "[GST][%s:%d] %s", _FILE_, __LINE__, str);
-            if(system(str) < 0) __LOG(LOG_ERR, "[GST][%s:%d] write error", _FILE_, __LINE__);
+            if(system(str) < 0) 
+                __LOG(LOG_ERR, "[GST][%s:%d] %s error in %s", _FILE_, __LINE__, str, __FUNCTION__);
+            else
+                __LOG(LOG_NOTICE, "[GST][%s:%d] %s in %s", _FILE_, __LINE__, str, __FUNCTION__);
+
             g_free(str);
 #if 0
             FILE *fp = NULL;
@@ -331,11 +334,9 @@ static void splitCheck(gpointer data, guint8 startSec)
     static gboolean start_flag = 0;
     static gint target_min;
     guint8 i;
-    gint splitMax=0, splitMin=59999;
     GDateTime *datetime = g_date_time_new_now_local();
-    GDateTime *datetimeTarget = NULL;
-    gint min;
-    gint sec;
+    gint sec = g_date_time_get_second(datetime);
+    gint min = g_date_time_get_minute(datetime);
 
     if(start_flag == 0)
     {
@@ -344,25 +345,28 @@ static void splitCheck(gpointer data, guint8 startSec)
         {
             //if(!(cmdArg.ch_enable & (0x1 << i))) continue;
             if(!muxSinkBin[i].getBinVideoSinkPad()) continue;
-            if (muxSinkBin[i].getStartFlag() == 0) goto func_end; 
+            if (muxSinkBin[i].getStartFlag() == 0) { g_date_time_unref(datetime); return; }
         }
         start_flag = 1;
-        datetimeTarget = g_date_time_add_minutes(datetime, 1);
-        target_min = g_date_time_get_minute(datetimeTarget);
+
+        if(sec != startSec) {
+            target_min = g_date_time_get_minute(g_date_time_add_minutes(datetime, 1));
+        }
+        else target_min = min;
         //target_min = min + 1;
         //if(target_min >= 60) target_min = 0;
-        __LOG(LOG_NOTICE, "[GST][%s:%d] second split time : %02dm %02ds", _FILE_, __LINE__, target_min, startSec);
+        __LOG(LOG_NOTICE, "[GST][%s:%d] next split time : %02dm %02ds", _FILE_, __LINE__, target_min, startSec);
     }
-
-    min = g_date_time_get_minute(datetime);
-    sec = g_date_time_get_second(datetime);
 
     if(target_min != min)
     {
-        goto func_end;
+        g_date_time_unref(datetime);
+        return;
     }
 
-    if(sec == startSec+0)    //if(sec == 1 && microsec <= 50000)   //if(sec == 59 && microsec >= 700000 && microsec <b= 750000)
+    gint splitMax=0, splitMin=59999;
+
+    //if(sec == startSec+0)    //if(sec == 1 && microsec <= 50000)   //if(sec == 59 && microsec >= 700000 && microsec <b= 750000)
     {
 #ifdef SPLIT_TIME_RECOVERY
         {
@@ -373,33 +377,40 @@ static void splitCheck(gpointer data, guint8 startSec)
                     gint splitMsec = muxSinkBin[i].getSplitMsec();
                     __LOG(LOG_INFO, "[GST][%s:%d] splitMsec[%d] : %d", _FILE_, __LINE__, i, splitMsec);
                     if(splitMsec > splitMax)
-                        splitMax = muxSinkBin[i].getSplitMsec();
+                        splitMax = splitMsec;
                     if(splitMsec < splitMin)
-                        splitMin = muxSinkBin[i].getSplitMsec();
+                        splitMin = splitMsec;
                 }
             }
             __LOG(LOG_INFO, "[GST][%s:%d] splitMax : %d, splitMin : %d", _FILE_, __LINE__, splitMax, splitMin);
 
             if(splitMax - splitMin > cmdArg.split_diff_msec || splitMax > cmdArg.split_max_msec)
             {
+                gchar *str = g_strdup_printf("echo '%s' > %s &", g_date_time_format(g_date_time_new_now_local(), "%Y%m%d %H:%M:%S"), DEFAULT_START_VIDEO_TIME_PATH);
+
                 __LOG(LOG_ERR, "[GST][%s:%d] split time check error : max:%d, min:%d", _FILE_, __LINE__, splitMax, splitMin);
+                
+                if(system(str) < 0) 
+                    __LOG(LOG_ERR, "[GST][%s:%d] %s error in %s", _FILE_, __LINE__, str, __FUNCTION__);
+                else
+                    __LOG(LOG_NOTICE, "[GST][%s:%d] %s in %s", _FILE_, __LINE__, str, __FUNCTION__);
+
+                g_free(str);
+
                 __LOG(LOG_NOTICE, "[GST][%s:%d] split now", _FILE_, __LINE__);
                 for(i=0; i<MAX_CHANNEL; i++)
                     if(muxSinkBin[i].getBinVideoSinkPad()) muxSinkBin[i].splitNow(NULL, FALSE);
             }
         }
 #endif
-        datetimeTarget = g_date_time_add_minutes(datetime, cmdArg.duration);
-        target_min = g_date_time_get_minute(datetimeTarget);
+        target_min = g_date_time_get_minute(g_date_time_add_minutes(datetime, cmdArg.duration));
         //target_min += cmdArg.duration;
         //if(target_min >= 60) target_min -= 60;
 
         __LOG(LOG_NOTICE, "[GST][%s:%d] next split time : %02dm %02ds", _FILE_, __LINE__, target_min, startSec);
     }
 
-func_end:
     if(datetime) g_date_time_unref(datetime);
-    if(datetimeTarget) g_date_time_unref(datetimeTarget);
 
     return;
 } 

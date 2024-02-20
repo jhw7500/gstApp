@@ -176,9 +176,11 @@ gboolean CaptureBin::addBinToPipe(GstElement *pipe)
 {
     gboolean ret = gst_bin_add(GST_BIN(pipe), be.bin);
     
-    if(!ret) {
-        __LOG(LOG_CRIT, "[GST][%s:%d] capture bin add error in pipeline", _FILE_, __LINE__);
-    }
+    if(ret)
+        __LOG(LOG_NOTICE, "[GST][%s:%d] %s", _FILE_, __LINE__, __FUNCTION__);
+    else
+        __LOG(LOG_CRIT, "[GST][%s:%d] %s error", _FILE_, __LINE__, __FUNCTION__);
+
     return ret;
 }
 

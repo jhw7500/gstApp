@@ -176,7 +176,7 @@ static GstFlowReturn new_sample_handler(GstElement *sink, gpointer userData)
     {
         GstClockTime timestamp = GST_BUFFER_PTS(buffer);
         g_message("Timestamp: %" GST_TIME_FORMAT "\n", GST_TIME_ARGS(timestamp));
-        info->debug = 0;
+        //info->debug = 0;
     }
     
 #if 0
@@ -247,7 +247,7 @@ void RtspServerBin::setOverlayText(gchar *text)
 
 void RtspServerBin::setTimeStampDebug()
 {
-    rtspServerData.debug = TRUE;
+    rtspServerData.debug = !rtspServerData.debug;
 }
 
 void RtspServerBin::getBitrate()
