@@ -13,7 +13,6 @@
 #include "util.h"
 #include "videoBin.h"
 #include "recordBin.h"
-//#include "muxBin.h"
 #include "testBin.h"
 #include "muxSinkBin.h"
 #include "rtspServerBin.h"
@@ -28,7 +27,6 @@
 #define RECORDBIN_ENABLE
 #define RTSPSERVERBIN_ENABLE
 #define AUDIOBIN_ENABLE
-#define MUXBIN_ENABLEx
 #define SPLIT_TIME_RECOVERY
 //MuxSinkBin muxSinkBin[MAX_CHANNEL];
 
@@ -338,16 +336,16 @@ static void splitCheck(gpointer data, guint8 startSec)
     gint sec = g_date_time_get_second(datetime);
     gint min = g_date_time_get_minute(datetime);
 
+    //g_print("%s\n", __FUNCTION__);
+    //__LOG(LOG_NOTICE, "[GST][%s:%d] %s", _FILE_, __LINE__, __FUNCTION__);
     if(start_flag == 0)
     {
-        //if(muxSinkBin[0].getStartFlag() == 0 && muxSinkBin[1].getStartFlag() == 0 && muxSinkBin[2].getStartFlag() == 0 && muxSinkBin[3].getStartFlag() == 0) return;
         for(i=0; i<MAX_CHANNEL; i++)
         {
             //if(!(cmdArg.ch_enable & (0x1 << i))) continue;
             if(!muxSinkBin[i].getBinVideoSinkPad()) continue;
-            if (muxSinkBin[i].getStartFlag() == 0) { g_date_time_unref(datetime); return; }
+            if(muxSinkBin[i].getStartFlag() == 0) { g_date_time_unref(datetime); return; }
         }
-        start_flag = 1;
 
         if(sec != startSec) {
             target_min = g_date_time_get_minute(g_date_time_add_minutes(datetime, 1));
@@ -356,6 +354,7 @@ static void splitCheck(gpointer data, guint8 startSec)
         //target_min = min + 1;
         //if(target_min >= 60) target_min = 0;
         __LOG(LOG_NOTICE, "[GST][%s:%d] next split time : %02dm %02ds", _FILE_, __LINE__, target_min, startSec);
+        start_flag = 1;
     }
 
     if(target_min != min)
@@ -364,51 +363,45 @@ static void splitCheck(gpointer data, guint8 startSec)
         return;
     }
 
+#ifdef SPLIT_TIME_RECOVERY
     gint splitMax=0, splitMin=59999;
 
-    //if(sec == startSec+0)    //if(sec == 1 && microsec <= 50000)   //if(sec == 59 && microsec >= 700000 && microsec <b= 750000)
+    for (i = 0; i < MAX_CHANNEL; i++)
     {
-#ifdef SPLIT_TIME_RECOVERY
+        if (muxSinkBin[i].getBinVideoSinkPad())
         {
-            for(i=0; i<MAX_CHANNEL; i++)
-            {
-                if(muxSinkBin[i].getBinVideoSinkPad())
-                {
-                    gint splitMsec = muxSinkBin[i].getSplitMsec();
-                    __LOG(LOG_INFO, "[GST][%s:%d] splitMsec[%d] : %d", _FILE_, __LINE__, i, splitMsec);
-                    if(splitMsec > splitMax)
-                        splitMax = splitMsec;
-                    if(splitMsec < splitMin)
-                        splitMin = splitMsec;
-                }
-            }
-            __LOG(LOG_INFO, "[GST][%s:%d] splitMax : %d, splitMin : %d", _FILE_, __LINE__, splitMax, splitMin);
-
-            if(splitMax - splitMin > cmdArg.split_diff_msec || splitMax > cmdArg.split_max_msec)
-            {
-                gchar *str = g_strdup_printf("echo '%s' > %s &", g_date_time_format(g_date_time_new_now_local(), "%Y%m%d %H:%M:%S"), DEFAULT_START_VIDEO_TIME_PATH);
-
-                __LOG(LOG_ERR, "[GST][%s:%d] split time check error : max:%d, min:%d", _FILE_, __LINE__, splitMax, splitMin);
-                
-                if(system(str) < 0) 
-                    __LOG(LOG_ERR, "[GST][%s:%d] %s error in %s", _FILE_, __LINE__, str, __FUNCTION__);
-                else
-                    __LOG(LOG_NOTICE, "[GST][%s:%d] %s in %s", _FILE_, __LINE__, str, __FUNCTION__);
-
-                g_free(str);
-
-                __LOG(LOG_NOTICE, "[GST][%s:%d] split now", _FILE_, __LINE__);
-                for(i=0; i<MAX_CHANNEL; i++)
-                    if(muxSinkBin[i].getBinVideoSinkPad()) muxSinkBin[i].splitNow(NULL, FALSE);
-            }
+            gint splitMsec = muxSinkBin[i].getSplitMsec();
+            __LOG(LOG_INFO, "[GST][%s:%d] splitMsec[%d] : %d", _FILE_, __LINE__, i, splitMsec);
+            if (splitMsec > splitMax) splitMax = splitMsec;
+            if (splitMsec < splitMin) splitMin = splitMsec;
         }
-#endif
-        target_min = g_date_time_get_minute(g_date_time_add_minutes(datetime, cmdArg.duration));
-        //target_min += cmdArg.duration;
-        //if(target_min >= 60) target_min -= 60;
-
-        __LOG(LOG_NOTICE, "[GST][%s:%d] next split time : %02dm %02ds", _FILE_, __LINE__, target_min, startSec);
     }
+    __LOG(LOG_INFO, "[GST][%s:%d] splitMax : %d, splitMin : %d", _FILE_, __LINE__, splitMax, splitMin);
+
+    if (splitMax - splitMin > cmdArg.split_diff_msec || splitMax > cmdArg.split_max_msec)
+    {
+        gchar *str = g_strdup_printf("echo '%s' > %s &", g_date_time_format(g_date_time_new_now_local(), "%Y%m%d %H:%M:%S"), DEFAULT_START_VIDEO_TIME_PATH);
+
+        __LOG(LOG_ERR, "[GST][%s:%d] split time check error : max:%d, min:%d", _FILE_, __LINE__, splitMax, splitMin);
+
+        if (system(str) < 0)
+            __LOG(LOG_ERR, "[GST][%s:%d] %s error in %s", _FILE_, __LINE__, str, __FUNCTION__);
+        else
+            __LOG(LOG_NOTICE, "[GST][%s:%d] %s in %s", _FILE_, __LINE__, str, __FUNCTION__);
+
+        g_free(str);
+
+        __LOG(LOG_NOTICE, "[GST][%s:%d] split now", _FILE_, __LINE__);
+        for (i = 0; i < MAX_CHANNEL; i++)
+            if (muxSinkBin[i].getBinVideoSinkPad())
+                muxSinkBin[i].splitNow(NULL, FALSE);
+    }
+
+#endif
+    target_min = g_date_time_get_minute(g_date_time_add_minutes(datetime, cmdArg.duration));
+    //target_min += cmdArg.duration;
+    //if(target_min >= 60) target_min -= 60;
+    __LOG(LOG_NOTICE, "[GST][%s:%d] next split time : %02dm %02ds", _FILE_, __LINE__, target_min, startSec);
 
     if(datetime) g_date_time_unref(datetime);
 
@@ -599,7 +592,7 @@ gint main(gint argc, gchar *argv[])
     __LOG(LOG_NOTICE, "[GST][%s:%d] %s version : %s linked against Gstreamer %d.%d.%d %s", __FILE__, __LINE__, parser->arg.appname, APP_VERSION, major, minor, micro, nano_str);
 
     cmdArg = parser->arg;
-    if(!parser->check_arg())
+    if(parser->check_arg() < 0)
         return -1;
     
     //MuxBin* muxBin = MuxBin::getInstance();
@@ -637,11 +630,6 @@ gint main(gint argc, gchar *argv[])
 
     g_setenv("GST_DEBUG_DUMP_DOT_DIR", cmdArg.dotDir, 1);
     //g_print("GST_DEBUG_DUMP_DOT_DIR : %s\n", g_getenv("GST_DEBUG_DUMP_DOT_DIR"));
-
-#ifdef MUXBIN_ENABLE
-    MuxBin muxBin;
-    muxBin.init();
-#endif
 
 #if 0
     if(cmdArg.audio_en)
@@ -765,29 +753,6 @@ gint main(gint argc, gchar *argv[])
             }
             else __LOG(LOG_NOTICE, "[GST][%s:%d] mux audio ch[%d] pad link", _FILE_, __LINE__, chNum);
         }
-
-#ifdef MUXBIN_ENABLE
-        //muxBin.addSink(CH0);
-        //muxBin.addPadVideoSink(CH0);
-        muxBin.addSink(chNum);
-        muxBin.addPadVideoSink(chNum);
-        
-        if(gst_pad_link(recordBin[chNum].getBinSrcPad(), muxBin.getBinVideoSinkPad(chNum)) != GST_PAD_LINK_OK)
-        {
-            __LOG(LOG_CRIT, "[GST][%s:%d] mux ch[%d] pad link err", _FILE_, __LINE__, chNum);
-            //return -1;
-        }
-
-        audioBin.addBinSrcPad(chNum);
-        //muxBin.addPadAudioSink(CH0);
-        muxBin.addPadAudioSink(chNum);
-
-        if(gst_pad_link(audioBin.getBinSrcPad(chNum), muxBin.getBinAudioSinkPad(chNum)) != GST_PAD_LINK_OK)
-        {
-            __LOG(LOG_CRIT, "[GST][%s:%d] audio ch[%d] pad link err", _FILE_, __LINE__, CH0);
-            //return -1;
-        }
-#endif
     }
 
     //gst_element_set_state(pipeline, GST_STATE_PLAYING);
@@ -857,7 +822,6 @@ gint main(gint argc, gchar *argv[])
         tcpServer->init(thraedArgs);
     }
 
-
     loop = g_main_loop_new(NULL, FALSE);
 
 	if(!loop) {
@@ -900,6 +864,7 @@ gint main(gint argc, gchar *argv[])
     }
 
 main_end:
+    __LOG(LOG_NOTICE, "[GST][%s:%d] main loop end", _FILE_, __LINE__);
     rtspServerStop();
     if(loop) g_main_loop_unref(loop);
     if(pipeline) gst_object_unref(pipeline);
@@ -915,6 +880,9 @@ main_end:
     }
     if(srtTimer_id) {
         g_source_remove(srtTimer_id);
+    }
+    if(cmdArg.tcp_en) {
+        tcpServer->destroy();
     }
 
     removeSignalHandler();

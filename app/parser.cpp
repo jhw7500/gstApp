@@ -17,6 +17,8 @@
 #include "rtspServerBin.h"
 #include "muxSinkBin.h"
 
+#define LOG_KEY "CFG"
+
 json_object *ParserClass::json_find_obj (json_object * jobj, char *find_key)
 {
     size_t key_len = strlen(find_key);
@@ -55,11 +57,11 @@ gint ParserClass::json_object_get_value(json_object *hobj, const gchar *name, gp
     }
     else if(type == json_type_null)
     {
-        __LOG(LOG_ERR, "[CFG][%s:%d] not exist : %s[%d]", _FILE_, __LINE__, name, type);
+        __LOG(LOG_ERR, "[%s][%s:%d] not exist : %s[%d]", LOG_KEY, _FILE_, __LINE__, name, type);
     }
     else
     {
-        __LOG(LOG_ERR, "[CFG][%s:%d] unsupport type : %d", _FILE_, __LINE__, type);
+        __LOG(LOG_ERR, "[%s][%s:%d] unsupport type : %d", LOG_KEY, _FILE_, __LINE__, type);
     }
 
     //ret = json_object_put(vobj);
@@ -95,10 +97,10 @@ gint ParserClass::json_parser(const gchar *path, const gchar *header)
 	gchar* json_file;
 
     json_file = search_file(path, JSON_NAME_PREFIX, JSON_NAME_SUFFIX);
-    __LOG(LOG_NOTICE, "[CFG][%s:%d] json file name : %s", _FILE_, __LINE__, json_file);
+    __LOG(LOG_NOTICE, "[%s][%s:%d] json file name : %s", LOG_KEY, _FILE_, __LINE__, json_file);
 
     if(strstr(json_file, JSON_NAME_PREFIX) == NULL || strstr(json_file, JSON_NAME_SUFFIX) == NULL) {
-        __LOG(LOG_CRIT, "[CFG][%s:%d] json file name not match %s %s", _FILE_, __LINE__, JSON_NAME_PREFIX, JSON_NAME_SUFFIX);
+        __LOG(LOG_CRIT, "[%s][%s:%d] json file name not match %s %s", LOG_KEY, _FILE_, __LINE__, JSON_NAME_PREFIX, JSON_NAME_SUFFIX);
         return -1;
     }
 
@@ -107,7 +109,7 @@ gint ParserClass::json_parser(const gchar *path, const gchar *header)
 
 	do {
 		if(type != json_type_object) {
-			__LOG(LOG_ERR, "[CFG][%s:%d] data not json type[%d]", _FILE_, __LINE__, type);
+			__LOG(LOG_ERR, "[%s][%s:%d] data not json type[%d]", LOG_KEY, _FILE_, __LINE__, type);
 			break;
 		}
 
@@ -116,7 +118,7 @@ gint ParserClass::json_parser(const gchar *path, const gchar *header)
         type = json_object_get_type(hobj);
 
 		if(type != json_type_object) {
-			__LOG(LOG_ERR, "[CFG][%s:%d] data not json type[%d]", _FILE_, __LINE__, type);
+			__LOG(LOG_ERR, "[%s][%s:%d] data not json type[%d]", LOG_KEY, _FILE_, __LINE__, type);
 			//break;
 		}
 
@@ -225,7 +227,7 @@ gint ParserClass::arg_parser(int *argc, char **argv[])
     ret = g_option_context_parse(ctx, argc, argv, &err);
     if(!ret)
     {
-        __LOG(LOG_CRIT, "[GST][%s:%d] Failed to initialize : %s", _FILE_, __LINE__, err->message);
+        __LOG(LOG_CRIT, "[%s][%s:%d] Failed to initialize : %s", LOG_KEY, _FILE_, __LINE__, err->message);
         g_error_free(err);
         return ret;
     }
@@ -252,18 +254,18 @@ gint ParserClass::arg_parser(int *argc, char **argv[])
     }
 
     sprintf(str, "echo %d > %s", arg.ch_rotate&0x0f, DEFAULT_ROTATE_PATH_01);
-    __LOG(LOG_NOTICE, "[GST][%s:%d] %s", _FILE_, __LINE__, str);
+    __LOG(LOG_NOTICE, "[%s][%s:%d] %s", LOG_KEY, _FILE_, __LINE__, str);
     ret = system(str);
     if (ret < 0) {
-        __LOG(LOG_CRIT, "[DSK][%s:%d] ret:%d", _FILE_, __LINE__, ret);
+        __LOG(LOG_CRIT, "[%s][%s:%d] ret:%d", LOG_KEY, _FILE_, __LINE__, ret);
         return ret;
     }
 
     sprintf(str, "echo %d > %s", (arg.ch_rotate>>4)&0x0f, DEFAULT_ROTATE_PATH_23);
-    __LOG(LOG_NOTICE, "[GST][%s:%d] %s", _FILE_, __LINE__, str);
+    __LOG(LOG_NOTICE, "[%s][%s:%d] %s", LOG_KEY, _FILE_, __LINE__, str);
     ret = system(str);
     if (ret < 0) {
-        __LOG(LOG_CRIT, "[DSK][%s:%d] ret:%d", _FILE_, __LINE__, ret);
+        __LOG(LOG_CRIT, "[%s][%s:%d] ret:%d", LOG_KEY, _FILE_, __LINE__, ret);
         return ret;
     }
 
@@ -374,26 +376,26 @@ gint ParserClass::check_arg()
     }
 #endif
     //__LOG(LOG_NOTICE, "[RTSP][%s:%d] 0 : %s, 1 : %s, 2 : %s", _FILE_, __LINE__, test0, test1, test2);
-    __LOG(LOG_NOTICE, "[GST][%s:%d] io:%s, test:%d, noFault:%d, delay:%d, logLevel:%d, dbgLevel:%d, mntDir:%s, dotDir:%s, ", \
-    _FILE_, __LINE__, ioModeStr[arg.ioMode], arg.levelMode, arg.fault, arg.play_delay, arg.log_level, arg.dbg_level, arg.mntDir, arg.dotDir);
+    __LOG(LOG_NOTICE, "[%s][%s:%d] io:%s, test:%d, noFault:%d, delay:%d, logLevel:%d, dbgLevel:%d, mntDir:%s, dotDir:%s, ", \
+    LOG_KEY, _FILE_, __LINE__, ioModeStr[arg.ioMode], arg.levelMode, arg.fault, arg.play_delay, arg.log_level, arg.dbg_level, arg.mntDir, arg.dotDir);
 
-    __LOG(LOG_NOTICE, "[GST][%s:%d] oht_name:%s, duration:%d, width:%d, height:%d, mainFps:%d", _FILE_, __LINE__, \
+    __LOG(LOG_NOTICE, "[%s][%s:%d] oht_name:%s, duration:%d, width:%d, height:%d, mainFps:%d", LOG_KEY, _FILE_, __LINE__, \
                     arg.ohtName, arg.duration, arg.width, arg.height, arg.main_fps);
                     
-    __LOG(LOG_NOTICE, "[GST][%s:%d] chEn:0x%x, recEn:%d, rtspEn:%d, capEn:%d, audoEn:%d, inputEn:%d, overlayEn:%d tcpEn:%d", \
-    _FILE_, __LINE__, arg.ch_enable, arg.stream_en[STREAM_REC], arg.stream_en[STREAM_RTSP], arg.stream_en[STREAM_CAP], arg.audio_en, arg.input_en, arg.overlay_en, arg.tcp_en);
+    __LOG(LOG_NOTICE, "[%s][%s:%d] chEn:0x%x, recEn:%d, rtspEn:%d, capEn:%d, audoEn:%d, inputEn:%d, overlayEn:%d tcpEn:%d", \
+    LOG_KEY, _FILE_, __LINE__, arg.ch_enable, arg.stream_en[STREAM_REC], arg.stream_en[STREAM_RTSP], arg.stream_en[STREAM_CAP], arg.audio_en, arg.input_en, arg.overlay_en, arg.tcp_en);
 
-    if(arg.stream_en[STREAM_REC]) __LOG(LOG_NOTICE, "[GST][%s:%d] recFps:%d, recBps:%d, recGop:%d, splitMargin:%d, splitMax:%d", _FILE_, __LINE__, \
+    if(arg.stream_en[STREAM_REC]) __LOG(LOG_NOTICE, "[%s][%s:%d] recFps:%d, recBps:%d, recGop:%d, splitMargin:%d, splitMax:%d", LOG_KEY, _FILE_, __LINE__, \
                                         arg.fps[STREAM_REC], arg.bps[STREAM_REC], arg.gop[STREAM_REC], arg.split_diff_msec, arg.split_max_msec);
-    if(arg.stream_en[STREAM_RTSP]) __LOG(LOG_NOTICE, "[GST][%s:%d] rtspFps:%d, rtspBps:%d, rtspGop:%d, rtspID:%s, rtspPW:%s, rtspPort:%s", _FILE_, __LINE__, \
+    if(arg.stream_en[STREAM_RTSP]) __LOG(LOG_NOTICE, "[%s][%s:%d] rtspFps:%d, rtspBps:%d, rtspGop:%d, rtspID:%s, rtspPW:%s, rtspPort:%s", LOG_KEY, _FILE_, __LINE__, \
                                         arg.fps[STREAM_RTSP], arg.bps[STREAM_RTSP], arg.gop[STREAM_RTSP], arg.rtsp_id, arg.rtsp_passwd, arg.rtsp_port);
-    if(arg.stream_en[STREAM_CAP]) __LOG(LOG_NOTICE, "[GST][%s:%d] capFps:%d, capEncEn:%d captureMaxCnt:%d, capDir:%s", _FILE_, __LINE__, \
+    if(arg.stream_en[STREAM_CAP]) __LOG(LOG_NOTICE, "[%s][%s:%d] capFps:%d, capEncEn:%d captureMaxCnt:%d, capDir:%s", LOG_KEY, _FILE_, __LINE__, \
                                         arg.fps[STREAM_CAP], arg.capture_encoder_en, arg.captureMaxCnt, arg.captureDir);
 
-    if(arg.tcp_en) __LOG(LOG_NOTICE, "[GST][%s:%d] tcpPort:%d", _FILE_, __LINE__, arg.tcp_port);
+    if(arg.tcp_en) __LOG(LOG_NOTICE, "[%s][%s:%d] tcpPort:%d", LOG_KEY, _FILE_, __LINE__, arg.tcp_port);
 
     for(i=0; i<MAX_CHANNEL; i++)
-        __LOG(LOG_NOTICE, "[GST][%s:%d] cam_en[%d]:%d, vflip[%d]:%d, hflip[%d]:%d",  _FILE_, __LINE__, i, arg.cam_en[i], i, arg.vflip[i], i, arg.hflip[i]);
+        __LOG(LOG_NOTICE, "[%s][%s:%d] cam_en[%d]:%d, vflip[%d]:%d, hflip[%d]:%d", LOG_KEY, _FILE_, __LINE__, i, arg.cam_en[i], i, arg.vflip[i], i, arg.hflip[i]);
 
     gint total_fps = 0;
     total_fps += arg.stream_en[STREAM_REC]*arg.fps[STREAM_REC]*(arg.cam_en[0]+arg.cam_en[1]+arg.cam_en[2]+arg.cam_en[3]);
@@ -402,28 +404,38 @@ gint ParserClass::check_arg()
     total_fps += arg.stream_en[STREAM_CAP]*0;
     total_fps += arg.audio_en*0;
 
+    if(arg.duration < 1) {
+        __LOG(LOG_CRIT, "[%s][%s:%d] recording duration %d not supported", LOG_KEY, _FILE_, __LINE__, arg.duration);
+        return -1;
+    }
+
+    if(arg.bps[STREAM_REC] < 1 || arg.bps[STREAM_RTSP] < 1) {
+        __LOG(LOG_CRIT, "[%s][%s:%d] rec bps %d, rtsp bps %d not supported", LOG_KEY, _FILE_, __LINE__, arg.bps[STREAM_REC], arg.bps[STREAM_RTSP]);
+        return -1;
+    }
+
     if(arg.width == 1280 && arg.height == 720) {
         if(total_fps > MAX_FPS_HD)
         {
-            __LOG(LOG_CRIT, "[GST][%s:%d] HD max fps over : total_fps(%d) > MAX_FPS_HD(%d)", _FILE_, __LINE__, total_fps, MAX_FPS_HD);
-            return 0;
+            __LOG(LOG_CRIT, "[%s][%s:%d] HD max fps over : total_fps(%d) > MAX_FPS_HD(%d)", LOG_KEY, _FILE_, __LINE__, total_fps, MAX_FPS_HD);
+            return -1;
         }
     }
     else if(arg.width == 1920 && arg.height == 1080) {
         if(total_fps > MAX_FPS_FHD)
         {
-            __LOG(LOG_CRIT, "[GST][%s:%d] FHD max fps over : total_fps(%d) > MAX_FPS_FHD(%d)", _FILE_, __LINE__, total_fps, MAX_FPS_FHD);
-            return 0;
+            __LOG(LOG_CRIT, "[%s][%s:%d] FHD max fps over : total_fps(%d) > MAX_FPS_FHD(%d)", LOG_KEY, _FILE_, __LINE__, total_fps, MAX_FPS_FHD);
+            return -1;
         }
     }
     else {
-        __LOG(LOG_CRIT, "[GST][%s:%d] width %d not supported", _FILE_, __LINE__, arg.width);
-        return 0;
+        __LOG(LOG_CRIT, "[%s][%s:%d] width %d not supported", LOG_KEY, _FILE_, __LINE__, arg.width);
+        return -1;
     }
 
-    __LOG(LOG_NOTICE, "[GST][%s:%d] total_fps : %d", _FILE_, __LINE__, total_fps);
+    __LOG(LOG_NOTICE, "[%s][%s:%d] total_fps : %d", LOG_KEY, _FILE_, __LINE__, total_fps);
 
-    return 1;
+    return 0;
 }
 
 gint ParserClass::cmd_parser(gchar* buffer, gpointer data)

@@ -15,20 +15,32 @@
 
 #include "util.h"
 
+#define CLIENT_MAX  1
 #define MAXPENDING  5
 
+typedef enum {
+  SERVER_NONE = 0,
+	SERVER_RECEIVES_CONNECTION_REQUEST = 1,
+	SERVER_RECEIVES_DATA = 2,
+	SERVER_CLOSES_CLIENT_CONNECTION = 3
+} ServerStatus;
+
 #pragma pack(push, 1)
+
 typedef struct _FrameData
 {
     gpointer data;
     unsigned long size;
 } FrameData;
+
 #pragma pack(pop)
 
 class CTCPServer
 {
 public :
 	static CTCPServer* getInstance() ;
+  CTCPServer();
+  ~CTCPServer();
 
 	int init(ThreadArgs* args) ;
 	int destroy() ;
@@ -48,9 +60,7 @@ public :
   int m_clientSocket ;
   unsigned char cap_step;
   FrameData frameData;
-#ifdef SENDQUEUE_EANBLE
-  _BUFQueue sendBuf;
-#endif
+
 private :
 	pthread_t m_threadConnect;
   pthread_t m_threadSend;
@@ -61,7 +71,7 @@ private :
 
 	fd_set m_fds ;
   fd_set e_fds;
-  unsigned char vhl_cnt;
+  unsigned char client_cnt;
 };
 
 #endif
