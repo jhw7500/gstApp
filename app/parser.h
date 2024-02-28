@@ -48,7 +48,7 @@
 #define DEFAULT_PLAY_DELAY  5
 #define DEFAULT_CAPTURE_MAX_CNT 1
 #define DEFAULT_SPLIT_DIFF_MSEC    150
-#define DEFAULT_SPLIT_MAX_MSEC      2000
+#define DEFAULT_SPLIT_MAX_MSEC      5000
 
 #define DEFAULT_START_VIDEO_TIME_PATH   "/tmp/start_video_time"
 #define DEFAULT_DOT_PATH    "/tmp"

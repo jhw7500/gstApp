@@ -376,13 +376,13 @@ static void splitCheck(gpointer data, guint8 startSec)
             if (splitMsec < splitMin) splitMin = splitMsec;
         }
     }
-    __LOG(LOG_INFO, "[GST][%s:%d] splitMax : %d, splitMin : %d", _FILE_, __LINE__, splitMax, splitMin);
+    __LOG(LOG_NOTICE, "[GST][%s:%d] splitMax : %d, splitMin : %d", _FILE_, __LINE__, splitMax, splitMin);
 
     if (splitMax - splitMin > cmdArg.split_diff_msec || splitMax > cmdArg.split_max_msec)
     {
         gchar *str = g_strdup_printf("echo '%s' > %s &", g_date_time_format(g_date_time_new_now_local(), "%Y%m%d %H:%M:%S"), DEFAULT_START_VIDEO_TIME_PATH);
 
-        __LOG(LOG_ERR, "[GST][%s:%d] split time check error : max:%d, min:%d", _FILE_, __LINE__, splitMax, splitMin);
+        __LOG(LOG_ERR, "[GST][%s:%d] split time check error : splitMax : %d, splitMin : %d", _FILE_, __LINE__, splitMax, splitMin);
 
         if (system(str) < 0)
             __LOG(LOG_ERR, "[GST][%s:%d] %s error in %s", _FILE_, __LINE__, str, __FUNCTION__);
@@ -468,13 +468,14 @@ static gboolean setSRT(gpointer arg)
     return TRUE;
 }
 
-gint getPasswdWithAES(CmdArg arg)
+gint getPasswdWithAES(CmdArg *arg)
 {
 	gint ret = 0;
 	gchar passwd[1024] = { 0, };
     const gchar *path = DEFAULT_PASSWD_PATH;
     AESClass *aesClass = AESClass::getInstance();
 	//info->encrypt.id = strdup(DEFAULT_ENCRYPT_ID);
+
 	if(aesClass->encrypt_get_passwd(path, passwd) < 0)
 	{
 		/* create */
@@ -482,12 +483,12 @@ gint getPasswdWithAES(CmdArg arg)
 		if(ret < 0) {
 			__LOG(LOG_ERR, "[CFG][%s:%d] Error change passwd .. ", _FILE_, __LINE__);
 		}
-		arg.rtsp_passwd = strdup(DEFAULT_RTSP_PASSWD);
+		arg->rtsp_passwd = strdup(DEFAULT_RTSP_PASSWD);
 	}
 	else
-		arg.rtsp_passwd = strdup(passwd);
+		arg->rtsp_passwd = strdup(passwd);
 
-	__LOG(LOG_NOTICE, "[CFG][%s:%d] id : %s, passwd : %s", _FILE_, __LINE__, arg.rtsp_id, arg.rtsp_passwd);
+	__LOG(LOG_NOTICE, "[CFG][%s:%d] id : %s, passwd : %s", _FILE_, __LINE__, arg->rtsp_id, arg->rtsp_passwd);
 
 	return ret;
 }
@@ -580,15 +581,17 @@ gint main(gint argc, gchar *argv[])
     ParserClass* parser = ParserClass::getInstance();
     //cmdArg.appname = CHARNEXT(argv[0], '/');
     parser->init_arg(argv[0]);
+    cmdArg = parser->arg;
+    getPasswdWithAES(&parser->arg);
     //attachInterruptHandlers();
     parser->json_parser(DEFAULT_JSON_PATH, DEFAULT_JSON_HEADER);
 
     if(parser->arg_parser(&argc, &argv) < 0)
         return -1;
 
-    if(strcmp(parser->arg.rtsp_passwd, DEFAULT_RTSP_PASSWD) == 0)
-        getPasswdWithAES(parser->arg);
+    //if(!strcmp(parser->arg.rtsp_passwd, DEFAULT_RTSP_PASSWD) == 0)
     
+
     __LOG(LOG_NOTICE, "[GST][%s:%d] %s version : %s linked against Gstreamer %d.%d.%d %s", __FILE__, __LINE__, parser->arg.appname, APP_VERSION, major, minor, micro, nano_str);
 
     cmdArg = parser->arg;
