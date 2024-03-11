@@ -574,7 +574,7 @@ gint rtspServerStart()
 
     rtspMounts = gst_rtsp_server_get_mount_points (rtspServer);
 
-    cleanRtsp_id = g_timeout_add_seconds (5, (GSourceFunc) cleanRtspSession, rtspServer);
+    cleanRtsp_id = g_timeout_add_seconds (600, (GSourceFunc) cleanRtspSession, rtspServer);
 
     g_signal_connect(rtspServer, "client-connected", G_CALLBACK(handle_client_connected), NULL);
 
