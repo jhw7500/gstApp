@@ -25,6 +25,7 @@ typedef struct _CaptureData
     GstBuffer *buf;
     gchar *filePath;
     guint8 mode;
+    gint fps;
 } CaptureData;
 
 typedef struct _CaptureElement

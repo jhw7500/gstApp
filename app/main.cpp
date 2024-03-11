@@ -23,6 +23,9 @@
 #include <fcntl.h>
 //#include <signal.h>
 
+#define GST_API_VERSION "1.0"
+#define APP_VERSION "0.2"
+
 #define SEGFAULT_DEBUG
 #define RECORDBIN_ENABLE
 #define RTSPSERVERBIN_ENABLE
@@ -493,22 +496,56 @@ gint getPasswdWithAES(CmdArg *arg)
 	return ret;
 }
 
-gint rotate_camera(CsiNum csiNum)
+gint config_camera(CsiNum csiNum)
 {
     guint8 i = (guint8)csiNum;
     gchar *cmd;
+    guint16 ch_num0 = i*2;
+    guint16 ch_num1 = i*2+1;
 
-    if (cmdArg.cam_en[i * 2] && cmdArg.cam_en[i * 2 + 1])
+    if (cmdArg.cam_en[ch_num0] && cmdArg.cam_en[ch_num1])
     {
-        cmd = g_strdup_printf("i2cwrite %d 0x11 0x100c 0x%04x", i ? 1 : 2, (cmdArg.ch_rotate >> (i * 4)) & 0x03);
-        __LOG(LOG_NOTICE, "[CFG][%s:%d] ch%d enable : %s", _FILE_, __LINE__, i * 2, cmd);
-        if (system(cmd) < 0)
-            __LOG(LOG_ERR, "[CFG][%s:%d] ch%d rotation fail", __FILE__, __LINE__, i * 2);
-            
+        __LOG(LOG_NOTICE, "[CFG][%s:%d] ch%d enable, ch%d enable", _FILE_, __LINE__, ch_num0, ch_num1);
+
         cmd = g_strdup_printf("i2cwrite %d 0x12 0x100c 0x%04x", i ? 1 : 2, (cmdArg.ch_rotate >> (i * 4 + 2)) & 0x03);
-        __LOG(LOG_NOTICE, "[CFG][%s:%d] ch%d enable %s", _FILE_, __LINE__, i * 2 + 1, cmd);
+        __LOG(LOG_NOTICE, "[CFG][%s:%d] ch%d cmd : %s", _FILE_, __LINE__, ch_num1, cmd);
         if (system(cmd) < 0)
-            __LOG(LOG_ERR, "[CFG][%s:%d] ch%d rotation fail", __FILE__, __LINE__, i * 2 + 1);
+            __LOG(LOG_ERR, "[CFG][%s:%d] ch%d rotation fail", __FILE__, __LINE__, ch_num1);
+
+        cmd = g_strdup_printf("i2cwrite %d 0x12 0x5002 0x%04x", i ? 1 : 2, cmdArg.camConfig[ch_num1].ae_on? 0x299:0x290);
+        __LOG(LOG_NOTICE, "[CFG][%s:%d] ch%d cmd : %s", _FILE_, __LINE__, ch_num1, cmd);
+        if (system(cmd) < 0)
+            __LOG(LOG_ERR, "[CFG][%s:%d] ch%d ae_on fail", __FILE__, __LINE__, ch_num1);
+
+        cmd = g_strdup_printf("i2cwrite %d 0x12 0x5006 0x%04x", i ? 1 : 2, cmdArg.camConfig[ch_num1].ae_gain);
+        __LOG(LOG_NOTICE, "[CFG][%s:%d] ch%d cmd : %s", _FILE_, __LINE__, ch_num1, cmd);
+        if (system(cmd) < 0)
+            __LOG(LOG_ERR, "[CFG][%s:%d] ch%d ae_gain fail", __FILE__, __LINE__, ch_num1);
+
+        cmd = g_strdup_printf("i2cwrite %d 0x12 0x500c 0x%08x", i ? 1 : 2, cmdArg.camConfig[ch_num1].exp_time);
+        __LOG(LOG_NOTICE, "[CFG][%s:%d] ch%d cmd : %s", _FILE_, __LINE__, ch_num1, cmd);
+        if (system(cmd) < 0)
+            __LOG(LOG_ERR, "[CFG][%s:%d] ch%d exp_time fail", __FILE__, __LINE__, ch_num1);
+
+        cmd = g_strdup_printf("i2cwrite %d 0x11 0x100c 0x%04x", i ? 1 : 2, (cmdArg.ch_rotate >> (i * 4)) & 0x03);
+        __LOG(LOG_NOTICE, "[CFG][%s:%d] ch%d cmd : %s", _FILE_, __LINE__, ch_num0, cmd);
+        if (system(cmd) < 0)
+            __LOG(LOG_ERR, "[CFG][%s:%d] ch%d rotation fail", __FILE__, __LINE__, ch_num0);
+
+        cmd = g_strdup_printf("i2cwrite %d 0x11 0x5002 0x%04x", i ? 1 : 2, cmdArg.camConfig[ch_num0].ae_on? 0x299:0x290);
+        __LOG(LOG_NOTICE, "[CFG][%s:%d] ch%d cmd : %s", _FILE_, __LINE__, ch_num0, cmd);
+        if (system(cmd) < 0)
+            __LOG(LOG_ERR, "[CFG][%s:%d] ch%d ae_on fail", __FILE__, __LINE__, ch_num0);
+
+        cmd = g_strdup_printf("i2cwrite %d 0x11 0x5006 0x%04x", i ? 1 : 2, cmdArg.camConfig[ch_num0].ae_gain);
+        __LOG(LOG_NOTICE, "[CFG][%s:%d] ch%d cmd : %s", _FILE_, __LINE__, ch_num0, cmd);
+        if (system(cmd) < 0)
+            __LOG(LOG_ERR, "[CFG][%s:%d] ch%d ae_gain fail", __FILE__, __LINE__, ch_num0);
+
+        cmd = g_strdup_printf("i2cwrite %d 0x11 0x500c 0x%08x", i ? 1 : 2, cmdArg.camConfig[ch_num0].exp_time);
+        __LOG(LOG_NOTICE, "[CFG][%s:%d] ch%d cmd : %s", _FILE_, __LINE__, ch_num0, cmd);
+        if (system(cmd) < 0)
+            __LOG(LOG_ERR, "[CFG][%s:%d] ch%d exp_time fail", __FILE__, __LINE__, ch_num0);
     }
     else
     {
@@ -530,29 +567,61 @@ gint rotate_camera(CsiNum csiNum)
         //__LOG(LOG_NOTICE, "[CFG][%s:%d] link byte : %s", _FILE_, __LINE__, str);
 
         if (strstr(str, "0xea"))
-            val[i * 2] = 1;
+            val[ch_num0] = 1;
         else if (strstr(str, "0xda"))
-            val[i * 2 + 1] = 1;
+            val[ch_num1] = 1;
         else
             __LOG(LOG_CRIT, "[CFG][%s:%d] csi[%d] not display", _FILE_, __LINE__, i);
 
-        if (cmdArg.cam_en[i * 2] & 0x01)
+        if (cmdArg.cam_en[ch_num0] & 0x01)
         {
+            __LOG(LOG_NOTICE, "[CFG][%s:%d] ch%d enable, ch%d disable", _FILE_, __LINE__, ch_num0, ch_num1);
             cmd = g_strdup_printf("i2cwrite %d 0x3c 0x100c 0x%04x", i ? 1 : 2, (cmdArg.ch_rotate >> (i * 4)) & 0x03);
-            __LOG(LOG_NOTICE, "[CFG][%s:%d] %s", _FILE_, __LINE__, cmd);
+            __LOG(LOG_NOTICE, "[CFG][%s:%d] ch%d cmd : %s", _FILE_, __LINE__, ch_num0, cmd);
             if (system(cmd) < 0)
-                __LOG(LOG_ERR, "[CFG][%s:%d] ch%d rotation fail", __FILE__, __LINE__, i * 2);
-            if (val[i * 2] == 0)
-                __LOG(LOG_ERR, "[CFG][%s:%d] swap : ch%d enable but ch%d display", _FILE_, __LINE__, i * 2, i * 2 + 1);
+                __LOG(LOG_ERR, "[CFG][%s:%d] ch%d rotation fail", __FILE__, __LINE__, ch_num0);
+            if (val[ch_num0] == 0)
+                __LOG(LOG_ERR, "[CFG][%s:%d] swap : ch%d enable but ch%d display", _FILE_, __LINE__, ch_num0, ch_num1);
+
+            cmd = g_strdup_printf("i2cwrite %d 0x3c 0x5002 0x%04x", i ? 1 : 2, cmdArg.camConfig[ch_num0].ae_on? 0x299:0x290);
+            __LOG(LOG_NOTICE, "[CFG][%s:%d] ch%d cmd : %s", _FILE_, __LINE__, ch_num0, cmd);
+            if (system(cmd) < 0)
+                __LOG(LOG_ERR, "[CFG][%s:%d] ch%d ae_on fail", __FILE__, __LINE__, ch_num0);
+
+            cmd = g_strdup_printf("i2cwrite %d 0x3c 0x5006 0x%04x", i ? 1 : 2, cmdArg.camConfig[ch_num0].ae_gain);
+            __LOG(LOG_NOTICE, "[CFG][%s:%d] ch%d cmd : %s", _FILE_, __LINE__, ch_num0, cmd);
+            if (system(cmd) < 0)
+                __LOG(LOG_ERR, "[CFG][%s:%d] ch%d ae_gain fail", __FILE__, __LINE__, ch_num0);
+
+            cmd = g_strdup_printf("i2cwrite %d 0x3c 0x500c 0x%08x", i ? 1 : 2, cmdArg.camConfig[ch_num0].exp_time);
+            __LOG(LOG_NOTICE, "[CFG][%s:%d] ch%d cmd : %s", _FILE_, __LINE__, ch_num0, cmd);
+            if (system(cmd) < 0)
+                __LOG(LOG_ERR, "[CFG][%s:%d] ch%d ae_gain fail", __FILE__, __LINE__, ch_num0);
         }
-        else if (cmdArg.cam_en[i * 2 + 1] & 0x01)
+        else if (cmdArg.cam_en[ch_num1] & 0x01)
         {
+            __LOG(LOG_NOTICE, "[CFG][%s:%d] ch%d disable, ch%d enable", _FILE_, __LINE__, ch_num0, ch_num1);
             cmd = g_strdup_printf("i2cwrite %d 0x3c 0x100c 0x%04x", i ? 1 : 2, (cmdArg.ch_rotate >> (i * 4 + 2)) & 0x03);
             __LOG(LOG_NOTICE, "[CFG][%s:%d] %s", _FILE_, __LINE__, cmd);
             if (system(cmd) < 0)
-                __LOG(LOG_ERR, "[CFG][%s:%d] ch%d rotation fail", __FILE__, __LINE__, i * 2 + 1);
-            if (val[i * 2 + 1] == 0)
-                __LOG(LOG_ERR, "[CFG][%s:%d] swap : ch%d enable but ch%d display", _FILE_, __LINE__, i * 2 + 1, i * 2);
+                __LOG(LOG_ERR, "[CFG][%s:%d] ch%d rotation fail", __FILE__, __LINE__, ch_num1);
+            if (val[ch_num1] == 0)
+                __LOG(LOG_ERR, "[CFG][%s:%d] swap : ch%d enable but ch%d display", _FILE_, __LINE__, ch_num1, ch_num0);
+
+            cmd = g_strdup_printf("i2cwrite %d 0x3c 0x5002 0x%04x", i ? 1 : 2, cmdArg.camConfig[ch_num1].ae_on? 0x299:0x290);
+            __LOG(LOG_NOTICE, "[CFG][%s:%d] ch%d cmd : %s", _FILE_, __LINE__, ch_num1, cmd);
+            if (system(cmd) < 0)
+                __LOG(LOG_ERR, "[CFG][%s:%d] ch%d ae_on fail", __FILE__, __LINE__, ch_num1);
+
+            cmd = g_strdup_printf("i2cwrite %d 0x3c 0x5006 0x%04x", i ? 1 : 2, cmdArg.camConfig[ch_num1].ae_gain);
+            __LOG(LOG_NOTICE, "[CFG][%s:%d] ch%d cmd : %s", _FILE_, __LINE__, ch_num1, cmd);
+            if (system(cmd) < 0)
+                __LOG(LOG_ERR, "[CFG][%s:%d] ch%d ae_gain fail", __FILE__, __LINE__, ch_num1);
+
+            cmd = g_strdup_printf("i2cwrite %d 0x3c 0x500c 0x%08x", i ? 1 : 2, cmdArg.camConfig[ch_num1].exp_time);
+            __LOG(LOG_NOTICE, "[CFG][%s:%d] ch%d cmd : %s", _FILE_, __LINE__, ch_num1, cmd);
+            if (system(cmd) < 0)
+                __LOG(LOG_ERR, "[CFG][%s:%d] ch%d ae_gain fail", __FILE__, __LINE__, ch_num1);
         }
     }
 
@@ -584,7 +653,8 @@ gint main(gint argc, gchar *argv[])
     cmdArg = parser->arg;
     getPasswdWithAES(&parser->arg);
     //attachInterruptHandlers();
-    parser->json_parser(DEFAULT_JSON_PATH, DEFAULT_JSON_HEADER);
+    if(parser->json_parser(DEFAULT_JSON_PATH, DEFAULT_JSON_HEADER) < 0)
+        return -1;
 
     if(parser->arg_parser(&argc, &argv) < 0)
         return -1;
@@ -634,25 +704,6 @@ gint main(gint argc, gchar *argv[])
     g_setenv("GST_DEBUG_DUMP_DOT_DIR", cmdArg.dotDir, 1);
     //g_print("GST_DEBUG_DUMP_DOT_DIR : %s\n", g_getenv("GST_DEBUG_DUMP_DOT_DIR"));
 
-#if 0
-    if(cmdArg.audio_en)
-    {
-        audioBin.init();
-        audioBin.addElement("alsasrc", "audiorate", "audioconvert", "lamemp3enc", "mpegaudioparse", "queue", "tee", NULL);
-        audioBin.linkElement();
-
-        g_object_set(audioBin.be.element[0], "device", "plughw:0,0", NULL);
-        //g_object_set(audioBin.be.element[0], "is-live", TRUE, NULL);
-        //g_object_set(audioBin.be.element[0], "wave", 5, NULL);
-        //g_object_set(audioBin.be.element[0], "wave", 8, NULL);
-        //g_object_set(audioBin.be.element[0], "tick-interval", 200000000, NULL);
-        g_object_set(audioBin.be.element[5], "max-size-time", 5*GST_SECOND, "max-size-buffers", 60, "leaky", 2, NULL);
-        //g_object_set(audioBin.be.element[6], "max-size-time", 5*GST_SECOND, "max-size-buffers", 60, "leaky", 2, NULL);
-        //g_object_set(audioBin.be.element[6], "max-size-bytes", 0, "max-size-time", 0, "max-size-buffers", 60, "leaky", LEAKY_DOWNSTREAM, NULL);
-    }
-#endif
-
-    //if(cmdArg.stream_en[STREAM_RTSP]) rtspServerStart();
     gboolean crop_en[2] = {FALSE, FALSE};
     CsiNum csiNum;
     crop_en[0] = cmdArg.cam_en[0]&&cmdArg.cam_en[1];
@@ -796,7 +847,7 @@ gint main(gint argc, gchar *argv[])
 	{
 		if(videoBin[i].be.bin != NULL)
 		{
-            rotate_camera((CsiNum)i);
+            config_camera((CsiNum)i);
         }
     }
 

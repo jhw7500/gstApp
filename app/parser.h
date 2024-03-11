@@ -39,6 +39,12 @@
 #define DEFAULT_WIDTH           1920
 #define DEFAULT_HEIGHT          1080
 
+#define DEFAULT_AWB             "auto"
+#define DEFAULT_LSC             0x3fff
+#define DEFAULT_AE_GAIN         0x100
+#define DEFAULT_ISO             100
+#define DEFAULT_EXP_TIME        10000
+
 #define DEFAULT_RTSP_PORT   "8554"
 #define DEFAULT_RTSP_ID     "user"
 #define DEFAULT_RTSP_PASSWD "user"

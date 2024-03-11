@@ -110,17 +110,32 @@ typedef struct {
     void* arg4;
 } ThreadArgs;
 
+typedef struct {
+    gboolean enable;
+    gboolean vflip;
+    gboolean hflip;
+    gint bps[2];
+    gint gop[2];
+    gboolean ae_on;
+    guint ae_gain;
+    guint lsc;
+    guint iso;
+    guint32 exp_time;
+    const gchar *awb;
+} CamConfig;
+
 typedef struct _CmdArg
 {
     LevelMode levelMode;
     IoMode ioMode;
+    CamConfig camConfig[MAX_CHANNEL];
     gboolean hflip[MAX_CHANNEL];
     gboolean vflip[MAX_CHANNEL];
     gboolean cam_en[MAX_CHANNEL];
-    gint fps[MAX_MODE];
-    gint bps[MAX_MODE];
+    gint fps[MAX_MODE][MAX_CHANNEL];
+    gint bps[MAX_MODE][MAX_CHANNEL];
     gboolean stream_en[MAX_MODE];
-    gint gop[MAX_MODE];
+    gint gop[MAX_MODE][MAX_CHANNEL];
     gint log_level;
     gint dbg_level;
     const gchar *dotDir;
@@ -129,7 +144,7 @@ typedef struct _CmdArg
     guint8 ch_enable;
     guint16 ch_rotate;
     ResMode resMode;
-    gint main_fps;
+    gint main_fps[MAX_VIDEO_SRC];
     gint play_delay;
     gboolean fault;
     gint duration;

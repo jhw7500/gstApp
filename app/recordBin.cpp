@@ -241,7 +241,7 @@ gint RecordBin::init(guint8 num, gboolean crop_en)
         return ret;
     }
 
-    GstCaps *caps = gst_caps_new_simple("video/x-raw", "framerate", GST_TYPE_FRACTION, cmdArg.fps[STREAM_REC], 1, NULL);
+    GstCaps *caps = gst_caps_new_simple("video/x-raw", "framerate", GST_TYPE_FRACTION, cmdArg.fps[STREAM_REC][ch], 1, NULL);
     g_object_set(re.capsfilter, "caps", caps, NULL);
     gst_caps_unref(caps);
 
@@ -257,12 +257,12 @@ gint RecordBin::init(guint8 num, gboolean crop_en)
     g_object_set(re.overlay, "halignment", 0, NULL);
     g_object_set(re.overlay, "font-desc", DEFAULT_OVERLAY_FONT, NULL);
 
-    g_object_set(re.enc, "bitrate", cmdArg.bps[STREAM_REC], NULL);
-    g_object_set(re.enc, "gop-size", cmdArg.gop[STREAM_REC], NULL);
+    g_object_set(re.enc, "bitrate", cmdArg.camConfig[ch].bps[STREAM_REC], NULL);
+    g_object_set(re.enc, "gop-size", cmdArg.camConfig[ch].gop[STREAM_REC], NULL);
     //g_object_set(re.parse, "config-interval", -1, NULL);
     //g_object_set(re.rate, "max-rate", MAIN_FPS, "drop-only", FALSE, NULL);
-    g_object_set(re.queue, "max-size-time", GST_SECOND, "max-size-buffers", cmdArg.fps[STREAM_REC], "leaky", LEAKY_DOWNSTREAM, NULL);
-    g_object_set(re.queue2, "max-size-time", GST_SECOND, "max-size-buffers", cmdArg.fps[STREAM_REC], "leaky", LEAKY_DOWNSTREAM, NULL);
+    g_object_set(re.queue, "max-size-time", GST_SECOND, "max-size-buffers", cmdArg.fps[STREAM_REC][ch], "leaky", LEAKY_DOWNSTREAM, NULL);
+    g_object_set(re.queue2, "max-size-time", GST_SECOND, "max-size-buffers", cmdArg.fps[STREAM_REC][ch], "leaky", LEAKY_DOWNSTREAM, NULL);
 
     sinkPad = gst_ghost_pad_new(g_strdup_printf("recordBin_sink_ch%d", ch), gst_element_get_static_pad(re.queue, "sink"));
 

@@ -19,6 +19,77 @@
 
 #define LOG_KEY "CFG"
 
+
+void ParserClass::init_arg(gchar *argv)
+{
+    //g_print("%s\n", __FUNCTION__);
+    arg.appname = CHARNEXT(argv, '/');
+    arg.ch_enable = DEFAULT_CH_ENABLE;
+    arg.ch_rotate = DEFAULT_CH_ROTATE;
+    arg.log_level = DEFAULT_LOG_LEVEL;
+    arg.dbg_level = DEFAULT_DBG_LEVEL;
+    arg.mntDir = DEFAULT_MOUNT_PATH;
+    arg.duration = DEFUALT_DURATION;
+    arg.rtsp_port = DEFAULT_RTSP_PORT;
+    arg.rtsp_id = DEFAULT_RTSP_ID;
+    arg.rtsp_passwd = DEFAULT_RTSP_PASSWD;
+    arg.main_fps[CSI_1] = DEFAULT_MAIN_FPS;
+    arg.main_fps[CSI_2] = DEFAULT_MAIN_FPS;
+
+    arg.ohtName = arg.appname;
+    arg.width = DEFAULT_WIDTH;
+    arg.height = DEFAULT_HEIGHT;
+
+    arg.ioMode = IO_USERPTR;
+    arg.levelMode = MODE_NORMAL;
+    arg.dotDir = DEFAULT_DOT_PATH;
+    arg.captureDir = DEFAULT_CAPTURE_PATH;
+    arg.play_delay = DEFAULT_PLAY_DELAY;
+    arg.fault = FALSE;
+    arg.audio_en = FALSE;
+    arg.captureMaxCnt = DEFAULT_CAPTURE_MAX_CNT;
+    arg.input_en = FALSE;
+    arg.overlay_en = FALSE;
+    arg.split_diff_msec = DEFAULT_SPLIT_DIFF_MSEC;
+    arg.split_max_msec = DEFAULT_SPLIT_MAX_MSEC;
+    arg.stream_en[STREAM_REC] = TRUE;
+    arg.stream_en[STREAM_RTSP] = TRUE;
+    arg.stream_en[STREAM_CAP] = FALSE;
+
+    arg.capture_encoder_en = FALSE;
+    arg.tcp_en = FALSE;
+    arg.tcp_port = DEFAULT_TCP_PORT;
+
+    for(guint8 i=0; i<MAX_CHANNEL; i++)
+    {
+        arg.camConfig[i].enable = FALSE;
+        arg.camConfig[i].hflip = FALSE;
+        arg.camConfig[i].vflip = FALSE;
+        arg.camConfig[i].bps[0] = DEFAULT_RECORD_BITRATE;
+        arg.camConfig[i].bps[1] = DEFAULT_RECORD_BITRATE;
+        arg.camConfig[i].gop[0] = DEFAULT_GOP_SIZE;
+        arg.camConfig[i].gop[1] = DEFAULT_GOP_SIZE;
+        arg.camConfig[i].ae_on = TRUE;
+        arg.camConfig[i].ae_gain = DEFAULT_AE_GAIN;
+        arg.camConfig[i].awb = DEFAULT_AWB;
+        arg.camConfig[i].iso = DEFAULT_ISO;
+        arg.camConfig[i].lsc = DEFAULT_LSC;
+        arg.camConfig[i].exp_time = DEFAULT_EXP_TIME;
+#if 0
+        arg.cam_en[i] = FALSE;
+        arg.hflip[i] = FALSE;
+        arg.vflip[i] = FALSE;
+        arg.fps[STREAM_REC][i] = DEFAULT_RECORD_FPS;
+        arg.fps[STREAM_RTSP][i] = DEFAULT_RTSP_FPS;
+        arg.fps[STREAM_CAP][i]= DEFAULT_CAPTURE_FPS;
+        arg.bps[STREAM_REC][i] = DEFAULT_RECORD_BITRATE;
+        arg.bps[STREAM_RTSP][i] = DEFAULT_RTSP_BITRATE;
+        arg.gop[STREAM_REC][i] = DEFAULT_GOP_SIZE;
+        arg.gop[STREAM_RTSP][i] = DEFAULT_GOP_SIZE;
+#endif
+    }
+}
+
 json_object *ParserClass::json_find_obj (json_object * jobj, char *find_key)
 {
     size_t key_len = strlen(find_key);
@@ -32,32 +103,72 @@ gint ParserClass::json_object_get_value(json_object *hobj, const gchar *name, gp
 {
     gint ret = 0;
     //json_object *vobj = json_find_obj(obj, (char *)name);
-    json_object *vobj = json_object_object_get(hobj, name);
+    json_object *vobj;
+
+    vobj = json_object_object_get(hobj, name);
+
     enum json_type type = json_object_get_type(vobj);
 
     if(type == json_type_string) {
         gchar **val = (gchar**)data;
         *val = (gchar*)json_object_get_string(vobj);
-        //__LOG(LOG_NOTICE, "[CFG][%s:%d] %s : %s", _FILE_, __LINE__, name, *val);
+        __LOG(LOG_INFO, "[CFG][%s:%d] %s : %s", _FILE_, __LINE__, name, *val);
     }
     else if(type == json_type_int) {
         gint *val = (gint *)data;
         *val = json_object_get_int(vobj);
-        //__LOG(LOG_NOTICE, "[CFG][%s:%d] %s : %d", _FILE_, __LINE__, name, *val);
+        __LOG(LOG_INFO, "[CFG][%s:%d] %s : %d", _FILE_, __LINE__, name, *val);
     }
     else if(type == json_type_boolean) {
         gboolean *val = (gboolean *)data;
-        *val = json_object_get_int(vobj);
-        //__LOG(LOG_NOTICE, "[CFG][%s:%d] %s : %s", _FILE_, __LINE__, name, *val? "TRUE":"FALSE");
+        *val = json_object_get_boolean(vobj);
+        __LOG(LOG_INFO, "[CFG][%s:%d] %s : %s", _FILE_, __LINE__, name, *val? "TRUE":"FALSE");
     }
     else if(type == json_type_double) {
         gdouble *val = (gdouble *)data;
-        *val = json_object_get_int(vobj);
-        //__LOG(LOG_NOTICE, "[CFG][%s:%d] %s : %f", _FILE_, __LINE__, name, *val);
+        *val = json_object_get_double(vobj);
+        __LOG(LOG_INFO, "[CFG][%s:%d] %s : %f", _FILE_, __LINE__, name, *val);
+    }
+    else if(type == json_type_array) {
+        array_list *arr = json_object_get_array(vobj);
+        //g_print("len:%ld arr->size:%ld arr->len:%ld\n", json_object_array_length(vobj), arr->size, arr->length);
+        for(size_t i=0; i<arr->length; i++)
+        {
+            json_object *retrieved_obj = (json_object *)array_list_get_idx(arr, i);
+            type = json_object_get_type(retrieved_obj);
+            if(type == json_type_string) {
+                gchar **arr = (gchar**)data;
+                arr[i] = (gchar*)json_object_get_string(retrieved_obj);
+                __LOG(LOG_INFO, "[CFG][%s:%d] %s[%d] : %s", _FILE_, __LINE__, name, i, arr[i]);
+            }
+            else if(type == json_type_int) {
+                gint *arr = (gint *)data;
+                arr[i] = json_object_get_int(retrieved_obj);
+                __LOG(LOG_INFO, "[CFG][%s:%d] %s[%d] : %d", _FILE_, __LINE__, name, i, arr[i]);
+            }
+            else if(type == json_type_boolean) {
+                gboolean *arr = (gboolean *)data;
+                arr[i] = json_object_get_boolean(retrieved_obj);
+                __LOG(LOG_INFO, "[CFG][%s:%d] %s[%d] : %s", _FILE_, __LINE__, name, i, arr[i]? "TRUE":"FALSE");
+            }
+            else if(type == json_type_double) {
+                gdouble *arr = (gdouble *)data;
+                arr[i] = json_object_get_double(retrieved_obj);
+                __LOG(LOG_INFO, "[CFG][%s:%d] %s[%d] : %f", _FILE_, __LINE__, name, i, arr[i]);
+            }
+            else if(type == json_type_null)
+            {
+                __LOG(LOG_ERR, "[%s][%s:%d] not exist : %s", LOG_KEY, _FILE_, __LINE__, name);
+            }
+            else
+            {
+                __LOG(LOG_ERR, "[%s][%s:%d] unsupport type : %d", LOG_KEY, _FILE_, __LINE__, type);
+            }
+        }
     }
     else if(type == json_type_null)
     {
-        __LOG(LOG_ERR, "[%s][%s:%d] not exist : %s[%d]", LOG_KEY, _FILE_, __LINE__, name, type);
+        __LOG(LOG_ERR, "[%s][%s:%d] not exist : %s", LOG_KEY, _FILE_, __LINE__, name);
     }
     else
     {
@@ -93,6 +204,7 @@ gint ParserClass::json_parser(const gchar *path, const gchar *header)
 
 	json_object *jobj = NULL;
     json_object *hobj = NULL;
+    json_object *vobj = NULL;
 	//const gchar* ptr;
 	gchar* json_file;
 
@@ -129,26 +241,41 @@ gint ParserClass::json_parser(const gchar *path, const gchar *header)
         json_object_get_value(hobj, "recording_time", &arg.duration);
         json_object_get_value(hobj, "log_level", &arg.log_level);
         json_object_get_value(hobj, "debug_level", &arg.dbg_level);
-
+        json_object_get_value(hobj, "fps", &arg.main_fps[CSI_1]);
+        json_object_get_value(hobj, "fps", &arg.main_fps[CSI_2]);
+#if 0
         json_object_get_value(hobj, "rec_fps", &arg.fps[STREAM_REC]);
         json_object_get_value(hobj, "rec_bps", &arg.bps[STREAM_REC]);
         json_object_get_value(hobj, "rtsp_fps", &arg.fps[STREAM_RTSP]);
         json_object_get_value(hobj, "rtsp_bps", &arg.bps[STREAM_RTSP]);
-
+        json_object_get_value(hobj, "cap_fps", &arg.fps[STREAM_CAP]);
+        json_object_get_value(hobj, "cam_en", &arg.cam_en);
+        json_object_get_value(hobj, "hflip", &arg.hflip);
+        json_object_get_value(hobj, "vflip", &arg.vflip);
+#endif
         for(guint8 i=0; i<MAX_CHANNEL; i++)
         {
-            json_object_get_value(hobj, g_strdup_printf("cam_ch%d", i), &arg.cam_en[i]);
-            json_object_get_value(hobj, g_strdup_printf("ch%d_hflip", i), &arg.hflip[i]);
-            json_object_get_value(hobj, g_strdup_printf("ch%d_vflip", i), &arg.vflip[i]);
-            //json_object_get_value(hobj, g_strdup_printf("cam_ch%d_rotate", i), &arg.cam_rotate[i]);
-            arg.ch_enable |= (arg.cam_en[i]<<i);
-            arg.ch_rotate |= (arg.hflip[i]<<(i*2));
-            arg.ch_rotate |= (arg.vflip[i]<<(i*2+1));
-            //g_print("cam_ch%d:%d\n", i, arg.cam_en[i]);
-            //g_print("ch%d_hflip:%d\n", i, arg.hflip[i]);
-            //g_print("ch%d_vflip:%d\n", i, arg.vflip[i]);
-            //g_print("ch_rotate:0x%x\n", arg.ch_rotate);
-            //__LOG(LOG_NOTICE, "[GST][%s:%d] cam_ch%d:%d", _FILE_, __LINE__, i, arg.cam_en[i]);
+            vobj = json_object_object_get(hobj, g_strdup_printf("ch%d", i));
+            json_object_get_value(vobj, "enable", &arg.camConfig[i].enable);
+            json_object_get_value(vobj, "hflip", &arg.camConfig[i].hflip);
+            json_object_get_value(vobj, "vflip", &arg.camConfig[i].vflip);
+            json_object_get_value(vobj, "bps", &arg.camConfig[i].bps);
+            json_object_get_value(vobj, "ae_on", &arg.camConfig[i].ae_on);
+            json_object_get_value(vobj, "ae_gain", &arg.camConfig[i].ae_gain);
+            json_object_get_value(vobj, "exp_time", &arg.camConfig[i].exp_time);
+            //json_object_get_value(vobj, "gop", &arg.camConfig[i].gop);
+            //json_object_get_value(vobj, "awb", &arg.camConfig[i].awb);
+            //json_object_get_value(vobj, "lsc", &arg.camConfig[i].lsc);
+            //json_object_get_value(vobj, "iso", &arg.camConfig[i].iso);
+            
+            arg.ch_enable |= (arg.camConfig[i].enable<<i);
+            arg.ch_rotate |= (arg.camConfig[i].hflip<<(i*2));
+            arg.ch_rotate |= (arg.camConfig[i].vflip<<(i*2+1));
+            //arg.ch_enable |= (arg.cam_en[i]<<i);
+            //arg.ch_rotate |= (arg.hflip[i]<<(i*2));
+            //arg.ch_rotate |= (arg.vflip[i]<<(i*2+1));
+            for(guint8 k=0; k<MAX_MODE; k++)
+                arg.fps[k][i]= arg.main_fps[CSI_1];
         }
 
     } while(0);
@@ -191,11 +318,8 @@ gint ParserClass::arg_parser(int *argc, char **argv[])
         {"mnt", 'O', 0, G_OPTION_ARG_STRING, &arg.mntDir, "save video & audio file to directory, default(/mnt/sd_cam)", "STRING"},
         {"width", 'w', 0, G_OPTION_ARG_INT, &arg.width, "cam width HD(1280), FHD(1920), default(1920)", "INT"},
         {"height", 'h', 0, G_OPTION_ARG_INT, &arg.height, "cam height HD(720), FHD(1080), default(1080)", "INT"},
-        {"fmain", 'M', 0, G_OPTION_ARG_INT, &arg.main_fps, "main frame per second, default(15)", "INT"},
-        {"frec", 'f', 0, G_OPTION_ARG_INT, &arg.fps[STREAM_REC], "record frame per second, default(15)", "INT"},
-        {"frtsp", 'F', 0, G_OPTION_ARG_INT, &arg.fps[STREAM_RTSP], "rtsp frame per second, default(15)", "INT"},
-        {"brec", 'b', 0, G_OPTION_ARG_INT, &arg.bps[STREAM_REC], "record Kbyte per second, default(4096)", "INT"},
-        {"brtsp", 'B', 0, G_OPTION_ARG_INT, &arg.bps[STREAM_RTSP], "rtsp Kbyte per second, default(1024)", "INT"},
+        {"fmain1", 'M', 0, G_OPTION_ARG_INT, &arg.main_fps[CSI_1], "csi1 main frame per second, default(15)", "INT"},
+        {"fmain2", 'M', 0, G_OPTION_ARG_INT, &arg.main_fps[CSI_2], "csi2 main frame per second, default(15)", "INT"},
         {"oht", 'n', 0, G_OPTION_ARG_STRING, &arg.ohtName, "oht name, default(APPNAME)", "STRING"},
         {"delay", 'd', 0, G_OPTION_ARG_INT, &arg.play_delay, "from pause to play delay, default(0)", "SECOND"},
         {"fault", 0, 0, G_OPTION_ARG_INT, &arg.fault, "no fault setup, default(FALSE)", "INT"},
@@ -215,8 +339,34 @@ gint ParserClass::arg_parser(int *argc, char **argv[])
         {"eover", 'v', 0, G_OPTION_ARG_INT, &arg.overlay_en, "overlay enable, default(FALSE)", "INT"},
         {"split_diff", 'D', 0, G_OPTION_ARG_INT, &arg.split_diff_msec, "split diff msec, default(100)", "INT"},
         {"split_max", 'X', 0, G_OPTION_ARG_INT, &arg.split_max_msec, "split max msec, default(2000)", "INT"},
-        {"grec", 0, 0, G_OPTION_ARG_INT, &arg.gop[STREAM_REC], "rec gop size, default(15)", "INT"},
-        {"grtsp", 0, 0, G_OPTION_ARG_INT, &arg.gop[STREAM_RTSP], "rtsp gop size, default(15)", "INT"},
+        {"frec0", 0, 0, G_OPTION_ARG_INT, &arg.fps[STREAM_REC][0], "ch0 record frame per second, default(15)", "INT"},
+        {"frec1", 0, 0, G_OPTION_ARG_INT, &arg.fps[STREAM_REC][1], "ch1 record frame per second, default(15)", "INT"},
+        {"frec2", 0, 0, G_OPTION_ARG_INT, &arg.fps[STREAM_REC][2], "ch2 record frame per second, default(15)", "INT"},
+        {"frec3", 0, 0, G_OPTION_ARG_INT, &arg.fps[STREAM_REC][3], "ch3 record frame per second, default(15)", "INT"},
+        {"frtsp0", 0, 0, G_OPTION_ARG_INT, &arg.fps[STREAM_RTSP][0], "ch0 rtsp frame per second, default(15)", "INT"},
+        {"frtsp1", 0, 0, G_OPTION_ARG_INT, &arg.fps[STREAM_RTSP][1], "ch1 rtsp frame per second, default(15)", "INT"},
+        {"frtsp2", 0, 0, G_OPTION_ARG_INT, &arg.fps[STREAM_RTSP][2], "ch2 rtsp frame per second, default(15)", "INT"},
+        {"frtsp3", 0, 0, G_OPTION_ARG_INT, &arg.fps[STREAM_RTSP][3], "ch3 rtsp frame per second, default(15)", "INT"},
+        {"fcap0", 0, 0, G_OPTION_ARG_INT, &arg.fps[STREAM_CAP][0], "ch0 capture frame per second, default(15)", "INT"},
+        {"fcap1", 0, 0, G_OPTION_ARG_INT, &arg.fps[STREAM_CAP][1], "ch1 capture frame per second, default(15)", "INT"},
+        {"fcap2", 0, 0, G_OPTION_ARG_INT, &arg.fps[STREAM_CAP][2], "ch2 capture frame per second, default(15)", "INT"},
+        {"fcap3", 0, 0, G_OPTION_ARG_INT, &arg.fps[STREAM_CAP][3], "ch3 capture frame per second, default(15)", "INT"},
+        {"brec0", 0, 0, G_OPTION_ARG_INT, &arg.camConfig[0].bps[STREAM_REC], "ch0 record Kbyte per second, default(4096)", "INT"},
+        {"brec1", 0, 0, G_OPTION_ARG_INT, &arg.camConfig[1].bps[STREAM_REC], "ch1 record Kbyte per second, default(4096)", "INT"},
+        {"brec2", 0, 0, G_OPTION_ARG_INT, &arg.camConfig[2].bps[STREAM_REC], "ch2 record Kbyte per second, default(4096)", "INT"},
+        {"brec3", 0, 0, G_OPTION_ARG_INT, &arg.camConfig[3].bps[STREAM_REC], "ch3 record Kbyte per second, default(4096)", "INT"},
+        {"brtsp0", 0, 0, G_OPTION_ARG_INT, &arg.camConfig[0].bps[STREAM_RTSP], "ch0 rtsp Kbyte per second, default(1024)", "INT"},
+        {"brtsp1", 0, 0, G_OPTION_ARG_INT, &arg.camConfig[1].bps[STREAM_RTSP], "ch1 rtsp Kbyte per second, default(1024)", "INT"},
+        {"brtsp2", 0, 0, G_OPTION_ARG_INT, &arg.camConfig[2].bps[STREAM_RTSP], "ch2 rtsp Kbyte per second, default(1024)", "INT"},
+        {"brtsp3", 0, 0, G_OPTION_ARG_INT, &arg.camConfig[3].bps[STREAM_RTSP], "ch3 rtsp Kbyte per second, default(1024)", "INT"},
+        {"grec0", 0, 0, G_OPTION_ARG_INT, &arg.camConfig[0].gop[STREAM_REC], "ch0 rec gop size, default(15)", "INT"},
+        {"grec1", 0, 0, G_OPTION_ARG_INT, &arg.camConfig[1].gop[STREAM_REC], "ch1 rec gop size, default(15)", "INT"},
+        {"grec3", 0, 0, G_OPTION_ARG_INT, &arg.camConfig[2].gop[STREAM_REC], "ch2 rec gop size, default(15)", "INT"},
+        {"grec0", 0, 0, G_OPTION_ARG_INT, &arg.camConfig[3].gop[STREAM_REC], "ch3 rec gop size, default(15)", "INT"},
+        {"grtsp0", 0, 0, G_OPTION_ARG_INT, &arg.camConfig[0].gop[STREAM_RTSP], "ch0 rtsp gop size, default(15)", "INT"},
+        {"grtsp1", 0, 0, G_OPTION_ARG_INT, &arg.camConfig[1].gop[STREAM_RTSP], "ch1 rtsp gop size, default(15)", "INT"},
+        {"grtsp2", 0, 0, G_OPTION_ARG_INT, &arg.camConfig[2].gop[STREAM_RTSP], "ch2 rtsp gop size, default(15)", "INT"},
+        {"grtsp3", 0, 0, G_OPTION_ARG_INT, &arg.camConfig[3].gop[STREAM_RTSP], "ch3 rtsp gop size, default(15)", "INT"},
         {NULL}
     };
 
@@ -232,11 +382,23 @@ gint ParserClass::arg_parser(int *argc, char **argv[])
         return ret;
     }
 
-    for(i=0; i<MAX_MODE; i++)
+#if 1
+    gint max[2] = {0, 0};
+
+    for(i=0; i<2; i++)
     {
-        if(arg.fps[i] > arg.main_fps)
-            arg.main_fps = arg.fps[i];
+        for(guint8 k=0; k<MAX_CHANNEL; k++)
+        {
+            if(arg.fps[i][k] > max[k/2])
+                max[k/2] = arg.fps[i][k];
+        }
     }
+
+    if(max[0] > 0) arg.main_fps[CSI_2] = max[0];
+    if(max[1] > 0) arg.main_fps[CSI_1] = max[1];
+
+    __LOG(LOG_NOTICE, "[%s][%s:%d] arg.main_fps[CSI_2]:%d, arg.main_fps[CSI_1]:%d", LOG_KEY, _FILE_, __LINE__, arg.main_fps[CSI_2], arg.main_fps[CSI_1]);
+#endif
 
     //__LOG(LOG_CRIT, "[GST][%s:%d] arg.ch_enable : 0x%02x", _FILE_, __LINE__, arg.ch_enable);
     for(i=0; i<MAX_CHANNEL; i++)
@@ -270,59 +432,6 @@ gint ParserClass::arg_parser(int *argc, char **argv[])
     }
 
     return ret;
-}
-
-void ParserClass::init_arg(gchar *argv)
-{
-    //g_print("%s\n", __FUNCTION__);
-    arg.appname = CHARNEXT(argv, '/');
-    arg.ch_enable = DEFAULT_CH_ENABLE;
-    arg.ch_rotate = DEFAULT_CH_ROTATE;
-    arg.log_level = DEFAULT_LOG_LEVEL;
-    arg.dbg_level = DEFAULT_DBG_LEVEL;
-    arg.mntDir = DEFAULT_MOUNT_PATH;
-    arg.duration = DEFUALT_DURATION;
-    arg.rtsp_port = DEFAULT_RTSP_PORT;
-    arg.rtsp_id = DEFAULT_RTSP_ID;
-    arg.rtsp_passwd = DEFAULT_RTSP_PASSWD;
-    arg.main_fps = DEFAULT_MAIN_FPS;
-    arg.fps[STREAM_REC] = DEFAULT_RECORD_FPS;
-    arg.fps[STREAM_RTSP] = DEFAULT_RTSP_FPS;
-    arg.fps[STREAM_RTSP]= DEFAULT_CAPTURE_FPS;
-    arg.bps[STREAM_REC] = DEFAULT_RECORD_BITRATE;
-    arg.bps[STREAM_RTSP] = DEFAULT_RTSP_BITRATE;
-    arg.ohtName = arg.appname;
-    arg.width = DEFAULT_WIDTH;
-    arg.height = DEFAULT_HEIGHT;
-
-    arg.ioMode = IO_USERPTR;
-    arg.levelMode = MODE_NORMAL;
-    arg.dotDir = DEFAULT_DOT_PATH;
-    arg.captureDir = DEFAULT_CAPTURE_PATH;
-    arg.play_delay = DEFAULT_PLAY_DELAY;
-    arg.fault = FALSE;
-    arg.audio_en = FALSE;
-    arg.captureMaxCnt = DEFAULT_CAPTURE_MAX_CNT;
-    arg.input_en = FALSE;
-    arg.overlay_en = FALSE;
-    arg.split_diff_msec = DEFAULT_SPLIT_DIFF_MSEC;
-    arg.split_max_msec = DEFAULT_SPLIT_MAX_MSEC;
-    arg.stream_en[STREAM_REC] = TRUE;
-    arg.stream_en[STREAM_RTSP] = TRUE;
-    arg.stream_en[STREAM_CAP] = FALSE;
-    arg.gop[STREAM_REC] = DEFAULT_GOP_SIZE;
-    arg.gop[STREAM_RTSP] = DEFAULT_GOP_SIZE;
-
-    arg.capture_encoder_en = FALSE;
-    arg.tcp_en = FALSE;
-    arg.tcp_port = DEFAULT_TCP_PORT;
-
-    for(guint8 i=0; i<MAX_CHANNEL; i++)
-    {
-        arg.cam_en[i] = FALSE;
-        arg.hflip[i] = FALSE;
-        arg.vflip[i] = FALSE;
-    }
 }
 
 gint ParserClass::check_arg()
@@ -377,40 +486,70 @@ gint ParserClass::check_arg()
 #endif
     //__LOG(LOG_NOTICE, "[RTSP][%s:%d] 0 : %s, 1 : %s, 2 : %s", _FILE_, __LINE__, test0, test1, test2);
     __LOG(LOG_NOTICE, "[%s][%s:%d] io:%s, test:%d, noFault:%d, delay:%d, logLevel:%d, dbgLevel:%d, mntDir:%s, dotDir:%s, ", \
-    LOG_KEY, _FILE_, __LINE__, ioModeStr[arg.ioMode], arg.levelMode, arg.fault, arg.play_delay, arg.log_level, arg.dbg_level, arg.mntDir, arg.dotDir);
+                        LOG_KEY, _FILE_, __LINE__, ioModeStr[arg.ioMode], arg.levelMode, arg.fault, arg.play_delay, arg.log_level, \
+                        arg.dbg_level, arg.mntDir, arg.dotDir);
 
-    __LOG(LOG_NOTICE, "[%s][%s:%d] oht_name:%s, duration:%d, width:%d, height:%d, mainFps:%d", LOG_KEY, _FILE_, __LINE__, \
-                    arg.ohtName, arg.duration, arg.width, arg.height, arg.main_fps);
+    __LOG(LOG_NOTICE, "[%s][%s:%d] oht_name:%s, duration:%d, width:%d, height:%d, csi1_fps:%d, csi2_fps:%d", LOG_KEY, _FILE_, __LINE__, \
+                        arg.ohtName, arg.duration, arg.width, arg.height, arg.main_fps[CSI_1], arg.main_fps[CSI_2]);
                     
     __LOG(LOG_NOTICE, "[%s][%s:%d] chEn:0x%x, recEn:%d, rtspEn:%d, capEn:%d, audoEn:%d, inputEn:%d, overlayEn:%d tcpEn:%d", \
-    LOG_KEY, _FILE_, __LINE__, arg.ch_enable, arg.stream_en[STREAM_REC], arg.stream_en[STREAM_RTSP], arg.stream_en[STREAM_CAP], arg.audio_en, arg.input_en, arg.overlay_en, arg.tcp_en);
+                        LOG_KEY, _FILE_, __LINE__, arg.ch_enable, arg.stream_en[STREAM_REC], arg.stream_en[STREAM_RTSP], arg.stream_en[STREAM_CAP], \
+                        arg.audio_en, arg.input_en, arg.overlay_en, arg.tcp_en);
+    __LOG(LOG_NOTICE, "[%s][%s:%d] rtspID:%s, rtspPW:%s, rtspPort:%s, splitMargin:%d, splitMax:%d", LOG_KEY, _FILE_, __LINE__, \
+                        arg.rtsp_id, arg.rtsp_passwd, arg.rtsp_port, arg.split_diff_msec, arg.split_max_msec);
 
-    if(arg.stream_en[STREAM_REC]) __LOG(LOG_NOTICE, "[%s][%s:%d] recFps:%d, recBps:%d, recGop:%d, splitMargin:%d, splitMax:%d", LOG_KEY, _FILE_, __LINE__, \
-                                        arg.fps[STREAM_REC], arg.bps[STREAM_REC], arg.gop[STREAM_REC], arg.split_diff_msec, arg.split_max_msec);
-    if(arg.stream_en[STREAM_RTSP]) __LOG(LOG_NOTICE, "[%s][%s:%d] rtspFps:%d, rtspBps:%d, rtspGop:%d, rtspID:%s, rtspPW:%s, rtspPort:%s", LOG_KEY, _FILE_, __LINE__, \
-                                        arg.fps[STREAM_RTSP], arg.bps[STREAM_RTSP], arg.gop[STREAM_RTSP], arg.rtsp_id, arg.rtsp_passwd, arg.rtsp_port);
-    if(arg.stream_en[STREAM_CAP]) __LOG(LOG_NOTICE, "[%s][%s:%d] capFps:%d, capEncEn:%d captureMaxCnt:%d, capDir:%s", LOG_KEY, _FILE_, __LINE__, \
-                                        arg.fps[STREAM_CAP], arg.capture_encoder_en, arg.captureMaxCnt, arg.captureDir);
+    if(arg.stream_en[STREAM_REC]) 
+    {
+        __LOG(LOG_NOTICE, "[%s][%s:%d] rec ch0 fps:%d, rec ch1 fps:%d, rec ch2 fps:%d, rec ch3 fps:%d", LOG_KEY, _FILE_, __LINE__, \
+                            arg.fps[STREAM_REC][0], arg.fps[STREAM_REC][1], arg.fps[STREAM_REC][2], arg.fps[STREAM_REC][3]);  
+    }
+
+    if(arg.stream_en[STREAM_RTSP])
+    {
+        __LOG(LOG_NOTICE, "[%s][%s:%d] rtsp ch0 fps:%d, rtsp ch1 fps:%d, rtsp ch2 fps:%d, rtsp ch3 fps:%d", LOG_KEY, _FILE_, __LINE__, \
+                            arg.fps[STREAM_RTSP][0], arg.fps[STREAM_RTSP][1], arg.fps[STREAM_RTSP][2], arg.fps[STREAM_RTSP][3]);  
+    }
+
+    if(arg.stream_en[STREAM_CAP])
+    {
+        __LOG(LOG_NOTICE, "[%s][%s:%d] capture ch0 fps:%d, capture ch1 fps:%d, capture ch2 fps:%d, capture ch3 fps:%d", LOG_KEY, _FILE_, __LINE__, \
+                            arg.fps[STREAM_CAP][0], arg.fps[STREAM_CAP][1], arg.fps[STREAM_CAP][2], arg.fps[STREAM_CAP][3]);  
+        __LOG(LOG_NOTICE, "[%s][%s:%d] capEncEn:%d captureMaxCnt:%d, capDir:%s", LOG_KEY, _FILE_, __LINE__, \
+                            arg.capture_encoder_en, arg.captureMaxCnt, arg.captureDir);
+    }
 
     if(arg.tcp_en) __LOG(LOG_NOTICE, "[%s][%s:%d] tcpPort:%d", LOG_KEY, _FILE_, __LINE__, arg.tcp_port);
 
-    for(i=0; i<MAX_CHANNEL; i++)
-        __LOG(LOG_NOTICE, "[%s][%s:%d] cam_en[%d]:%d, vflip[%d]:%d, hflip[%d]:%d", LOG_KEY, _FILE_, __LINE__, i, arg.cam_en[i], i, arg.vflip[i], i, arg.hflip[i]);
+    for(i=0; i<MAX_CHANNEL; i++) {
+        __LOG(LOG_NOTICE, "[%s][%s:%d] ch%d en:%s, vflip:%s, hflip:%s, bps:%d,%d, ae_on:%d, ae_gain:%d, exp_time:%d", \
+            LOG_KEY, _FILE_, __LINE__, i, arg.camConfig[i].enable? "true":"false",  arg.camConfig[i].vflip? "true":"false", arg.camConfig[i].hflip? "true":"false", \
+            arg.camConfig[i].bps[STREAM_REC], arg.camConfig[i].bps[STREAM_RTSP], arg.camConfig[i].ae_on, arg.camConfig[i].ae_gain, arg.camConfig[i].exp_time);
 
+        //__LOG(LOG_NOTICE, "[%s][%s:%d] gop:%d,%d, awb:%s, iso:%d, lsc:%d", LOG_KEY, _FILE_, __LINE__, \
+            arg.camConfig[i].gop[STREAM_REC], arg.camConfig[i].gop[STREAM_RTSP], arg.camConfig[i].awb, arg.camConfig[i].iso, arg.camConfig[i].lsc);
+        //__LOG(LOG_NOTICE, "[%s][%s:%d] cam_en[%d]:%d, vflip[%d]:%d, hflip[%d]:%d", LOG_KEY, _FILE_, __LINE__, i, arg.cam_en[i], i, arg.vflip[i], i, arg.hflip[i]);
+        if(arg.camConfig[i].bps[STREAM_REC] < 1 || arg.camConfig[i].bps[STREAM_RTSP] < 1) {
+            __LOG(LOG_CRIT, "[%s][%s:%d] rec bps %d, rtsp bps %d not supported", LOG_KEY, _FILE_, __LINE__, \
+                    arg.camConfig[i].bps[STREAM_REC], arg.camConfig[i].bps[STREAM_RTSP]);
+
+            return -1;
+        }
+    }
     gint total_fps = 0;
-    total_fps += arg.stream_en[STREAM_REC]*arg.fps[STREAM_REC]*(arg.cam_en[0]+arg.cam_en[1]+arg.cam_en[2]+arg.cam_en[3]);
-    total_fps += arg.stream_en[STREAM_RTSP]*arg.fps[STREAM_RTSP]*(arg.cam_en[0]+arg.cam_en[1]+arg.cam_en[2]+arg.cam_en[3]);
+    //total_fps += arg.stream_en[STREAM_REC]*arg.fps[STREAM_REC]*(arg.cam_en[0]+arg.cam_en[1]+arg.cam_en[2]+arg.cam_en[3]);
+    //total_fps += arg.stream_en[STREAM_RTSP]*arg.fps[STREAM_RTSP]*(arg.cam_en[0]+arg.cam_en[1]+arg.cam_en[2]+arg.cam_en[3]);
+    for(i=0; i<MAX_CHANNEL; i++)
+    {
+        if(arg.stream_en[STREAM_REC]) total_fps += arg.fps[STREAM_REC][i]*arg.cam_en[i];
+        if(arg.stream_en[STREAM_RTSP]) total_fps += arg.fps[STREAM_RTSP][i]*arg.cam_en[i];
+    }
+
     //total_fps += arg.stream_en[STREAM_CAP]*arg.fps[STREAM_CAP]*(arg.cam_en[0]+arg.cam_en[1]+arg.cam_en[2]+arg.cam_en[3]);
     total_fps += arg.stream_en[STREAM_CAP]*0;
     total_fps += arg.audio_en*0;
 
     if(arg.duration < 1) {
         __LOG(LOG_CRIT, "[%s][%s:%d] recording duration %d not supported", LOG_KEY, _FILE_, __LINE__, arg.duration);
-        return -1;
-    }
-
-    if(arg.bps[STREAM_REC] < 1 || arg.bps[STREAM_RTSP] < 1) {
-        __LOG(LOG_CRIT, "[%s][%s:%d] rec bps %d, rtsp bps %d not supported", LOG_KEY, _FILE_, __LINE__, arg.bps[STREAM_REC], arg.bps[STREAM_RTSP]);
         return -1;
     }
 

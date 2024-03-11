@@ -427,11 +427,11 @@ GstPad* RtspServerBin::getBinSinkPad()
     return sinkPad;
 }
 
-gint RtspServerBin::init(guint8 num, gboolean crop_en)
+gint RtspServerBin::init(guint8 ch, gboolean crop_en)
 {
     GstPad *staticPad;
     gint ret = 0;
-    rtspServerData.ch = num;
+    rtspServerData.ch = ch;
     //sinkPad = NULL;
     __LOG(LOG_INFO, "[GST][%s:%d] %s ch : %d, crop : %s", _FILE_, __LINE__, __FUNCTION__, rtspServerData.ch, crop_en? "enable":"disable");
 
@@ -440,7 +440,6 @@ gint RtspServerBin::init(guint8 num, gboolean crop_en)
     re.queue2 = gst_element_factory_make(QUEUE_TYPE, "queue2");
     re.capsfilter = gst_element_factory_make("capsfilter", "capsfilter");
     re.convert = gst_element_factory_make("imxvideoconvert_g2d", "convert");
-    re.convert2 = gst_element_factory_make("imxvideoconvert_g2d", "convert2");
     re.parse = gst_element_factory_make("h264parse", "h264parse");
     re.enc = gst_element_factory_make("vpuenc_h264", "vpuenc_h264");
     re.rate = gst_element_factory_make("videorate", "videorate");
@@ -450,13 +449,12 @@ gint RtspServerBin::init(guint8 num, gboolean crop_en)
     re.compositor = gst_element_factory_make("imxcompositor_g2d", "compositor");
 
     if (!re.bin || !re.queue || !re.capsfilter || !re.parse || !re.enc || !re.rate || !re.sink || !re.convert || !re.queue2 || !re.crop \
-        || !re.overlay || !re.convert2 || !re.compositor) {
+        || !re.overlay || !re.compositor) {
         __LOG(LOG_CRIT, "[GST][%s:%d] rtsp element create error", _FILE_, __LINE__);
         return ret;
     }
 
-    gst_bin_add_many(GST_BIN(re.bin), re.queue, re.rate, re.convert, re.enc, re.parse, re.queue2, re.sink, re.capsfilter, re.crop, re.overlay, \
-        re.convert2, re.compositor, NULL);
+    gst_bin_add_many(GST_BIN(re.bin), re.queue, re.rate, re.convert, re.enc, re.parse, re.queue2, re.sink, re.capsfilter, re.crop, re.overlay, re.compositor, NULL);
 
     ret = gst_bin_add(GST_BIN(pipeline), re.bin);
     if(!ret) {
@@ -484,7 +482,7 @@ gint RtspServerBin::init(guint8 num, gboolean crop_en)
     //g_object_set(re.convert, "composition-meta-enable", TRUE, NULL);
     //g_object_set(re.convert, "videocrop-meta-enable", TRUE, NULL);
 
-    GstCaps *caps = gst_caps_new_simple("video/x-raw", "framerate", GST_TYPE_FRACTION, cmdArg.fps[STREAM_RTSP], 1, NULL);
+    GstCaps *caps = gst_caps_new_simple("video/x-raw", "framerate", GST_TYPE_FRACTION, cmdArg.fps[STREAM_RTSP][ch], 1, NULL);
     g_object_set(re.capsfilter, "caps", caps, NULL);
     gst_caps_unref(caps);
 
@@ -500,12 +498,12 @@ gint RtspServerBin::init(guint8 num, gboolean crop_en)
     g_object_set(re.overlay, "halignment", 0, NULL);
     g_object_set(re.overlay, "font-desc", DEFAULT_OVERLAY_FONT, NULL);
 
-    g_object_set(re.enc, "bitrate", cmdArg.bps[STREAM_RTSP], NULL);
-    g_object_set(re.enc, "gop-size", cmdArg.gop[STREAM_RTSP], NULL);
-    g_object_set(re.queue, "max-size-time", GST_SECOND, "max-size-buffers", cmdArg.fps[STREAM_RTSP], "leaky", LEAKY_DOWNSTREAM, NULL);
-    g_object_set(re.queue2, "max-size-time", GST_SECOND, "max-size-buffers", cmdArg.fps[STREAM_RTSP], "leaky", LEAKY_DOWNSTREAM, NULL);
+    g_object_set(re.enc, "bitrate", cmdArg.camConfig[ch].bps[STREAM_RTSP], NULL);
+    g_object_set(re.enc, "gop-size", cmdArg.camConfig[ch].gop[STREAM_RTSP], NULL);
+    g_object_set(re.queue, "max-size-time", GST_SECOND, "max-size-buffers", cmdArg.fps[STREAM_RTSP][ch], "leaky", LEAKY_DOWNSTREAM, NULL);
+    g_object_set(re.queue2, "max-size-time", GST_SECOND, "max-size-buffers", cmdArg.fps[STREAM_RTSP][ch], "leaky", LEAKY_DOWNSTREAM, NULL);
     //g_object_set(re.capsfilter, "max-size-time", 5*GST_SECOND, "max-size-buffers", 60, "leaky", 1, NULL);
-    g_object_set(re.sink, "max-buffers", cmdArg.fps[STREAM_RTSP], NULL);
+    g_object_set(re.sink, "max-buffers", cmdArg.fps[STREAM_RTSP][ch], NULL);
     g_object_set(re.sink, "drop", TRUE, NULL);
     //g_object_set(pipe->sink, "max-lateness", 1*GST_SECOND, NULL);
     //g_object_set(pipe->sink, "render-delay", 100*GST_MSECOND, NULL);

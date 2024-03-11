@@ -149,12 +149,12 @@ gint VideoBin::addCrop(CropDir dir)
     g_object_set(be.overlay[dir], "datetime-format", "%Y-%m-%d %H:%M:%S", NULL);
     g_object_set(be.overlay[dir], "show-times-as-dates", TRUE, NULL);
     g_object_set(be.overlay[dir], "datetime-epoch", g_date_time_new_now_local(), NULL);
-    g_object_set(be.queue[dir], "max-size-time", GST_SECOND, "max-size-buffers", cmdArg.main_fps, "leaky", 1, NULL);
+    g_object_set(be.queue[dir], "max-size-time", GST_SECOND, "max-size-buffers", cmdArg.main_fps[csi], "leaky", 1, NULL);
 
     GstCaps *caps = gst_caps_new_simple("video/x-raw",
                                         "width", G_TYPE_INT, cmdArg.width,
                                         "height", G_TYPE_INT, cmdArg.height,
-                                        "framerate", GST_TYPE_FRACTION, cmdArg.main_fps, 1,
+                                        "framerate", GST_TYPE_FRACTION, cmdArg.main_fps[csi], 1,
                                         NULL);
 
     g_object_set(be.capsfilter, "caps", caps, NULL);
@@ -218,7 +218,7 @@ gint VideoBin::init(CsiNum num, gboolean crop_en)
     g_object_set(be.src, "io-mode", cmdArg.ioMode, NULL);   //0:auto, 1:rw, 2:mmap, 3:userptr, 4:dmabuf, 5:dmabuf-import
     g_object_set(be.src, "do-timestamp", TRUE, NULL);
     g_signal_connect(be.src, "prepare-format", G_CALLBACK(prepare_format), &csi);
-    g_object_set(be.queue_main, "max-size-time", GST_SECOND, "max-size-buffers", cmdArg.main_fps, "leaky", LEAKY_DOWNSTREAM, NULL);
+    g_object_set(be.queue_main, "max-size-time", GST_SECOND, "max-size-buffers", cmdArg.main_fps[csi], "leaky", LEAKY_DOWNSTREAM, NULL);
 
     if(cmdArg.levelMode == MODE_TEST)
     {
@@ -244,7 +244,7 @@ gint VideoBin::init(CsiNum num, gboolean crop_en)
         caps = gst_caps_new_simple("video/x-raw",
                                     "width", G_TYPE_INT, cmdArg.width*2,
                                     "height", G_TYPE_INT, cmdArg.height,
-                                    "framerate", GST_TYPE_FRACTION, cmdArg.main_fps, 1,
+                                    "framerate", GST_TYPE_FRACTION, cmdArg.main_fps[csi], 1,
                                     NULL);
         ret = gst_element_link_many(be.src, be.convert, be.capsfilter, be.teeCrop, NULL);
         if (!ret)
@@ -258,7 +258,7 @@ gint VideoBin::init(CsiNum num, gboolean crop_en)
         caps = gst_caps_new_simple("video/x-raw", "format", G_TYPE_STRING, "NV12",
                                     "width", G_TYPE_INT, cmdArg.width,
                                     "height", G_TYPE_INT, cmdArg.height,
-                                    "framerate", GST_TYPE_FRACTION, cmdArg.main_fps, 1,
+                                    "framerate", GST_TYPE_FRACTION, cmdArg.main_fps[csi], 1,
                                     NULL);
         ret = gst_element_link_many(be.src, be.capsfilter, be.teeCrop, NULL);
         if (!ret)

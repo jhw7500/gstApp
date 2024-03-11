@@ -237,7 +237,7 @@ AESClass::AESClass()
 
 AESClass::~AESClass()
 {
-    __LOG(LOG_INFO, "[GST][%s:%d] %s[%d]", _FILE_, __LINE__, __FUNCTION__);
+    __LOG(LOG_INFO, "[GST][%s:%d] %s[%d] %s", _FILE_, __LINE__, __FUNCTION__);
 }
 
 VOID AESClass::AES_ECB_Encrypt(LPCBYTE Input, LPCBYTE Key, LPBYTE Output, int Length) {

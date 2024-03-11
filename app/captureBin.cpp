@@ -151,7 +151,7 @@ CaptureBin::~CaptureBin()
 gint CaptureBin::startCapture(guint8 mode)
 {
     if(mode == 0) captureData.captureMaxCnt = cmdArg.captureMaxCnt;
-    else if(mode == 1) captureData.captureMaxCnt = cmdArg.main_fps*60;
+    else if(mode == 1) captureData.captureMaxCnt = captureData.fps*60;
     else if(mode == 2) captureData.captureMaxCnt = 1;
 
     setFilePath();
@@ -222,6 +222,7 @@ gint CaptureBin::init(guint8 num, gboolean crop_en)
     gint ret = 0;
     GstPad *staticPad;
     captureData.ch = num;
+    captureData.fps = cmdArg.main_fps[num/2];
     //sinkPad = NULL;
     __LOG(LOG_NOTICE, "[GST][%s:%d] %s ch : %d, crop : %s", _FILE_, __LINE__, __FUNCTION__, captureData.ch, crop_en? "enable":"disable");
 
@@ -289,10 +290,10 @@ gint CaptureBin::init(guint8 num, gboolean crop_en)
     //if(cmdArg.rtsp_fps >= 25) g_object_set(re.rate, "max-rate", cmdArg.rtsp_fps, "drop-only", TRUE, NULL);
 
     //g_object_set(re.enc, "bitrate", cmdArg.rtsp_bitrate, NULL);
-    g_object_set(be.queue, "max-size-time", GST_SECOND, "max-size-buffers", cmdArg.main_fps, "leaky", LEAKY_DOWNSTREAM, NULL);
-    g_object_set(be.queue2, "max-size-time", GST_SECOND, "max-size-buffers", cmdArg.main_fps, "leaky", LEAKY_DOWNSTREAM, NULL);
+    g_object_set(be.queue, "max-size-time", GST_SECOND, "max-size-buffers", captureData.fps, "leaky", LEAKY_DOWNSTREAM, NULL);
+    g_object_set(be.queue2, "max-size-time", GST_SECOND, "max-size-buffers", captureData.fps, "leaky", LEAKY_DOWNSTREAM, NULL);
     //g_object_set(re.capsfilter, "max-size-time", 5*GST_SECOND, "max-size-buffers", 60, "leaky", 1, NULL);
-    g_object_set(be.sink, "max-buffers", cmdArg.main_fps, NULL);
+    g_object_set(be.sink, "max-buffers", captureData.fps, NULL);
     g_object_set(be.sink, "drop", TRUE, NULL);
     //g_object_set(pipe->sink, "max-lateness", 1*GST_SECOND, NULL);
     //g_object_set(pipe->sink, "render-delay", 100*GST_MSECOND, NULL);
