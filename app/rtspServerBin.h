@@ -19,6 +19,7 @@
 #include <gst/rtsp-server/rtsp-server.h>
 
 #define DYNAMIC_CAPSx
+#define DEFAULT_RTSP_SESSION_CLEAN_PERIOD   300
 
 gint rtspServerStart();
 void rtspServerStop();
@@ -42,7 +43,9 @@ typedef struct _RtspServerElement
     GstElement *queue2;
     GstElement *convert;
     GstElement *convert2;
+    GstElement *videoflip;
     GstElement *capsfilter;
+    GstElement *capsfilter2;
     GstElement *parse;
     GstElement *bin;
     GstElement *sink;

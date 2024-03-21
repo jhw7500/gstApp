@@ -150,7 +150,6 @@ static void eos_callback(GstAppSink *appsink, gpointer user_data)
 
 static GstFlowReturn new_sample_handler(GstElement *sink, gpointer userData) 
 {
-    
     GstSample *sample;
     GstBuffer *buffer;
     RtspServerData *info = (RtspServerData *)userData;
@@ -171,7 +170,7 @@ static GstFlowReturn new_sample_handler(GstElement *sink, gpointer userData)
         return GST_FLOW_ERROR;
     }
     buffer = gst_sample_get_buffer(sample);
-    gst_sample_unref(sample);
+    //gst_sample_unref(sample);
     if(info->debug)
     {
         GstClockTime timestamp = GST_BUFFER_PTS(buffer);
@@ -192,18 +191,19 @@ static GstFlowReturn new_sample_handler(GstElement *sink, gpointer userData)
     if(info->appsrc == NULL)
     {
         //g_print("appsrc null return!\n");
+        gst_sample_unref(sample);
         return GST_FLOW_OK;
     }
 #endif
 
-
     if (!buffer) {
         __LOG(LOG_CRIT, "[GST][%s:%d] buffer cannot get from sample", _FILE_, __LINE__);
-        //gst_sample_unref(sample);
+        gst_sample_unref(sample);
         return GST_FLOW_ERROR;
     }
 
-    if (!gst_buffer_map(buffer, &map, GST_MAP_READ)){
+    if (!gst_buffer_map(buffer, &map, GST_MAP_READ)) {
+        gst_sample_unref(sample);
         g_printerr("Failed to map buffer\n");
         return GST_FLOW_ERROR;
     }
@@ -221,7 +221,7 @@ static GstFlowReturn new_sample_handler(GstElement *sink, gpointer userData)
     gst_app_src_push_buffer(GST_APP_SRC(info->appsrc), info->buf);
 
     gst_buffer_unmap(buffer, &map);
-    //gst_sample_unref(sample);
+    gst_sample_unref(sample);
 
     return GST_FLOW_OK;
 }
@@ -439,7 +439,10 @@ gint RtspServerBin::init(guint8 ch, gboolean crop_en)
     re.queue = gst_element_factory_make(QUEUE_TYPE, "queue");
     re.queue2 = gst_element_factory_make(QUEUE_TYPE, "queue2");
     re.capsfilter = gst_element_factory_make("capsfilter", "capsfilter");
+    re.capsfilter2 = gst_element_factory_make("capsfilter", "capsfilter2");
     re.convert = gst_element_factory_make("imxvideoconvert_g2d", "convert");
+    re.convert2 = gst_element_factory_make("imxvideoconvert_g2d", "convert2");
+    re.videoflip = gst_element_factory_make("videoflip", "videoflip");
     re.parse = gst_element_factory_make("h264parse", "h264parse");
     re.enc = gst_element_factory_make("vpuenc_h264", "vpuenc_h264");
     re.rate = gst_element_factory_make("videorate", "videorate");
@@ -449,12 +452,14 @@ gint RtspServerBin::init(guint8 ch, gboolean crop_en)
     re.compositor = gst_element_factory_make("imxcompositor_g2d", "compositor");
 
     if (!re.bin || !re.queue || !re.capsfilter || !re.parse || !re.enc || !re.rate || !re.sink || !re.convert || !re.queue2 || !re.crop \
-        || !re.overlay || !re.compositor) {
+        || !re.overlay || !re.compositor || !re.convert2 || !re.capsfilter2 || !re.videoflip) {
         __LOG(LOG_CRIT, "[GST][%s:%d] rtsp element create error", _FILE_, __LINE__);
         return ret;
     }
 
-    gst_bin_add_many(GST_BIN(re.bin), re.queue, re.rate, re.convert, re.enc, re.parse, re.queue2, re.sink, re.capsfilter, re.crop, re.overlay, re.compositor, NULL);
+    gst_bin_add_many(GST_BIN(re.bin), re.queue, re.rate, re.convert, re.enc, re.parse, re.queue2, re.sink, re.capsfilter, re.crop, re.overlay, NULL);
+    
+    //gst_bin_add_many(GST_BIN(re.bin), re.convert2, re.compositor, re.capsfilter2, re.videoflip, NULL);
 
     ret = gst_bin_add(GST_BIN(pipeline), re.bin);
     if(!ret) {
@@ -486,6 +491,22 @@ gint RtspServerBin::init(guint8 ch, gboolean crop_en)
     g_object_set(re.capsfilter, "caps", caps, NULL);
     gst_caps_unref(caps);
 
+    //if(ch==1) g_object_set(re.convert, "rotation", 1, NULL);
+    //if(ch==3) g_object_set(re.compositor, "rotate", 1, NULL);
+    //if(ch==3) g_object_set(re.videoflip, "video-direction", 1, NULL);
+#if 0
+    if(ch==1)
+    {
+        
+        caps = gst_caps_new_simple("video/x-raw",
+                                    "width", G_TYPE_INT, cmdArg.height,
+                                    "height", G_TYPE_INT, cmdArg.width,
+                                    NULL);
+        g_object_set(re.capsfilter2, "caps", caps, NULL);
+        gst_caps_unref(caps);
+    }
+#endif
+
     if (rtspServerData.ch % 2 == 0)
         g_object_set(re.crop, "top", 0, "bottom", 0, "left", cmdArg.width, "right", 0, NULL);
         //g_object_set(re.crop, "top", 0, "bottom", 0, "left", cmdArg.res[cmdArg.resMode].width, "right", 0, NULL);
@@ -508,6 +529,7 @@ gint RtspServerBin::init(guint8 ch, gboolean crop_en)
     //g_object_set(pipe->sink, "max-lateness", 1*GST_SECOND, NULL);
     //g_object_set(pipe->sink, "render-delay", 100*GST_MSECOND, NULL);
     g_object_set(re.sink, "emit-signals", TRUE, "sync", FALSE, NULL);
+
     g_signal_connect(re.sink, "eos", G_CALLBACK(eos_callback), NULL);
     g_signal_connect(re.sink, "new-sample", G_CALLBACK(new_sample_handler), &rtspServerData);
     g_signal_connect(re.sink, "new-preroll", G_CALLBACK(new_preroll_handler), &rtspServerData);
@@ -572,7 +594,7 @@ gint rtspServerStart()
 
     rtspMounts = gst_rtsp_server_get_mount_points (rtspServer);
 
-    cleanRtsp_id = g_timeout_add_seconds (600, (GSourceFunc) cleanRtspSession, rtspServer);
+    cleanRtsp_id = g_timeout_add_seconds (DEFAULT_RTSP_SESSION_CLEAN_PERIOD, (GSourceFunc) cleanRtspSession, rtspServer);
 
     g_signal_connect(rtspServer, "client-connected", G_CALLBACK(handle_client_connected), NULL);
 

@@ -40,7 +40,7 @@ void ParserClass::init_arg(gchar *argv)
     arg.width = DEFAULT_WIDTH;
     arg.height = DEFAULT_HEIGHT;
 
-    arg.ioMode = IO_USERPTR;
+    arg.ioMode = IO_AUTO;
     arg.levelMode = MODE_NORMAL;
     arg.dotDir = DEFAULT_DOT_PATH;
     arg.captureDir = DEFAULT_CAPTURE_PATH;

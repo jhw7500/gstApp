@@ -23,8 +23,7 @@
 #include <fcntl.h>
 //#include <signal.h>
 
-#define GST_API_VERSION "1.0"
-#define APP_VERSION "0.2"
+#define APP_VERSION "0.3"
 
 #define SEGFAULT_DEBUG
 #define RECORDBIN_ENABLE
@@ -512,7 +511,7 @@ gint config_camera(CsiNum csiNum)
         if (system(cmd) < 0)
             __LOG(LOG_ERR, "[CFG][%s:%d] ch%d rotation fail", __FILE__, __LINE__, ch_num1);
 
-        cmd = g_strdup_printf("i2cwrite %d 0x12 0x5002 0x%04x", i ? 1 : 2, cmdArg.camConfig[ch_num1].ae_on? 0x299:0x290);
+        cmd = g_strdup_printf("i2cwrite %d 0x12 0x5002 %s", i ? 1 : 2, cmdArg.camConfig[ch_num1].ae_on? "0x0299":"0x0290");
         __LOG(LOG_NOTICE, "[CFG][%s:%d] ch%d cmd : %s", _FILE_, __LINE__, ch_num1, cmd);
         if (system(cmd) < 0)
             __LOG(LOG_ERR, "[CFG][%s:%d] ch%d ae_on fail", __FILE__, __LINE__, ch_num1);
@@ -521,18 +520,18 @@ gint config_camera(CsiNum csiNum)
         __LOG(LOG_NOTICE, "[CFG][%s:%d] ch%d cmd : %s", _FILE_, __LINE__, ch_num1, cmd);
         if (system(cmd) < 0)
             __LOG(LOG_ERR, "[CFG][%s:%d] ch%d ae_gain fail", __FILE__, __LINE__, ch_num1);
-
+#if 1
         cmd = g_strdup_printf("i2cwrite %d 0x12 0x500c 0x%08x", i ? 1 : 2, cmdArg.camConfig[ch_num1].exp_time);
         __LOG(LOG_NOTICE, "[CFG][%s:%d] ch%d cmd : %s", _FILE_, __LINE__, ch_num1, cmd);
         if (system(cmd) < 0)
             __LOG(LOG_ERR, "[CFG][%s:%d] ch%d exp_time fail", __FILE__, __LINE__, ch_num1);
-
+#endif
         cmd = g_strdup_printf("i2cwrite %d 0x11 0x100c 0x%04x", i ? 1 : 2, (cmdArg.ch_rotate >> (i * 4)) & 0x03);
         __LOG(LOG_NOTICE, "[CFG][%s:%d] ch%d cmd : %s", _FILE_, __LINE__, ch_num0, cmd);
         if (system(cmd) < 0)
             __LOG(LOG_ERR, "[CFG][%s:%d] ch%d rotation fail", __FILE__, __LINE__, ch_num0);
 
-        cmd = g_strdup_printf("i2cwrite %d 0x11 0x5002 0x%04x", i ? 1 : 2, cmdArg.camConfig[ch_num0].ae_on? 0x299:0x290);
+        cmd = g_strdup_printf("i2cwrite %d 0x11 0x5002 %s", i ? 1 : 2, cmdArg.camConfig[ch_num0].ae_on? "0x0299":"0x0290");
         __LOG(LOG_NOTICE, "[CFG][%s:%d] ch%d cmd : %s", _FILE_, __LINE__, ch_num0, cmd);
         if (system(cmd) < 0)
             __LOG(LOG_ERR, "[CFG][%s:%d] ch%d ae_on fail", __FILE__, __LINE__, ch_num0);
@@ -541,11 +540,12 @@ gint config_camera(CsiNum csiNum)
         __LOG(LOG_NOTICE, "[CFG][%s:%d] ch%d cmd : %s", _FILE_, __LINE__, ch_num0, cmd);
         if (system(cmd) < 0)
             __LOG(LOG_ERR, "[CFG][%s:%d] ch%d ae_gain fail", __FILE__, __LINE__, ch_num0);
-
+#if 1
         cmd = g_strdup_printf("i2cwrite %d 0x11 0x500c 0x%08x", i ? 1 : 2, cmdArg.camConfig[ch_num0].exp_time);
         __LOG(LOG_NOTICE, "[CFG][%s:%d] ch%d cmd : %s", _FILE_, __LINE__, ch_num0, cmd);
         if (system(cmd) < 0)
             __LOG(LOG_ERR, "[CFG][%s:%d] ch%d exp_time fail", __FILE__, __LINE__, ch_num0);
+#endif
     }
     else
     {
@@ -583,7 +583,7 @@ gint config_camera(CsiNum csiNum)
             if (val[ch_num0] == 0)
                 __LOG(LOG_ERR, "[CFG][%s:%d] swap : ch%d enable but ch%d display", _FILE_, __LINE__, ch_num0, ch_num1);
 
-            cmd = g_strdup_printf("i2cwrite %d 0x3c 0x5002 0x%04x", i ? 1 : 2, cmdArg.camConfig[ch_num0].ae_on? 0x299:0x290);
+            cmd = g_strdup_printf("i2cwrite %d 0x3c 0x5002 %s", i ? 1 : 2, cmdArg.camConfig[ch_num0].ae_on? "0x0299":"0x0290");
             __LOG(LOG_NOTICE, "[CFG][%s:%d] ch%d cmd : %s", _FILE_, __LINE__, ch_num0, cmd);
             if (system(cmd) < 0)
                 __LOG(LOG_ERR, "[CFG][%s:%d] ch%d ae_on fail", __FILE__, __LINE__, ch_num0);
@@ -608,7 +608,7 @@ gint config_camera(CsiNum csiNum)
             if (val[ch_num1] == 0)
                 __LOG(LOG_ERR, "[CFG][%s:%d] swap : ch%d enable but ch%d display", _FILE_, __LINE__, ch_num1, ch_num0);
 
-            cmd = g_strdup_printf("i2cwrite %d 0x3c 0x5002 0x%04x", i ? 1 : 2, cmdArg.camConfig[ch_num1].ae_on? 0x299:0x290);
+            cmd = g_strdup_printf("i2cwrite %d 0x3c 0x5002 %s", i ? 1 : 2, cmdArg.camConfig[ch_num1].ae_on? "0x0299":"0x0290");
             __LOG(LOG_NOTICE, "[CFG][%s:%d] ch%d cmd : %s", _FILE_, __LINE__, ch_num1, cmd);
             if (system(cmd) < 0)
                 __LOG(LOG_ERR, "[CFG][%s:%d] ch%d ae_on fail", __FILE__, __LINE__, ch_num1);

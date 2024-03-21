@@ -19,7 +19,6 @@
 #include <stdio.h>
 
 #define GST_API_VERSION "1.0"
-#define APP_VERSION "0.2"
 
 #define CHANNEL_EACH_CROP
 #define DEBUG_TIMESTAMP
