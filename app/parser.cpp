@@ -60,6 +60,8 @@ void ParserClass::init_arg(gchar *argv)
     arg.tcp_en = FALSE;
     arg.tcp_port = DEFAULT_TCP_PORT;
 
+    arg.i2cConfig[CSI_1].exp_time = DEFAULT_EXP_TIME;
+    arg.i2cConfig[CSI_2].exp_time = DEFAULT_EXP_TIME;
     for(guint8 i=0; i<MAX_CHANNEL; i++)
     {
         arg.camConfig[i].enable = FALSE;
@@ -158,21 +160,21 @@ gint ParserClass::json_object_get_value(json_object *hobj, const gchar *name, gp
             }
             else if(type == json_type_null)
             {
-                __LOG(LOG_ERR, "[%s][%s:%d] not exist : %s", LOG_KEY, _FILE_, __LINE__, name);
+                __LOG(LOG_ERR, "[CFG][%s:%d] not exist : %s", _FILE_, __LINE__, name);
             }
             else
             {
-                __LOG(LOG_ERR, "[%s][%s:%d] unsupport type : %d", LOG_KEY, _FILE_, __LINE__, type);
+                __LOG(LOG_ERR, "[CFG][%s:%d] unsupport type : %d", _FILE_, __LINE__, type);
             }
         }
     }
     else if(type == json_type_null)
     {
-        __LOG(LOG_ERR, "[%s][%s:%d] not exist : %s", LOG_KEY, _FILE_, __LINE__, name);
+        __LOG(LOG_ERR, "[CFG][%s:%d] not exist : %s", _FILE_, __LINE__, name);
     }
     else
     {
-        __LOG(LOG_ERR, "[%s][%s:%d] unsupport type : %d", LOG_KEY, _FILE_, __LINE__, type);
+        __LOG(LOG_ERR, "[CFG][%s:%d] unsupport type : %d", _FILE_, __LINE__, type);
     }
 
     //ret = json_object_put(vobj);
@@ -204,6 +206,7 @@ gint ParserClass::json_parser(const gchar *path, const gchar *header)
 
 	json_object *jobj = NULL;
     json_object *hobj = NULL;
+    json_object *sobj = NULL;
     json_object *vobj = NULL;
 	//const gchar* ptr;
 	gchar* json_file;
@@ -255,14 +258,17 @@ gint ParserClass::json_parser(const gchar *path, const gchar *header)
 #endif
         for(guint8 i=0; i<MAX_CHANNEL; i++)
         {
-            vobj = json_object_object_get(hobj, g_strdup_printf("ch%d", i));
+            sobj = json_object_object_get(hobj, g_strdup_printf("i2c%d", i/2? 1:2));
+            json_object_get_value(sobj, "exp_time", &arg.i2cConfig[i/2].exp_time);
+            arg.camConfig[i].exp_time = arg.i2cConfig[i/2].exp_time;
+            vobj = json_object_object_get(sobj, g_strdup_printf("ch%d", i));
             json_object_get_value(vobj, "enable", &arg.camConfig[i].enable);
             json_object_get_value(vobj, "hflip", &arg.camConfig[i].hflip);
             json_object_get_value(vobj, "vflip", &arg.camConfig[i].vflip);
             json_object_get_value(vobj, "bps", &arg.camConfig[i].bps);
             json_object_get_value(vobj, "ae_on", &arg.camConfig[i].ae_on);
             json_object_get_value(vobj, "ae_gain", &arg.camConfig[i].ae_gain);
-            json_object_get_value(vobj, "exp_time", &arg.camConfig[i].exp_time);
+            //json_object_get_value(vobj, "exp_time", &arg.camConfig[i].exp_time);
             //json_object_get_value(vobj, "gop", &arg.camConfig[i].gop);
             //json_object_get_value(vobj, "awb", &arg.camConfig[i].awb);
             //json_object_get_value(vobj, "lsc", &arg.camConfig[i].lsc);

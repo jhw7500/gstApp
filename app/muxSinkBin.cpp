@@ -114,6 +114,11 @@ gboolean MuxSinkBin::splitNow(gpointer data, gboolean timer_en)
     return TRUE;
 }
 
+void MuxSinkBin::setSplitMsec(gint msec)
+{
+    muxSinkData.split_msec = msec;
+}
+
 gint MuxSinkBin::getSplitMsec()
 {
     return muxSinkData.split_msec;

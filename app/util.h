@@ -123,10 +123,15 @@ typedef struct {
     const gchar *awb;
 } CamConfig;
 
+typedef struct {
+    guint32 exp_time;
+} I2cConfig;
+
 typedef struct _CmdArg
 {
     LevelMode levelMode;
     IoMode ioMode;
+    I2cConfig i2cConfig[MAX_VIDEO_SRC];
     CamConfig camConfig[MAX_CHANNEL];
     gboolean hflip[MAX_CHANNEL];
     gboolean vflip[MAX_CHANNEL];

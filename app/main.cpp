@@ -23,7 +23,7 @@
 #include <fcntl.h>
 //#include <signal.h>
 
-#define APP_VERSION "0.3"
+#define APP_VERSION "0.4"
 
 #define SEGFAULT_DEBUG
 #define RECORDBIN_ENABLE
@@ -376,11 +376,13 @@ static void splitCheck(gpointer data, guint8 startSec)
             __LOG(LOG_INFO, "[GST][%s:%d] splitMsec[%d] : %d", _FILE_, __LINE__, i, splitMsec);
             if (splitMsec > splitMax) splitMax = splitMsec;
             if (splitMsec < splitMin) splitMin = splitMsec;
+
+            muxSinkBin[i].setSplitMsec(DEFAULT_SPLIT_MAX_MSEC);
         }
     }
     __LOG(LOG_NOTICE, "[GST][%s:%d] splitMax : %d, splitMin : %d", _FILE_, __LINE__, splitMax, splitMin);
 
-    if (splitMax - splitMin > cmdArg.split_diff_msec || splitMax > cmdArg.split_max_msec)
+    if (splitMax - splitMin >= cmdArg.split_diff_msec || splitMax >= cmdArg.split_max_msec)
     {
         gchar *str = g_strdup_printf("echo '%s' > %s &", g_date_time_format(g_date_time_new_now_local(), "%Y%m%d %H:%M:%S"), DEFAULT_START_VIDEO_TIME_PATH);
 

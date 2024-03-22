@@ -44,6 +44,7 @@ public :
     gboolean addBinVideoSinkPad();
     guint8 getStartFlag();
     gint getSplitMsec();
+    void setSplitMsec(gint msec);
     //gchararray format_location(GstElement *sink, guint arg0, gpointer data);
 private :
     //static gchararray format_location(GstElement *sink, guint arg0, gpointer data);
