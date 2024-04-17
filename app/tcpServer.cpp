@@ -173,22 +173,12 @@ int CTCPServer::destroy()
 	int ret;
 	m_flagDestroy = 1;
 
-	__LOG(LOG_EMERG, "[SYS][%s:%d] call server destroy", _FILE_, __LINE__);
+	__LOG(LOG_EMERG, "[SYS][%s:%d] tcp server destroy", _FILE_, __LINE__);
 
 	// away server thread.
 	//write(m_pipe[1], &ret, 1) ;
 
 	void* nStatus;
-	if(m_threadConnect > 0) {
-		ret = pthread_join(m_threadConnect, &nStatus);
-		if(ret < 0) __LOG(LOG_CRIT, "[TCP][%s:%d] ret:%d", _FILE_, __LINE__, ret);
-	}
-
-	if(m_threadSend > 0)
-	{
-		ret = pthread_join(m_threadSend, &nStatus);
-		if(ret < 0) __LOG(LOG_CRIT, "[TCP][%s:%d] ret:%d", _FILE_, __LINE__, ret);
-	}
 
 	//close(m_pipe[0]) ;
 	//close(m_pipe[1]) ;
@@ -202,6 +192,19 @@ int CTCPServer::destroy()
 		ret = close(m_clientSocket);
 		if(ret < 0) __LOG(LOG_CRIT, "[TCP][%s:%d] ret:%d", _FILE_, __LINE__, ret);
 	}
+
+	if(m_threadSend > 0)
+	{
+		ret = pthread_join(m_threadSend, &nStatus);
+		if(ret < 0) __LOG(LOG_CRIT, "[TCP][%s:%d] ret:%d", _FILE_, __LINE__, ret);
+	}
+	
+#if 0
+	if(m_threadConnect > 0) {
+		ret = pthread_join(m_threadConnect, &nStatus);
+		if(ret < 0) __LOG(LOG_CRIT, "[TCP][%s:%d] ret:%d", _FILE_, __LINE__, ret);
+	}
+#endif
 
 	return 0;
 }
@@ -404,7 +407,7 @@ int CTCPServer::parseRecvData(int fd, char* data, int len, void* pData)
     //ThreadArgs *thraedArgs = (ThreadArgs *)pData;
 
 	ParserClass* parser = ParserClass::getInstance();
-	parser->cmd_parser(data, pData);
+	parser->cmd_parser(data, len, pData);
 
     return ret;
 }

@@ -18,6 +18,7 @@
 typedef struct _MuxSinkElement
 {
     GstElement *sink;
+    GstElement *mp4mux;
     GstElement *bin;
 } MuxSinkElement;
 
@@ -32,8 +33,7 @@ class MuxSinkBin
 {
 public :
 	static MuxSinkBin* getInstance();
-	gint init(guint8 num) ;
-	gint destroy() ;
+	gboolean init(guint8 num) ;
     MuxSinkBin();
     ~MuxSinkBin();
     GstPad* getBinPad();

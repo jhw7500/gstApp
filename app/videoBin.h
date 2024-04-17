@@ -27,12 +27,14 @@ typedef struct _VideoElement
     GstElement *teeCrop;
     GstElement *capsfilter;
     GstElement *convert;
+    GstElement *rate;
     GstElement *convert2[MAX_CHANNEL/2];
     GstElement *crop[MAX_CHANNEL/2];
     GstElement *tee[MAX_CHANNEL/2];
     GstElement *overlay[MAX_CHANNEL/2];
     GstElement *queue[MAX_CHANNEL/2];
     GstElement *queue_main;
+    GstElement *deinterlace;
     GstElement *bin;
 } VideoElement;
 
@@ -42,15 +44,14 @@ public :
 	static VideoBin* getInstance();
     VideoBin();
     ~VideoBin();
-	gint init(CsiNum num, gboolean crop_en) ;
-	gint destroy() ;
-    gint addCrop(CropDir dir);
-    gint addBinRtspSrcPad(ChannelNum ch);
-    gint addBinRecordSrcPad(ChannelNum ch);
-    gint addBinCaptureSrcPad(ChannelNum ch);
-    GstPad* getBinRtspSrcPad(ChannelNum ch);
-    GstPad* getBinRecordSrcPad(ChannelNum ch);
-    GstPad* getBinCaptureSrcPad(ChannelNum ch);
+	gboolean init(guint8 num, gboolean crop_en) ;
+    gboolean addCrop(CropDir dir);
+    gboolean addBinRtspSrcPad(guint8 ch);
+    gboolean addBinRecordSrcPad(guint8 ch);
+    gboolean addBinCaptureSrcPad(guint8 ch);
+    GstPad* getBinRtspSrcPad(guint8 ch);
+    GstPad* getBinRecordSrcPad(guint8 ch);
+    GstPad* getBinCaptureSrcPad(guint8 ch);
     void getIoMode();
     void setIoMode(guint16 data);
 

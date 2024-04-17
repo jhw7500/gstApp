@@ -25,15 +25,14 @@ class TestBin
 {
 public :
 	static TestBin* getInstance();
-	gint init() ;
+	gboolean init() ;
     TestBin();
     TestBin(gboolean x);
     ~TestBin();
-	gint destroy() ;
-    gint addElement(const gchar* firstStr, ...);
-    gint linkElement();
+    void addElement(const gchar* firstStr, ...);
+    gboolean linkElement();
     GstPad* getBinSrcPad(guint8 ch);
-    gint addBinSrcPad(guint8 ch);
+    gboolean addBinSrcPad(guint8 ch);
 
 private :
 	

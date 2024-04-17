@@ -14,14 +14,11 @@
 #define _RTSPSERVER_H_
 
 #include "util.h"
-#include <gst/app/gstappsrc.h>
-#include <gst/app/gstappsink.h>
-#include <gst/rtsp-server/rtsp-server.h>
 
 #define DYNAMIC_CAPSx
 #define DEFAULT_RTSP_SESSION_CLEAN_PERIOD   300
 
-gint rtspServerStart();
+guint rtspServerStart();
 void rtspServerStop();
 
 typedef struct _RtspServerData
@@ -60,8 +57,7 @@ public :
 	static RtspServerBin* getInstance() ;
     RtspServerBin();
     ~RtspServerBin();
-	gint init(guint8 num, gboolean crop_en) ;
-	gint destroy() ;
+	gboolean init(guint8 num, gboolean crop_en) ;
     GstPad* getBinSinkPad();
     gboolean getStartFlag();
     void getBitrate();
@@ -79,16 +75,18 @@ public :
     void setkeyframe(guint16 data);
     GstStateChangeReturn setState(GstState state);
     GstState getState();
+    gboolean addBinToPipe(GstElement *pipe);
+    gboolean removeBinToPipe(GstElement *pipe);
 
 private :
 	
 public :
 	gboolean m_flagDestroy;
+    RtspServerElement re;
     //GstPad *sinkPad;
     //GstElement *pipeline[2];
 	
 private :
-    RtspServerElement re;
     GstPad *sinkPad;
     RtspServerData rtspServerData;
 };

@@ -48,14 +48,6 @@ typedef enum
 
 typedef enum
 {
-    CH0 = 0,
-    CH1 = 1,
-    CH2 = 2,
-    CH3 = 3
-} ChannelNum;
-
-typedef enum
-{
     CROP_L = 0,
     CROP_R = 1
 } CropDir;
@@ -153,6 +145,7 @@ typedef struct _CmdArg
     gboolean fault;
     gint duration;
     gboolean capture_encoder_en;
+    gboolean capture_always;
     gboolean tcp_en;
     gint tcp_port;
     gboolean audio_en;
@@ -160,6 +153,7 @@ typedef struct _CmdArg
     gint captureMaxCnt;
     gint split_diff_msec;
     gint split_max_msec;
+    gint split_sec;
     gboolean input_en;
     const gchar *rtsp_port;
     const gchar *captureDir;
@@ -168,12 +162,14 @@ typedef struct _CmdArg
     gboolean overlay_en;
     gint width;
     gint height;
+    gboolean crop_en[2];
 } CmdArg;
 
 #pragma pack(pop)
 
 //extern gchar *program_name;
 extern GstElement *pipeline;
+extern GstElement *pipeline2;
 extern GMainLoop *loop;
 extern volatile sig_atomic_t is_interrupted;
 extern CmdArg cmdArg;
@@ -184,8 +180,8 @@ void addSignalHandler();
 void removeSignalHandler();
 void mylog(gint opt, const gchar* _szfmt, ... );
 void log_once(gint opt, const gchar *message);
-guint charArrayToInt(gchar *arr);
-gboolean compareBuf(guint8 *cmp1, guint8 *cmp2, guint8 len);
+gint charArrayToInt(gchar *arr);
+gboolean compareBuf(const gchar *cmp1, const gchar *cmp2, guint8 len);
 GstPadProbeReturn probe_function(GstPad *pad, GstPadProbeInfo *info, gpointer user_data);
 gboolean print_delay(GstPad *pad, GstObject *parent, GstBuffer *buffer);
 gchar *search_file(const gchar* path, const gchar* prefix, const gchar* suffix);

@@ -52,11 +52,13 @@ void ParserClass::init_arg(gchar *argv)
     arg.overlay_en = FALSE;
     arg.split_diff_msec = DEFAULT_SPLIT_DIFF_MSEC;
     arg.split_max_msec = DEFAULT_SPLIT_MAX_MSEC;
+    arg.split_sec = DEFAULT_SPLIT_SEC;
     arg.stream_en[STREAM_REC] = TRUE;
     arg.stream_en[STREAM_RTSP] = TRUE;
     arg.stream_en[STREAM_CAP] = FALSE;
 
     arg.capture_encoder_en = FALSE;
+    arg.capture_always = FALSE;
     arg.tcp_en = FALSE;
     arg.tcp_port = DEFAULT_TCP_PORT;
 
@@ -324,19 +326,16 @@ gint ParserClass::arg_parser(int *argc, char **argv[])
         {"mnt", 'O', 0, G_OPTION_ARG_STRING, &arg.mntDir, "save video & audio file to directory, default(/mnt/sd_cam)", "STRING"},
         {"width", 'w', 0, G_OPTION_ARG_INT, &arg.width, "cam width HD(1280), FHD(1920), default(1920)", "INT"},
         {"height", 'h', 0, G_OPTION_ARG_INT, &arg.height, "cam height HD(720), FHD(1080), default(1080)", "INT"},
-        {"fmain1", 'M', 0, G_OPTION_ARG_INT, &arg.main_fps[CSI_1], "csi1 main frame per second, default(15)", "INT"},
-        {"fmain2", 'M', 0, G_OPTION_ARG_INT, &arg.main_fps[CSI_2], "csi2 main frame per second, default(15)", "INT"},
         {"oht", 'n', 0, G_OPTION_ARG_STRING, &arg.ohtName, "oht name, default(APPNAME)", "STRING"},
         {"delay", 'd', 0, G_OPTION_ARG_INT, &arg.play_delay, "from pause to play delay, default(0)", "SECOND"},
-        {"fault", 0, 0, G_OPTION_ARG_INT, &arg.fault, "no fault setup, default(FALSE)", "INT"},
         {"duration", 't', 0, G_OPTION_ARG_INT, &arg.duration, "recoding file split duration, default(1)", "MINUTE"},
-        {"erec", 'e', 0, G_OPTION_ARG_INT, &arg.stream_en[STREAM_REC], "video recording enable, default(1)", "INT"},
-        {"ertsp", 'E', 0, G_OPTION_ARG_INT, &arg.stream_en[STREAM_RTSP], "rtsp streaming enable, default(1)", "INT"},
-        {"ecap", 'a', 0, G_OPTION_ARG_INT, &arg.stream_en[STREAM_CAP], "video capturing enable, default(0)", "INT"},
-        {"eaudio", 's', 0, G_OPTION_ARG_INT, &arg.audio_en, "audio recording enable, default(FALSE)", "INT"},
-        {"ecapenc", 'N', 0, G_OPTION_ARG_INT, &arg.capture_encoder_en, "video capture encoder(jpeg) enable, default(FALSE)", "INT"},
+        {"rec", 'e', 0, G_OPTION_ARG_INT, &arg.stream_en[STREAM_REC], "video recording enable, default(1)", "INT"},
+        {"rtsp", 'E', 0, G_OPTION_ARG_INT, &arg.stream_en[STREAM_RTSP], "rtsp streaming enable, default(1)", "INT"},
+        {"cap", 'a', 0, G_OPTION_ARG_INT, &arg.stream_en[STREAM_CAP], "video capturing enable, default(0)", "INT"},
+        {"audio", 's', 0, G_OPTION_ARG_INT, &arg.audio_en, "audio recording enable, default(FALSE)", "INT"},
+        {"capenc", 'N', 0, G_OPTION_ARG_INT, &arg.capture_encoder_en, "video capture encoder(jpeg) enable, default(FALSE)", "INT"},
+        {"capalways", 'y', 0, G_OPTION_ARG_INT, &arg.capture_always, "video capture bin always add, default(FALSE)", "INT"},
         {"etcp", 'C', 0, G_OPTION_ARG_INT, &arg.tcp_en, "tcp server enable, default(FALSE)", "INT"},
-        {"tcp_port", 0, 0, G_OPTION_ARG_INT, &arg.tcp_port, "tcp port num, default(8555)", "INT"},
         {"ein", 'i', 0, G_OPTION_ARG_INT, &arg.input_en, "terminal input enable, default(FALSE)", "INT"},
         {"port", 'P', 0, G_OPTION_ARG_STRING, &arg.rtsp_port, "rtsp port number, default(8554)", "STRING"},
         {"id", 'u', 0, G_OPTION_ARG_STRING, &arg.rtsp_id, "rtsp id, default(user)", "STRING"},
@@ -345,6 +344,11 @@ gint ParserClass::arg_parser(int *argc, char **argv[])
         {"eover", 'v', 0, G_OPTION_ARG_INT, &arg.overlay_en, "overlay enable, default(FALSE)", "INT"},
         {"split_diff", 'D', 0, G_OPTION_ARG_INT, &arg.split_diff_msec, "split diff msec, default(100)", "INT"},
         {"split_max", 'X', 0, G_OPTION_ARG_INT, &arg.split_max_msec, "split max msec, default(2000)", "INT"},
+        {"split_sec", 'S', 0, G_OPTION_ARG_INT, &arg.split_sec, "split sec, default(0)", "INT"},
+        {"fault", 0, 0, G_OPTION_ARG_INT, &arg.fault, "no fault setup, default(FALSE)", "INT"},
+        {"tcp_port", 0, 0, G_OPTION_ARG_INT, &arg.tcp_port, "tcp port num, default(8555)", "INT"},
+        {"fmain0", 0, 0, G_OPTION_ARG_INT, &arg.main_fps[CSI_1], "csi1 main frame per second, default(15)", "INT"},
+        {"fmain1", 0, 0, G_OPTION_ARG_INT, &arg.main_fps[CSI_2], "csi2 main frame per second, default(15)", "INT"},
         {"frec0", 0, 0, G_OPTION_ARG_INT, &arg.fps[STREAM_REC][0], "ch0 record frame per second, default(15)", "INT"},
         {"frec1", 0, 0, G_OPTION_ARG_INT, &arg.fps[STREAM_REC][1], "ch1 record frame per second, default(15)", "INT"},
         {"frec2", 0, 0, G_OPTION_ARG_INT, &arg.fps[STREAM_REC][2], "ch2 record frame per second, default(15)", "INT"},
@@ -501,27 +505,27 @@ gint ParserClass::check_arg()
     __LOG(LOG_NOTICE, "[%s][%s:%d] chEn:0x%x, recEn:%d, rtspEn:%d, capEn:%d, audoEn:%d, inputEn:%d, overlayEn:%d tcpEn:%d", \
                         LOG_KEY, _FILE_, __LINE__, arg.ch_enable, arg.stream_en[STREAM_REC], arg.stream_en[STREAM_RTSP], arg.stream_en[STREAM_CAP], \
                         arg.audio_en, arg.input_en, arg.overlay_en, arg.tcp_en);
-    __LOG(LOG_NOTICE, "[%s][%s:%d] rtspID:%s, rtspPW:%s, rtspPort:%s, splitMargin:%d, splitMax:%d", LOG_KEY, _FILE_, __LINE__, \
-                        arg.rtsp_id, arg.rtsp_passwd, arg.rtsp_port, arg.split_diff_msec, arg.split_max_msec);
+    __LOG(LOG_NOTICE, "[%s][%s:%d] rtspID:%s, rtspPW:%s, rtspPort:%s, splitSec:%d, splitMargin:%d, splitMax:%d", LOG_KEY, _FILE_, __LINE__, \
+                        arg.rtsp_id, arg.rtsp_passwd, arg.rtsp_port, arg.split_sec, arg.split_diff_msec, arg.split_max_msec);
 
     if(arg.stream_en[STREAM_REC]) 
     {
-        __LOG(LOG_NOTICE, "[%s][%s:%d] rec ch0 fps:%d, rec ch1 fps:%d, rec ch2 fps:%d, rec ch3 fps:%d", LOG_KEY, _FILE_, __LINE__, \
+        __LOG(LOG_NOTICE, "[%s][%s:%d] rec ch0 fps:%d, ch1 fps:%d, ch2 fps:%d, ch3 fps:%d", LOG_KEY, _FILE_, __LINE__, \
                             arg.fps[STREAM_REC][0], arg.fps[STREAM_REC][1], arg.fps[STREAM_REC][2], arg.fps[STREAM_REC][3]);  
     }
 
     if(arg.stream_en[STREAM_RTSP])
     {
-        __LOG(LOG_NOTICE, "[%s][%s:%d] rtsp ch0 fps:%d, rtsp ch1 fps:%d, rtsp ch2 fps:%d, rtsp ch3 fps:%d", LOG_KEY, _FILE_, __LINE__, \
+        __LOG(LOG_NOTICE, "[%s][%s:%d] rtsp ch0 fps:%d, ch1 fps:%d, ch2 fps:%d, ch3 fps:%d", LOG_KEY, _FILE_, __LINE__, \
                             arg.fps[STREAM_RTSP][0], arg.fps[STREAM_RTSP][1], arg.fps[STREAM_RTSP][2], arg.fps[STREAM_RTSP][3]);  
     }
 
     if(arg.stream_en[STREAM_CAP])
     {
-        __LOG(LOG_NOTICE, "[%s][%s:%d] capture ch0 fps:%d, capture ch1 fps:%d, capture ch2 fps:%d, capture ch3 fps:%d", LOG_KEY, _FILE_, __LINE__, \
+        __LOG(LOG_NOTICE, "[%s][%s:%d] capture ch0 fps:%d, ch1 fps:%d, ch2 fps:%d, ch3 fps:%d", LOG_KEY, _FILE_, __LINE__, \
                             arg.fps[STREAM_CAP][0], arg.fps[STREAM_CAP][1], arg.fps[STREAM_CAP][2], arg.fps[STREAM_CAP][3]);  
-        __LOG(LOG_NOTICE, "[%s][%s:%d] capEncEn:%d captureMaxCnt:%d, capDir:%s", LOG_KEY, _FILE_, __LINE__, \
-                            arg.capture_encoder_en, arg.captureMaxCnt, arg.captureDir);
+        __LOG(LOG_NOTICE, "[%s][%s:%d] capEncEn:%d captureAlways:%d, captureMaxCnt:%d, capDir:%s", LOG_KEY, _FILE_, __LINE__, \
+                            arg.capture_encoder_en, arg.capture_always, arg.captureMaxCnt, arg.captureDir);
     }
 
     if(arg.tcp_en) __LOG(LOG_NOTICE, "[%s][%s:%d] tcpPort:%d", LOG_KEY, _FILE_, __LINE__, arg.tcp_port);
@@ -531,9 +535,6 @@ gint ParserClass::check_arg()
             LOG_KEY, _FILE_, __LINE__, i, arg.camConfig[i].enable? "true":"false",  arg.camConfig[i].vflip? "true":"false", arg.camConfig[i].hflip? "true":"false", \
             arg.camConfig[i].bps[STREAM_REC], arg.camConfig[i].bps[STREAM_RTSP], arg.camConfig[i].ae_on, arg.camConfig[i].ae_gain, arg.camConfig[i].exp_time);
 
-        //__LOG(LOG_NOTICE, "[%s][%s:%d] gop:%d,%d, awb:%s, iso:%d, lsc:%d", LOG_KEY, _FILE_, __LINE__, \
-            arg.camConfig[i].gop[STREAM_REC], arg.camConfig[i].gop[STREAM_RTSP], arg.camConfig[i].awb, arg.camConfig[i].iso, arg.camConfig[i].lsc);
-        //__LOG(LOG_NOTICE, "[%s][%s:%d] cam_en[%d]:%d, vflip[%d]:%d, hflip[%d]:%d", LOG_KEY, _FILE_, __LINE__, i, arg.cam_en[i], i, arg.vflip[i], i, arg.hflip[i]);
         if(arg.camConfig[i].bps[STREAM_REC] < 1 || arg.camConfig[i].bps[STREAM_RTSP] < 1) {
             __LOG(LOG_CRIT, "[%s][%s:%d] rec bps %d, rtsp bps %d not supported", LOG_KEY, _FILE_, __LINE__, \
                     arg.camConfig[i].bps[STREAM_REC], arg.camConfig[i].bps[STREAM_RTSP]);
@@ -583,192 +584,224 @@ gint ParserClass::check_arg()
     return 0;
 }
 
-gint ParserClass::cmd_parser(gchar* buffer, gpointer data)
+gint ParserClass::cmd_parser(gchar* buffer, gint len, gpointer data)
 {
-    guint8 i;
+#define SPLIT_CHAR  " "
+
+    gint i, key, key1, key2;
     gchar *token = NULL;
     const gchar *stateStr[] = {"PENDING", "NULL", "READY", "PAUSED", "PLAYING"};
-    //const gchar *stateChangeReturnStr[4] = {"GST_STATE_CHANGE_FAILURE", "GST_STATE_CHANGE_SUCCESS", "GST_STATE_CHANGE_ASYNC", "GST_STATE_CHANGE_NO_PREROLL"};
+    //const gchar *stateChangeReturnStr[] = {"GST_STATE_CHANGE_FAILURE", "GST_STATE_CHANGE_SUCCESS", "GST_STATE_CHANGE_ASYNC", "GST_STATE_CHANGE_NO_PREROLL"};
     ThreadArgs *thraedArgs = (ThreadArgs *)data;
     VideoBin *videoBin = (VideoBin *)(thraedArgs->arg0);
     RecordBin *recordBin = (RecordBin *)(thraedArgs->arg1);
     RtspServerBin *rtspServerBin = (RtspServerBin *)(thraedArgs->arg2);
     MuxSinkBin *muxSinkBin = (MuxSinkBin *)(thraedArgs->arg3);
     CaptureBin *captureBin = (CaptureBin *)(thraedArgs->arg4);
-    guint key;
     GstState state;
+    //GstStateChangeReturn stateRet;
+    //GstPadLinkReturn linkRet;
 
-    gint len = strlen(buffer);
-
-    if (len > 1 && buffer[len-1] == '\n') {
-        buffer[len-1] = '\0';
-    }
+    //gint len = strlen(buffer);
+    buffer[len] = '\0';
+    g_print("Input: %s\n", buffer);
 
     token = strtok(buffer, " ");
-
-    if (!strcmp(token, "get"))
+    if (compareBuf(token, "cmd", 3))
     {
-        token = strtok(NULL, " ");
-        if (!strcmp(token, "bps"))
+        token = strtok(NULL, "\0");
+        int ret;
+        gchar* str = g_strdup_printf("bash -ic 'source /root/.bashrc; %s'", token);
+        ret = system(str);
+        if(ret) g_print("cmd error ret:%d\n", ret);
+
+        g_free(str);
+        return 0;
+    }
+
+#if 1
+    for (i = 0; i < len; i++) {
+        if(buffer[i] == '\0' || buffer[i] == '\n') buffer[i] = SPLIT_CHAR[0];
+    }
+#endif
+
+    token = strtok(buffer, SPLIT_CHAR);
+
+#if 1
+    if (compareBuf(token, "get", 3))
+    {
+        token = strtok(NULL, SPLIT_CHAR);
+        if (compareBuf(token, "bps", 3))
         {
-            token = strtok(NULL, "\0");
-            if (!strcmp(token, "rec"))
+            token = strtok(NULL, SPLIT_CHAR);
+            if (compareBuf(token, "rec", 3))
             {
                 for (i = 0; i < MAX_CHANNEL; i++)
-                    if (recordBin[i].getBinSinkPad())
+                    if (cmdArg.cam_en[i] && cmdArg.stream_en[STREAM_REC])
                         recordBin[i].getBitrate();
             }
-            else if (!strcmp(token, "rtsp"))
+            else if (compareBuf(token, "rtsp", 4))
             {
                 for (i = 0; i < MAX_CHANNEL; i++)
-                    if (rtspServerBin[i].getBinSinkPad())
+                    if (cmdArg.cam_en[i] && cmdArg.stream_en[STREAM_RTSP])
                         rtspServerBin[i].getBitrate();
             }
             else
                 g_print("wrong cmd!\n");
         }
-        else if (!strcmp(token, "fps"))
+        else if (compareBuf(token, "fps", 3))
         {
-            token = strtok(NULL, "\0");
-            if (!strcmp(token, "rec"))
+            token = strtok(NULL, SPLIT_CHAR);
+            if (compareBuf(token, "rec", 3))
             {
                 for (i = 0; i < MAX_CHANNEL; i++)
-                    if (recordBin[i].getBinSinkPad())
+                    if (cmdArg.cam_en[i] && cmdArg.stream_en[STREAM_REC])
                         recordBin[i].getFps();
             }
-            else if (!strcmp(token, "rtsp"))
+            else if (compareBuf(token, "rtsp", 4))
             {
                 for (i = 0; i < MAX_CHANNEL; i++)
-                    if (rtspServerBin[i].getBinSinkPad())
+                    if (cmdArg.cam_en[i] && cmdArg.stream_en[STREAM_RTSP])
                         rtspServerBin[i].getFps();
             }
             else
                 g_print("wrong cmd!\n");
         }
-        else if (!strcmp(token, "cap"))
+        else if (compareBuf(token, "cap", 3))
         {
-            token = strtok(NULL, "\0");
-            if (!strcmp(token, "rec"))
+            token = strtok(NULL, SPLIT_CHAR);
+            if (compareBuf(token, "rec", 3))
             {
                 // for (i = 0; i < MAX_CHANNEL; i++)
-                // if (recordBin[i].getBinSinkPad()) recordBin[i].getFps();
+                // if (cmdArg.cam_en[i] && cmdArg.stream_en[STREAM_REC]) recordBin[i].getFps();
             }
-            else if (!strcmp(token, "rtsp"))
+            else if (compareBuf(token, "rtsp", 4))
             {
                 for (i = 0; i < MAX_CHANNEL; i++)
-                    if (rtspServerBin[i].getBinSinkPad())
+                    if (cmdArg.cam_en[i] && cmdArg.stream_en[STREAM_RTSP])
                         rtspServerBin[i].getCaps();
             }
             else
                 g_print("wrong cmd!\n");
         }
-        else if (!strcmp(token, "rotation"))
+        else if (compareBuf(token, "rotate", 6))
         {
-            token = strtok(NULL, "\0");
-            if (!strcmp(token, "rec"))
+            token = strtok(NULL, SPLIT_CHAR);
+            if (compareBuf(token, "rec", 3))
             {
                 for (i = 0; i < MAX_CHANNEL; i++)
-                    if (recordBin[i].getBinSinkPad())
+                    if (cmdArg.cam_en[i] && cmdArg.stream_en[STREAM_REC])
                         recordBin[i].getRotation();
             }
-            else if (!strcmp(token, "rtsp"))
+            else if (compareBuf(token, "rtsp", 4))
             {
                 for (i = 0; i < MAX_CHANNEL; i++)
-                    if (rtspServerBin[i].getBinSinkPad())
+                    if (cmdArg.cam_en[i] && cmdArg.stream_en[STREAM_RTSP])
                         rtspServerBin[i].getRotation();
             }
             else
                 g_print("wrong cmd!\n");
         }
-        else if (!strcmp(token, "state"))
+        else if (compareBuf(token, "state", 5))
         {
-            token = strtok(NULL, "\0");
-            if (!strcmp(token, "rec"))
+            token = strtok(NULL, SPLIT_CHAR);
+            if (compareBuf(token, "rec", 3))
             {
                 for (i = 0; i < MAX_CHANNEL; i++)
                 {
-                    if (recordBin[i].getBinSinkPad())
+                    if (cmdArg.cam_en[i] && cmdArg.stream_en[STREAM_REC])
                     {
                         state = recordBin[i].getState();
                         g_print("rec ch%d state : %s\n", i, stateStr[state]);
                     }
                 }
             }
-            else if (!strcmp(token, "rtsp"))
+            else if (compareBuf(token, "rtsp", 4))
             {
                 for (i = 0; i < MAX_CHANNEL; i++)
                 {
-                    if (rtspServerBin[i].getBinSinkPad())
+                    if (cmdArg.cam_en[i] && cmdArg.stream_en[STREAM_RTSP])
                     {
                         state = rtspServerBin[i].getState();
                         g_print("rtsp ch%d state : %s\n", i, stateStr[state]);
                     }
                 }
             }
-            else if (!strcmp(token, "cap"))
+            else if (compareBuf(token, "cap", 3))
             {
                 for (i = 0; i < MAX_CHANNEL; i++)
                 {
-                    if (captureBin[i].getBinSinkPad())
+                    if (cmdArg.cam_en[i] && cmdArg.stream_en[STREAM_CAP])
                     {
                         state = captureBin[i].getState();
                         g_print("capture ch%d state : %s\n", i, stateStr[state]);
                     }
                 }
             }
-            else if (!strcmp(token, "pipe"))
+            else if (compareBuf(token, "pipe", 4))
             {
-                gst_element_get_state(pipeline, &state, NULL, GST_CLOCK_TIME_NONE);
-                g_print("pipe state : %s\n", stateStr[state]);
+                token = strtok(NULL, SPLIT_CHAR);
+                if (compareBuf(token, "0", 1))
+                {
+                    gst_element_get_state(pipeline, &state, NULL, GST_CLOCK_TIME_NONE);
+                    g_print("pipe state : %s\n", stateStr[state]);
+                }
+                else if (compareBuf(token, "1", 1))
+                {
+                    gst_element_get_state(pipeline2, &state, NULL, GST_CLOCK_TIME_NONE);
+                    g_print("pipe1 state : %s\n", stateStr[state]);
+                }
+                else
+                    g_print("wrong cmd!\n");
             }
             else
                 g_print("wrong cmd!\n");
         }
-        else if (!strcmp(token, "iomode"))
+        else if (compareBuf(token, "iomode", 6))
         {
-            token = strtok(NULL, "\0");
-            if (!strcmp(token, "0"))
+            token = strtok(NULL, SPLIT_CHAR);
+            if (compareBuf(token, "0", 1))
             {
                 videoBin[0].getIoMode();
             }
-            else if (!strcmp(token, "1"))
+            else if (compareBuf(token, "1", 1))
             {
                 videoBin[1].getIoMode();
             }
             else
                 g_print("wrong cmd!\n");
         }
-        else if (!strcmp(token, "gop"))
+        else if (compareBuf(token, "gop", 3))
         {
-            token = strtok(NULL, "\0");
-            if (!strcmp(token, "rec"))
+            token = strtok(NULL, SPLIT_CHAR);
+            if (compareBuf(token, "rec", 3))
             {
                 for (i = 0; i < MAX_CHANNEL; i++)
-                    if (recordBin[i].getBinSinkPad())
+                    if (cmdArg.cam_en[i] && cmdArg.stream_en[STREAM_REC])
                         recordBin[i].getGop();
             }
-            else if (!strcmp(token, "rtsp"))
+            else if (compareBuf(token, "rtsp", 4))
             {
                 for (i = 0; i < MAX_CHANNEL; i++)
-                    if (rtspServerBin[i].getBinSinkPad())
+                    if (cmdArg.cam_en[i] && cmdArg.stream_en[STREAM_RTSP])
                         rtspServerBin[i].getGop();
             }
             else
                 g_print("wrong cmd!\n");
         }
-        else if (!strcmp(token, "key"))
+        else if (compareBuf(token, "key", 3))
         {
-            token = strtok(NULL, "\0");
-            if (!strcmp(token, "rec"))
+            token = strtok(NULL, SPLIT_CHAR);
+            if (compareBuf(token, "rec", 3))
             {
                 for (i = 0; i < MAX_CHANNEL; i++)
-                    if (recordBin[i].getBinSinkPad())
+                    if (cmdArg.cam_en[i] && cmdArg.stream_en[STREAM_REC])
                         recordBin[i].getKeyframe();
             }
-            else if (!strcmp(token, "rtsp"))
+            else if (compareBuf(token, "rtsp", 4))
             {
                 for (i = 0; i < MAX_CHANNEL; i++)
-                    if (rtspServerBin[i].getBinSinkPad())
+                    if (cmdArg.cam_en[i] && cmdArg.stream_en[STREAM_RTSP])
                         rtspServerBin[i].getKeyframe();
             }
             else
@@ -777,126 +810,158 @@ gint ParserClass::cmd_parser(gchar* buffer, gpointer data)
         else
             g_print("wrong cmd!\n");
     } // get
-    else if (!strcmp(token, "set"))
+#endif
+#if 1
+    else if (compareBuf(token, "set", 3))
     {
-        token = strtok(NULL, " ");
-        if (!strcmp(token, "bps"))
+        token = strtok(NULL, SPLIT_CHAR);
+        if (compareBuf(token, "bps", 3))
         {
-            token = strtok(NULL, " ");
-            if (!strcmp(token, "rec"))
+            token = strtok(NULL, SPLIT_CHAR);
+            if (compareBuf(token, "rec", 3))
             {
-                token = strtok(NULL, "\0");
+                token = strtok(NULL, SPLIT_CHAR);
+                i = charArrayToInt(token);
+                if (i < 0 || i > 3)
+                {
+                    g_print("channel %d not supported\n", i);
+                    return -1;
+                }
+                
+                token = strtok(NULL, SPLIT_CHAR);
                 key = charArrayToInt(token);
 
-                if (key > 9999)
+                if (key < 0 ||key > 9999)
                 {
                     g_print("bps %d not supported\n", key);
                     return -1;
                 }
 
-                for (i = 0; i < MAX_CHANNEL; i++)
-                    if (recordBin[i].getBinSinkPad())
-                        recordBin[i].setBitrate(key);
+                if (cmdArg.cam_en[i] && cmdArg.stream_en[STREAM_REC]) recordBin[i].setBitrate(key);
+                //for (i = 0; i < MAX_CHANNEL; i++)
+                    //if (cmdArg.cam_en[i] && cmdArg.stream_en[STREAM_REC])
+                        //recordBin[i].setBitrate(key);
             }
-            else if (!strcmp(token, "rtsp"))
+            else if (compareBuf(token, "rtsp", 4))
             {
-                token = strtok(NULL, "\0");
+                token = strtok(NULL, SPLIT_CHAR);
                 key = charArrayToInt(token);
 
-                if (key > 9999)
+                if (key < 0 || key > 9999)
                 {
                     g_print("bps %d not supported\n", key);
                     return -1;
                 }
 
                 for (i = 0; i < MAX_CHANNEL; i++)
-                    if (rtspServerBin[i].getBinSinkPad())
+                    if (cmdArg.cam_en[i] && cmdArg.stream_en[STREAM_RTSP])
                         rtspServerBin[i].setBitrate(key);
             }
             else
                 g_print("wrong cmd!\n");
         }
-        else if (!strcmp(token, "fps"))
+        else if (compareBuf(token, "fps", 3))
         {
-            token = strtok(NULL, " ");
-            if (!strcmp(token, "rec"))
+            token = strtok(NULL, SPLIT_CHAR);
+            if (compareBuf(token, "rec", 3))
             {
-                token = strtok(NULL, "\0");
+                token = strtok(NULL, SPLIT_CHAR);
+                i = charArrayToInt(token);
+
+                if (i < 0 || i > 3)
+                {
+                    g_print("channel %d not supported\n", i);
+                    return -1;
+                }
+
+                token = strtok(NULL, SPLIT_CHAR);
                 key = charArrayToInt(token);
 
-                if (key > 99)
+                if (key < 0 || key > 99)
                 {
                     g_print("fps %d not supported\n", key);
                     return -1;
                 }
 
-                for (i = 0; i < MAX_CHANNEL; i++)
-                    if (recordBin[i].getBinSinkPad())
-                        recordBin[i].setFps(key);
+                if (cmdArg.cam_en[i] && cmdArg.stream_en[STREAM_REC]) recordBin[i].setFps(key);
+
+                //for (i = 0; i < MAX_CHANNEL; i++)
+                    //if (cmdArg.cam_en[i] && cmdArg.stream_en[STREAM_REC])
+                        //recordBin[i].setFps(key);
             }
-            else if (!strcmp(token, "rtsp"))
+            else if (compareBuf(token, "rtsp", 4))
             {
-                token = strtok(NULL, "\0");
+                token = strtok(NULL, SPLIT_CHAR);
+                i = charArrayToInt(token);
+
+                if (i < 0 || i > 3)
+                {
+                    g_print("channel %d not supported\n", i);
+                    return -1;
+                }
+
+                token = strtok(NULL, SPLIT_CHAR);
                 key = charArrayToInt(token);
 
-                if (key > 99)
+                if (key < 0 || key > 99)
                 {
                     g_print("fps %d not supported\n", key);
                     return -1;
                 }
 
-                for (i = 0; i < MAX_CHANNEL; i++)
-                    if (rtspServerBin[i].getBinSinkPad())
-                        rtspServerBin[i].setFps(key);
+                if (cmdArg.cam_en[i] && cmdArg.stream_en[STREAM_RTSP]) rtspServerBin[i].setFps(key);
+                //for (i = 0; i < MAX_CHANNEL; i++)
+                    //if (cmdArg.cam_en[i] && cmdArg.stream_en[STREAM_RTSP])
+                        //rtspServerBin[i].setFps(key);
             }
             else
                 g_print("wrong cmd!\n");
         }
-        else if (!strcmp(token, "rotation"))
+        else if (compareBuf(token, "rotate", 6))
         {
-            token = strtok(NULL, " ");
-            if (!strcmp(token, "rec"))
+            token = strtok(NULL, SPLIT_CHAR);
+            if (compareBuf(token, "rec", 3))
             {
-                token = strtok(NULL, "\0");
+                token = strtok(NULL, SPLIT_CHAR);
                 key = charArrayToInt(token);
 
-                if (key > 5)
+                if (key < 0 || key > 5)
                 {
                     g_print("rotation %d not supported\n", key);
                     return -1;
                 }
 
                 for (i = 0; i < MAX_CHANNEL; i++)
-                    if (recordBin[i].getBinSinkPad())
+                    if (cmdArg.cam_en[i] && cmdArg.stream_en[STREAM_REC])
                         recordBin[i].setRotation(key);
             }
-            else if (!strcmp(token, "rtsp"))
+            else if (compareBuf(token, "rtsp", 4))
             {
-                token = strtok(NULL, "\0");
+                token = strtok(NULL, SPLIT_CHAR);
                 key = charArrayToInt(token);
 
-                if (key > 5)
+                if (key < 0 || key > 5)
                 {
                     g_print("rotation %d not supported\n", key);
                     return -1;
                 }
 
                 for (i = 0; i < MAX_CHANNEL; i++)
-                    if (rtspServerBin[i].getBinSinkPad())
+                    if (cmdArg.cam_en[i] && cmdArg.stream_en[STREAM_RTSP])
                         rtspServerBin[i].setRotation(key);
             }
             else
                 g_print("wrong cmd!\n");
         }
-        else if (!strcmp(token, "state"))
+        else if (compareBuf(token, "state", 5))
         {
-            token = strtok(NULL, " ");
-            if (!strcmp(token, "rec"))
+            token = strtok(NULL, SPLIT_CHAR);
+            if (compareBuf(token, "rec", 3))
             {
                 token = strtok(NULL, "\0");
                 key = charArrayToInt(token);
 
-                if (key > 4)
+                if (key < 0 || key > 4)
                 {
                     g_print("state %d not supported\n", key);
                     return -1;
@@ -904,7 +969,7 @@ gint ParserClass::cmd_parser(gchar* buffer, gpointer data)
 
                 for (i = 0; i < MAX_CHANNEL; i++)
                 {
-                    if (recordBin[i].getBinSinkPad())
+                    if (cmdArg.cam_en[i] && cmdArg.stream_en[STREAM_REC])
                     {
                         g_print("rec ch%d state : %s\n", i, stateStr[recordBin[i].getState()]);
                         if(recordBin[i].setState((GstState)key) == GST_STATE_CHANGE_FAILURE)
@@ -920,12 +985,12 @@ gint ParserClass::cmd_parser(gchar* buffer, gpointer data)
 
                 g_print("rec state : %s\n", stateStr[key]);
             }
-            else if (!strcmp(token, "rtsp"))
+            else if (compareBuf(token, "rtsp", 4))
             {
-                token = strtok(NULL, "\0");
+                token = strtok(NULL, SPLIT_CHAR);
                 key = charArrayToInt(token);
 
-                if (key > 4)
+                if (key < 0 || key > 4)
                 {
                     g_print("state %d not supported\n", key);
                     return -1;
@@ -933,7 +998,7 @@ gint ParserClass::cmd_parser(gchar* buffer, gpointer data)
 
                 for (i = 0; i < MAX_CHANNEL; i++)
                 {
-                    if (rtspServerBin[i].getBinSinkPad())
+                    if (cmdArg.cam_en[i] && cmdArg.stream_en[STREAM_RTSP])
                     {
                         g_print("rtsp ch%d state : %s\n", i, stateStr[rtspServerBin[i].getState()]);
                         if(rtspServerBin[i].setState((GstState)key) == GST_STATE_CHANGE_FAILURE)
@@ -949,12 +1014,12 @@ gint ParserClass::cmd_parser(gchar* buffer, gpointer data)
                 
                 g_print("rtsp state : %s\n", stateStr[state]);
             }
-            else if (!strcmp(token, "cap"))
+            else if (compareBuf(token, "cap", 3))
             {
-                token = strtok(NULL, "\0");
+                token = strtok(NULL, SPLIT_CHAR);
                 key = charArrayToInt(token);
 
-                if (key > 4)
+                if (key < 0 || key > 4)
                 {
                     g_print("state %d not supported\n", key);
                     return -1;
@@ -962,7 +1027,7 @@ gint ParserClass::cmd_parser(gchar* buffer, gpointer data)
 
                 for (i = 0; i < MAX_CHANNEL; i++)
                 {
-                    if (captureBin[i].getBinSinkPad())
+                    if (cmdArg.cam_en[i] && cmdArg.stream_en[STREAM_CAP])
                     {
                         g_print("before capture ch%d state : %s\n", i, stateStr[captureBin[i].getState()]);
                         g_print("capture ch%d state change ret : %d\n", i, captureBin[i].setState((GstState)key));
@@ -971,12 +1036,12 @@ gint ParserClass::cmd_parser(gchar* buffer, gpointer data)
                 }
                 //g_print("capture state : %s\n", stateStr[state]);
             }
-            else if (!strcmp(token, "pipe"))
+            else if (compareBuf(token, "pipe", 4))
             {
-                token = strtok(NULL, "\0");
+                token = strtok(NULL, SPLIT_CHAR);
                 key = charArrayToInt(token);
 
-                if (key > 4)
+                if (key < 0 || key > 4)
                 {
                     g_print("state %d not supported\n", key);
                     return -1;
@@ -988,15 +1053,15 @@ gint ParserClass::cmd_parser(gchar* buffer, gpointer data)
             else
                 g_print("wrong cmd!\n");
         }
-        else if (!strcmp(token, "iomode"))
+        else if (compareBuf(token, "iomode", 6))
         {
-            token = strtok(NULL, " ");
-            if (!strcmp(token, "0"))
+            token = strtok(NULL, SPLIT_CHAR);
+            if (compareBuf(token, "0", 1))
             {
-                token = strtok(NULL, "\0");
+                token = strtok(NULL, SPLIT_CHAR);
                 key = charArrayToInt(token);
 
-                if (key > 5)
+                if (key < 0 || key > 5)
                 {
                     g_print("ioMode %d not supported\n", key);
                     return -1;
@@ -1004,12 +1069,12 @@ gint ParserClass::cmd_parser(gchar* buffer, gpointer data)
 
                 videoBin[0].setIoMode(key);
             }
-            else if (!strcmp(token, "1"))
+            else if (compareBuf(token, "1", 1))
             {
-                token = strtok(NULL, "\0");
+                token = strtok(NULL, SPLIT_CHAR);
                 key = charArrayToInt(token);
 
-                if (key > 5)
+                if (key < 0 || key > 5)
                 {
                     g_print("ioMode %d not supported\n", key);
                     return -1;
@@ -1020,330 +1085,985 @@ gint ParserClass::cmd_parser(gchar* buffer, gpointer data)
             else
                 g_print("wrong cmd!\n");
         }
-        else if (!strcmp(token, "gop"))
+        else if (compareBuf(token, "gop", 3))
         {
-            token = strtok(NULL, " ");
-            if (!strcmp(token, "rec"))
+            token = strtok(NULL, SPLIT_CHAR);
+            if (compareBuf(token, "rec", 3))
             {
-                token = strtok(NULL, "\0");
+                token = strtok(NULL, SPLIT_CHAR);
                 key = charArrayToInt(token);
 
-                if (key > 100)
+                if (key < 0 || key > 100)
                 {
                     g_print("gop %d not supported\n", key);
                     return -1;
                 }
 
                 for (i = 0; i < MAX_CHANNEL; i++)
-                    if (recordBin[i].getBinSinkPad())
+                    if (cmdArg.cam_en[i] && cmdArg.stream_en[STREAM_REC])
                         recordBin[i].setGop(key);
             }
-            else if (!strcmp(token, "rtsp"))
+            else if (compareBuf(token, "rtsp", 4))
             {
-                token = strtok(NULL, "\0");
+                token = strtok(NULL, SPLIT_CHAR);
                 key = charArrayToInt(token);
 
-                if (key > 100)
+                if (key < 0 || key > 100)
                 {
                     g_print("gop %d not supported\n", key);
                     return -1;
                 }
 
                 for (i = 0; i < MAX_CHANNEL; i++)
-                    if (rtspServerBin[i].getBinSinkPad())
+                    if (cmdArg.cam_en[i] && cmdArg.stream_en[STREAM_RTSP])
                         rtspServerBin[i].setGop(key);
             }
             else
                 g_print("wrong cmd!\n");
         }
-        else if (!strcmp(token, "key"))
+        else if (compareBuf(token, "key", 3))
         {
-            token = strtok(NULL, " ");
-            if (!strcmp(token, "rec"))
+            token = strtok(NULL, SPLIT_CHAR);
+            if (compareBuf(token, "rec", 3))
             {
-                token = strtok(NULL, "\0");
+                token = strtok(NULL, SPLIT_CHAR);
                 key = charArrayToInt(token);
 
-                if (key > 1)
+                if (key < 0 || key > 1)
                 {
                     g_print("key %d not supported\n", key);
                     return -1;
                 }
 
                 for (i = 0; i < MAX_CHANNEL; i++)
-                    if (recordBin[i].getBinSinkPad())
+                    if (cmdArg.cam_en[i] && cmdArg.stream_en[STREAM_REC])
                         recordBin[i].setkeyframe(key);
             }
-            else if (!strcmp(token, "rtsp"))
+            else if (compareBuf(token, "rtsp", 4))
             {
-                token = strtok(NULL, "\0");
+                token = strtok(NULL, SPLIT_CHAR);
                 key = charArrayToInt(token);
 
-                if (key > 9999)
+                if (key < 0 || key > 1)
                 {
                     g_print("key %d not supported\n", key);
                     return -1;
                 }
 
                 for (i = 0; i < MAX_CHANNEL; i++)
-                    if (rtspServerBin[i].getBinSinkPad())
+                    if (cmdArg.cam_en[i] && cmdArg.stream_en[STREAM_RTSP])
                         rtspServerBin[i].setkeyframe(key);
             }
             else
                 g_print("wrong cmd!\n");
         }
-        else if (!strcmp(token, "dbg"))
+        else if (compareBuf(token, "dbg", 3))
         {
-            token = strtok(NULL, "\0");
-            if (!strcmp(token, "rtsp"))
+            token = strtok(NULL, SPLIT_CHAR);
+            if (compareBuf(token, "rtsp", 4))
             {
                 for (i = 0; i < MAX_CHANNEL; i++)
-                    if (rtspServerBin[i].getBinSinkPad())
+                    if (cmdArg.cam_en[i] && cmdArg.stream_en[STREAM_RTSP])
                         rtspServerBin[i].setTimeStampDebug();
             }
-            else if (!strcmp(token, "rec"))
+            else if (compareBuf(token, "rec", 3))
             {
+
             }
         }
+        else
+            g_print("wrong cmd!\n");
     } // set
-    else if (!strcmp(token, "start"))
+    else if (compareBuf(token, "start", 5))
     {
-        token = strtok(NULL, " ");
-        if (!strcmp(token, "cap"))
+        token = strtok(NULL, SPLIT_CHAR);
+        if (compareBuf(token, "cap", 3))
         {
-            token = strtok(NULL, "\0");
+            token = strtok(NULL, SPLIT_CHAR);
             key = charArrayToInt(token);
-
-            if(key > 2)
+            
+            if (key < 0 || key > 3)
             {
-                g_print("cap mode %d not supported\n", key);
+                g_print("channel %d not supported\n", i);
                 return -1;
             }
 
-            //ret = gst_element_set_state(pipeline, GST_STATE_PAUSED);
-#if 0
-            GstStateChangeReturn ret;
-            GstState pending;
-            if (ret == GST_STATE_CHANGE_FAILURE) {
-                g_error("%s", stateChangeReturnStr[ret]);
+            token = strtok(NULL, SPLIT_CHAR);
+            key1 = charArrayToInt(token);
+
+            if(key1 < 0 || key1 > 2)
+            {
+                g_print("cap mode %d not supported\n", key1);
+                return -1;
             }
 
-            do {
-                ret = gst_element_get_state(pipeline, &state, &pending, GST_CLOCK_TIME_NONE);
-            } while (state != GST_STATE_PAUSED);    //((ret == GST_STATE_CHANGE_ASYNC) || (state != GST_STATE_PAUSED));
-            g_print("%s\n",stateChangeReturnStr[ret]);
-#endif
+            token = strtok(NULL, SPLIT_CHAR);
 
-            for (i = 0; i < MAX_CHANNEL; i++)
+            if(token == NULL)
             {
-                if (key == 1)
+                key2 = 0;
+            }
+            else
+            {
+                key2 = charArrayToInt(token);
+                if(key2 < 0)
                 {
-                    if (recordBin[i].getBinSinkPad())
+                    g_print("cap max cnt %d not supported\n", key2);
+                    return -1;
+                }
+            }
+
+            if (key1 == 0)
+            {
+                for (i = 0; i < MAX_CHANNEL; i++)
+                {
+                    if (cmdArg.cam_en[i] && cmdArg.stream_en[STREAM_REC])
                     {
-                        if (gst_pad_unlink(videoBin[i / 2].getBinRecordSrcPad((ChannelNum)i), recordBin[i].getBinSinkPad()) != TRUE)
+                        if (gst_pad_is_linked(videoBin[i / 2].getBinRecordSrcPad(i)) == TRUE)
                         {
-                            g_print("ch%d rec unlink error!\n", i);
+                            if (gst_pad_unlink(videoBin[i / 2].getBinRecordSrcPad(i), recordBin[i].getBinSinkPad()))
+                            {
+                                g_print("ch%d rec unlink ok!\n", i);
+                            }
+                            else
+                                g_print("ch%d rec unlink err!\n", i);
                         }
                         else
-                            g_print("ch%d rec unlink!\n", i);
+                            g_print("ch%d rec already unlinked!\n", i);
                     }
-                    if (rtspServerBin[i].getBinSinkPad())
+                    if (cmdArg.cam_en[i] && cmdArg.stream_en[STREAM_RTSP])
                     {
-                        if (gst_pad_unlink(videoBin[i / 2].getBinRtspSrcPad((ChannelNum)i), rtspServerBin[i].getBinSinkPad()) != TRUE)
+                        if (gst_pad_is_linked(videoBin[i / 2].getBinRtspSrcPad(i)) == TRUE)
                         {
-                            g_print("ch%d rtsp unlink error!\n", i);
+                            if (gst_pad_unlink(videoBin[i / 2].getBinRtspSrcPad(i), rtspServerBin[i].getBinSinkPad()))
+                            {
+                                g_print("ch%d rtsp unlink ok!\n", i);
+                            }
+                            else
+                                g_print("ch%d rtsp unlink err!\n", i);
                         }
                         else
-                            g_print("ch%d rtsp unlink!\n", i);
+                            g_print("ch%d rtsp already unlinked!\n", i);
                     }
                 }
+            }
 
-                if (captureBin[i].getBinSinkPad())
+            if (cmdArg.cam_en[key] && cmdArg.stream_en[STREAM_CAP])
+            {
+                if(key1 == 2)
                 {
-                    // captureBin[i].addBinToPipe(pipeline);
-                    if (gst_pad_is_linked(videoBin[i / 2].getBinCaptureSrcPad((ChannelNum)i)) != TRUE)
+                    if(!captureBin[key].init(key, cmdArg.crop_en[key/2]))
+                        g_print("ch%d captrueBin init failed\n",key);
+
+                    if(captureBin[key].addBinToPipe(pipeline)) g_print("ch%d capture bin add\n", key);
+                    else g_print("ch%d capture bin add error\n", key);
+                    // g_usleep(10000);
+
+                    if (gst_pad_is_linked(videoBin[key / 2].getBinCaptureSrcPad(key)) != TRUE)
                     {
-                        g_print("ch%d capture not linked\n", i);
-                        if (gst_pad_link(videoBin[i / 2].getBinCaptureSrcPad((ChannelNum)i), captureBin[i].getBinSinkPad()) != GST_PAD_LINK_OK)
+                        //g_print("ch%d capture not linked\n", key);
+                        if (gst_pad_link(videoBin[key / 2].getBinCaptureSrcPad(i), captureBin[key].getBinSinkPad()) != GST_PAD_LINK_OK)
                         {
-                            g_print("ch%d capture link error!\n", i);
+                            g_print("ch%d capture link error!\n", key);
                             // captureBin[i].removeBinToPipe(pipeline);
                             return -1;
                         }
                         else
                         {
-                            g_print("ch%d capture linking!\n", i);
-                            captureBin[i].startCapture(key);
+                            g_print("ch%d capture link ok!\n", key);
+                            // gst_element_sync_state_with_parent(captureBin[i].be.bin);
+                            // gst_element_set_state(pipeline, GST_STATE_PLAYING);
                         }
                     }
                     else
                     {
-                        g_print("ch%d capture already linked!\n", i);
-                        captureBin[i].startCapture(key);
+                        g_print("ch%d capture already linked!\n", key);
+                        // gst_element_sync_state_with_parent(captureBin[i].be.bin);
+                        // gst_element_set_state(pipeline, GST_STATE_PLAYING);
                     }
-                    gst_element_sync_state_with_parent(captureBin[i].be.bin);
+
+                    for(i=0; i<500; i++)
+                    {
+                        g_print("pipeline playing\n");
+                        gst_element_set_state(pipeline, GST_STATE_PLAYING);
+                        //g_print("ch%d captrue state sync\n", key);
+                        //gst_element_sync_state_with_parent(captureBin[key].be.bin);
+                        //g_usleep(1000);
+                        state = captureBin[key].getState();
+                        if (state == GST_STATE_PLAYING)
+                            break;
+                        else
+                            g_print("state : %d\n", state);
+
+                        g_usleep(1000);
+                    }
+                }
+                
+                captureBin[key].setFilePath();
+
+                if(key1 == 0) {
+                    key2 = cmdArg.fps[STREAM_CAP][key]*60;
+                } else if(key1 == 1) {
+                    if(key2 == 0) key2 = cmdArg.captureMaxCnt;
+                } else if(key1 == 2) {
+                    if(key2 == 0) key2 = cmdArg.captureMaxCnt;
+                } 
+
+                g_print("ch:%d, fps:%d, mode : %d, max_cnt : %d\n", key, cmdArg.fps[STREAM_CAP][key], key1, key2);
+                captureBin[key].startCapture(key2);
+                
+                // captureBin[i].setState(GST_STATE_READY);
+                if (key1 == 2)
+                {
+#if 0
+                    //g_usleep(100000);
+                    time = (1000/cmdArg.fps[STREAM_CAP][i])*(key2+1);
+                    g_print("sleep time : %dmsec\n", time);
+                    g_usleep(time*1000);
+#endif
+                    for(i=0; i<500; i++)
+                    {
+                        if(captureBin[key].getCaptureCnt() >= key2)
+                            break;
+                        
+                        g_usleep(10000);
+                    }
+                    
+                    __LOG(LOG_NOTICE, "[GST][%s:%d] capture end", _FILE_, __LINE__);
+
+                    if (gst_pad_unlink(videoBin[key / 2].getBinCaptureSrcPad(key), captureBin[key].getBinSinkPad()))
+                    {
+                        g_print("ch%d capture unlink ok!\n", key);
+                        state = captureBin[key].getState();
+                        g_print("state : %d\n", state);
+                        for(i=0; i<500; i++) 
+                        {
+                            captureBin[key].setState(GST_STATE_NULL);
+                            state = captureBin[key].getState();
+                            g_print("state : %d\n", state);
+                            if(state == GST_STATE_NULL) {
+                                if(captureBin[key].removeBinToPipe(pipeline)) g_print("ch%d capture bin remove\n", key);
+                                else g_print("ch%d capture bin remove error\n", key);
+
+                                break;
+                            }
+                            g_usleep(10000);
+                        }
+                    }
+                    else
+                        g_print("ch%d capture unlink err!\n", key);
+
+                    // captureBin[i].removeBinToPipe(pipeline);
                 }
             }
-
-            gst_element_set_state(pipeline, GST_STATE_PLAYING);
-
-            //for (i = 0; i < MAX_CHANNEL; i++) if (captureBin[i].getBinSinkPad()) captureBin[i].startCapture(key);
         }
-    }
-    else if (!strcmp(token, "stop"))
-    {
-        if (!strcmp(token, "cap"))
+        else if (compareBuf(token, "rec", 3))
         {
-            token = strtok(NULL, "\0");
-
-            key = charArrayToInt(token);
-            if(key > 2)
+            token = strtok(NULL, SPLIT_CHAR);
+            if (token == NULL)
             {
-                g_print("cap mode %d not supported\n", key);
-                return -1;
-            }
+                gst_element_set_state(pipeline, GST_STATE_PLAYING);
+                for (i = 0; i < MAX_CHANNEL; i++)
+                {
 
-            //gst_element_set_state(pipeline, GST_STATE_PAUSED);
-            for (i = 0; i < MAX_CHANNEL; i++)
-            {
-                if (recordBin[i].getBinSinkPad())
-                {
-                    if (gst_pad_link(videoBin[i / 2].getBinRecordSrcPad((ChannelNum)i), recordBin[i].getBinSinkPad()) != GST_PAD_LINK_OK)
+                    if (cmdArg.cam_en[i] && cmdArg.stream_en[STREAM_REC])
                     {
-                        g_print("ch%d rec link error!\n", i);
-                    }
-                    else
-                        g_print("ch%d rec link!\n", i);
-                }
-                if (rtspServerBin[i].getBinSinkPad())
-                {
-                    if (gst_pad_link(videoBin[i / 2].getBinRtspSrcPad((ChannelNum)i), rtspServerBin[i].getBinSinkPad()) != GST_PAD_LINK_OK)
-                    {
-                        g_print("ch%d rtsp link error!\n", i);
-                    }
-                    else
-                        g_print("ch%d rtsp link!\n", i);
-                }
-                if (captureBin[i].getBinSinkPad())
-                {
-                    //captureBin[i].removeBinToPipe(pipeline);
-                    if (gst_pad_unlink(videoBin[i / 2].getBinCaptureSrcPad((ChannelNum)i), captureBin[i].getBinSinkPad()) != TRUE)
-                    {
-                        g_print("ch%d capture unlink error!\n", i);
-                    }
-                    else
-                    {
-                        captureBin[i].stopCapture();
-                        g_print("ch%d capture unlink!\n", i);
+                        gst_element_sync_state_with_parent(recordBin[i].re.bin);
+
+                        while (1)
+                        {
+                            state = recordBin[i].getState();
+                            if (state == GST_STATE_PLAYING)
+                                break;
+                            else
+                                g_print("ch%d rec state : %d\n", i, state);
+
+                            g_usleep(1000);
+                        }
                     }
                 }
             }
+            else
+            {
+                i = charArrayToInt(token);
+
+                if (i < 0 || i > 3)
+                {
+                    g_print("channel %d not supported\n", i);
+                    return -1;
+                }
+
+                gst_element_set_state(pipeline, GST_STATE_PLAYING);
+                if (cmdArg.cam_en[i] && cmdArg.stream_en[STREAM_REC])
+                {
+                    gst_element_sync_state_with_parent(recordBin[i].re.bin);
+
+                    while (1)
+                    {
+                        state = recordBin[i].getState();
+                        if (state == GST_STATE_PLAYING)
+                            break;
+                        else
+                            g_print("ch%d rec state : %d\n", i, state);
+
+                        g_usleep(1000);
+                    }
+                }
+            }
+        }
+        else if (compareBuf(token, "rtsp", 4))
+        {
+            token = strtok(NULL, SPLIT_CHAR);
+            if (token == NULL)
+            {
+                gst_element_set_state(pipeline, GST_STATE_PLAYING);
+                for (i = 0; i < MAX_CHANNEL; i++)
+                {
+                    if (cmdArg.cam_en[i] && cmdArg.stream_en[STREAM_RTSP])
+                    {
+                        gst_element_sync_state_with_parent(rtspServerBin[i].re.bin);
+
+                        while (1)
+                        {
+                            state = rtspServerBin[i].getState();
+                            if (state == GST_STATE_PLAYING)
+                                break;
+                            else
+                                g_print("ch%d rtsp state : %d\n", i, state);
+
+                            g_usleep(1000);
+                        }
+                    }
+                }
+            }
+            else
+            {
+                i = charArrayToInt(token);
+
+                if (i < 0 || i > 3)
+                {
+                    g_print("channel %d not supported\n", i);
+                    return -1;
+                }
+
+                gst_element_set_state(pipeline, GST_STATE_PLAYING);
+                if (cmdArg.cam_en[i] && cmdArg.stream_en[STREAM_RTSP])
+                {
+                    gst_element_sync_state_with_parent(rtspServerBin[i].re.bin);
+
+                    while (1)
+                    {
+                        state = rtspServerBin[i].getState();
+                        if (state == GST_STATE_PLAYING)
+                            break;
+                        else
+                            g_print("ch%d rtsp state : %d\n", i, state);
+
+                        g_usleep(1000);
+                    }
+                }
+            }
+        }
+        else if (compareBuf(token, "split", 5))
+        {
+            token = strtok(NULL, SPLIT_CHAR);
+
+            if(token == NULL)
+            {
+                g_print("split now\n");
+                for (i = 0; i < MAX_CHANNEL; i++) if (muxSinkBin[i].getBinVideoSinkPad()) muxSinkBin[i].splitNow(NULL, FALSE);
+            }
+            else
+            {
+                key = charArrayToInt(token);
+
+                if (key < 0 || key > 59)
+                {
+                        g_print("set_sec %d not supported\n", key);
+                        return -1;
+                }
+                g_print("split set_sec : %d\n", key);
+                cmdArg.split_sec = key;
+            }
+        }
+        else
+            g_print("wrong cmd!\n");
+    }   //start
+    else if (compareBuf(token, "link", 4))
+    {
+        token = strtok(NULL, SPLIT_CHAR);
+        if (compareBuf(token, "cap", 3))
+        {
+            token = strtok(NULL, SPLIT_CHAR);
+
+            if(token == NULL)
+            {
+                //gst_element_set_state(pipeline, GST_STATE_PAUSED);
+                for (i = 0; i < MAX_CHANNEL; i++)
+                {
+                    if (cmdArg.cam_en[i] && cmdArg.stream_en[STREAM_CAP])
+                    {
+                        if (gst_pad_is_linked(videoBin[i / 2].getBinRtspSrcPad(i)) != TRUE)
+                        {
+                            if (gst_pad_link(videoBin[i / 2].getBinCaptureSrcPad(i), captureBin[i].getBinSinkPad()) != GST_PAD_LINK_OK)
+                            {
+                                g_print("ch%d capture link error!\n", i);
+                            }
+                            else
+                            {
+                                captureBin[i].stopCapture();
+                                g_print("ch%d capture link ok!\n", i);
+                            }
+                        }
+                        else
+                            g_print("ch%d capture already link!\n", i);
+                    }
+                }
+            }
+            else
+            {
+                i = charArrayToInt(token);
+
+                if (i < 0 || i > 3)
+                {
+                    g_print("channel %d not supported\n", i);
+                    return -1;
+                }
+
+                if (cmdArg.cam_en[i] && cmdArg.stream_en[STREAM_CAP])
+                {
+                    if (gst_pad_is_linked(videoBin[i / 2].getBinCaptureSrcPad(i)) != TRUE)
+                    {
+                        if (gst_pad_link(videoBin[i / 2].getBinCaptureSrcPad(i), captureBin[i].getBinSinkPad()) != GST_PAD_LINK_OK)
+                        {
+                            g_print("ch%d capture link error!\n", i);
+                        }
+                        else
+                        {
+                            captureBin[i].stopCapture();
+                            g_print("ch%d capture link ok!\n", i);
+                        }
+                    }
+                    else
+                        g_print("ch%d capture already link!\n", i);
+                }
+            }
+
             //gst_element_sync_state_with_parent
             //gst_element_set_state(pipeline, GST_STATE_PLAYING);
 
             //for (i = 0; i < MAX_CHANNEL; i++) if (captureBin[i].getBinSinkPad()) captureBin[i].stopCapture();
         }
-    }
-    else if (!strcmp(token, "split"))
-    {
-        token = strtok(NULL, " ");
-        if (!strcmp(token, "start"))
+        else if(compareBuf(token, "rec", 3))
         {
-            token = strtok(NULL, "\0");
-            if (!strcmp(token, "now"))
+            token = strtok(NULL, SPLIT_CHAR);
+
+            if(token == NULL)
             {
-                for (i = 0; i < MAX_CHANNEL; i++) if (muxSinkBin[i].getBinVideoSinkPad()) muxSinkBin[i].splitNow(NULL, FALSE);
+                for (i = 0; i < MAX_CHANNEL; i++)
+                {
+                    if (cmdArg.cam_en[i] && cmdArg.stream_en[STREAM_REC])
+                    {
+                        if (gst_pad_is_linked(videoBin[i / 2].getBinRecordSrcPad(i)) != TRUE)
+                        {
+                            if (gst_pad_link(videoBin[i / 2].getBinRecordSrcPad(i), recordBin[i].getBinSinkPad()) != GST_PAD_LINK_OK)
+                            {
+                                g_print("ch%d rec link error!\n", i);
+                            }
+                            else
+                                g_print("ch%d rec link ok!\n", i);
+                        }
+                        else
+                            g_print("ch%d rec already link!\n", i);
+                    }
+                }
             }
             else
-                g_print("wrong cmd!\n");
-        }
-        else if (!strcmp(token, "set"))
-        {
-            token = strtok(NULL, "\0");
-            key = charArrayToInt(token);
-
-            if (key > 59)
             {
-                g_print("set_sec %d not supported\n", key);
-                return -1;
-            }
-           g_print("split set_sec : %d\n", key);
+                i = charArrayToInt(token);
 
-            GDateTime *datetime;
-            gint sec;
-
-            while (1)
-            {
-                datetime = g_date_time_new_now_local();
-                sec = g_date_time_get_second(datetime);
-                if (key == (guint)sec)
+                if (i < 0 || i > 3)
                 {
-                    g_print("set_sec %d = sec %d\n", key, sec);
-                    break;
+                    g_print("channel %d not supported\n", i);
+                    return -1;
                 }
 
-                usleep(1000);
-            }
-
-            for (i = 0; i < MAX_CHANNEL; i++)
-                if (muxSinkBin[i].getBinVideoSinkPad())
-                    muxSinkBin[i].splitNow(NULL, FALSE);
-
-            g_date_time_unref(datetime);
-        }
-        else
-            g_print("wrong cmd!\n");
-    }
-    else if (!strcmp(token, "add"))
-    {
-        token = strtok(NULL, "\0");
-        if (!strcmp(token, "cap"))
-        {
-            for (i = 0; i < MAX_CHANNEL; i++)
-            {
-                if (captureBin[i].getBinSinkPad()) {
-                    g_print("ch%d caputre bin add\n", i);
-                    captureBin[i].addBinToPipe(pipeline);
-                }
-            }
-        }
-        else
-            g_print("wrong cmd!\n");
-    }
-    else if (!strcmp(token, "rm"))     //else if (!strncmp(buffer, "rm", 2))
-    {
-        token = strtok(NULL, "\0");
-        if (!strcmp(token, "cap"))
-        {
-            for (i = 0; i < MAX_CHANNEL; i++)
-            {
-                if (captureBin[i].getBinSinkPad()) {
-                    if(gst_pad_unlink(videoBin[i/2].getBinCaptureSrcPad((ChannelNum)i), captureBin[i].getBinSinkPad()) != TRUE)
+                if (cmdArg.cam_en[i] && cmdArg.stream_en[STREAM_REC])
+                {
+                    if (gst_pad_is_linked(videoBin[i / 2].getBinRecordSrcPad(i)) != TRUE)
                     {
-                        g_print("unlink error!\n");
+                        if (gst_pad_link(videoBin[i / 2].getBinRecordSrcPad(i), recordBin[i].getBinSinkPad()) != GST_PAD_LINK_OK)
+                        {
+                            g_print("ch%d rec link error!\n", i);
+                        }
+                        else
+                            g_print("ch%d rec link ok!\n", i);
                     }
-                    else g_print("ch%d capture rm!\n", i);
-                    //gst_bin_remove(GST_BIN(pipeline), captureBin[i].be.bin);
+                    else
+                        g_print("ch%d rec already link!\n", i);
+                }
+            }
+        }
+        else if(compareBuf(token, "rtsp", 4))
+        {
+            token = strtok(NULL, SPLIT_CHAR);
+
+            if(token == NULL)
+            {
+                for (i = 0; i < MAX_CHANNEL; i++)
+                {
+                    if (cmdArg.cam_en[i] && cmdArg.stream_en[STREAM_RTSP])
+                    {
+                        if (gst_pad_is_linked(videoBin[i / 2].getBinRtspSrcPad(i)) != TRUE)
+                        {
+                            if (gst_pad_link(videoBin[i / 2].getBinRtspSrcPad(i), rtspServerBin[i].getBinSinkPad()) != GST_PAD_LINK_OK)
+                            {
+                                g_print("ch%d rtsp link error!\n", i);
+                            }
+                            else
+                                g_print("ch%d rtsp link ok!\n", i);
+                        }
+                        else
+                            g_print("ch%d rtsp already link!\n", i);
+                    }
+                }
+            }
+            else
+            {
+                i = charArrayToInt(token);
+
+                if (i < 0 || i > 3)
+                {
+                    g_print("channel %d not supported\n", i);
+                    return -1;
+                }
+
+                if (cmdArg.cam_en[i] && cmdArg.stream_en[STREAM_RTSP])
+                {
+                    if (gst_pad_is_linked(videoBin[i / 2].getBinRtspSrcPad(i)) != TRUE)
+                    {
+                        if (gst_pad_link(videoBin[i / 2].getBinRtspSrcPad(i), rtspServerBin[i].getBinSinkPad()) != GST_PAD_LINK_OK)
+                        {
+                            g_print("ch%d rtsp link error!\n", i);
+                        }
+                        else
+                            g_print("ch%d rtsp link ok!\n", i);
+                    }
+                    else
+                        g_print("ch%d rtsp already link!\n", i);
                 }
             }
         }
         else
             g_print("wrong cmd!\n");
-    }
-    else if (!strcmp(token, "cmd"))
+    }   //link
+    else if (compareBuf(token, "unlink", 6))
     {
-        token = strtok(NULL, "\0");
-        int ret;
-        gchar* str = g_strdup_printf("bash -ic 'source /root/.bashrc; %s'", token);
-        ret = system(str);
-        if(ret) g_print("cmd error ret:%d\n", ret);
+        token = strtok(NULL, SPLIT_CHAR);
+        if (compareBuf(token, "cap", 3))
+        {
+            token = strtok(NULL, SPLIT_CHAR);
 
-        g_free(str);
-    }
+            if(token == NULL)
+            {
+                //gst_element_set_state(pipeline, GST_STATE_PAUSED);
+                for (i = 0; i < MAX_CHANNEL; i++)
+                {
+                    if (cmdArg.cam_en[i] && cmdArg.stream_en[STREAM_CAP])
+                    {
+                        if (gst_pad_is_linked(videoBin[i / 2].getBinCaptureSrcPad(i)) == TRUE)
+                        {
+                            if (gst_pad_unlink(videoBin[i / 2].getBinCaptureSrcPad(i), captureBin[i].getBinSinkPad()))
+                            {
+                                g_print("ch%d capture unlink ok!\n", i);
+                            }
+                            else
+                            {
+                                captureBin[i].stopCapture();
+                                g_print("ch%d capture unlink err!\n", i);
+                            }
+                        }
+                        else
+                            g_print("ch%d capture already unlink!\n", i);
+                    }
+                }
+            }
+            else
+            {
+                i = charArrayToInt(token);
+
+                if (i < 0 || i > 3)
+                {
+                    g_print("channel %d not supported\n", i);
+                    return -1;
+                }
+
+                if (cmdArg.cam_en[i] && cmdArg.stream_en[STREAM_CAP])
+                {
+                    if (gst_pad_is_linked(videoBin[i / 2].getBinCaptureSrcPad(i)) == TRUE)
+                    {
+                        if (gst_pad_unlink(videoBin[i / 2].getBinCaptureSrcPad(i), captureBin[i].getBinSinkPad()))
+                        {
+                            g_print("ch%d capture unlink ok!\n", i);
+                        }
+                        else
+                        {
+                            captureBin[i].stopCapture();
+                            g_print("ch%d capture unlink err!\n", i);
+                        }
+                    }
+                    else
+                        g_print("ch%d capture already unlink!\n", i);
+                }
+            }
+
+            //gst_element_sync_state_with_parent
+            //gst_element_set_state(pipeline, GST_STATE_PLAYING);
+
+            //for (i = 0; i < MAX_CHANNEL; i++) if (captureBin[i].getBinSinkPad()) captureBin[i].stopCapture();
+        }
+        else if(compareBuf(token, "rec", 3))
+        {
+            token = strtok(NULL, SPLIT_CHAR);
+
+            if(token == NULL)
+            {
+                for (i = 0; i < MAX_CHANNEL; i++)
+                {
+                    if (cmdArg.cam_en[i] && cmdArg.stream_en[STREAM_REC])
+                    {
+                        if (1)  //(gst_pad_is_linked(videoBin[i / 2].getBinRecordSrcPad(i)) == TRUE)
+                        {
+                            if (gst_pad_unlink(videoBin[i / 2].getBinRecordSrcPad(i), recordBin[i].getBinSinkPad()))
+                            {
+                                g_print("ch%d rec unlink ok!\n", i);
+                            }
+                            else
+                                g_print("ch%d rec unlink err!\n", i);
+                        }
+                        else
+                            g_print("ch%d rec already unlink!\n", i);
+                    }
+                }
+            }
+            else
+            {
+                i = charArrayToInt(token);
+
+                if (i < 0 || i > 3)
+                {
+                    g_print("channel %d not supported\n", i);
+                    return -1;
+                }
+
+                if (cmdArg.cam_en[i] && cmdArg.stream_en[STREAM_REC])
+                {
+                    if (1)
+                    {
+                        if (gst_pad_unlink(videoBin[i / 2].getBinRecordSrcPad(i), recordBin[i].getBinSinkPad()))
+                        {
+                            g_print("ch%d rec unlink ok!\n", i);
+                        }
+                        else
+                            g_print("ch%d rec unlink err!\n", i);
+                    }
+                    else
+                        g_print("ch%d rec already unlink!\n", i);
+                }
+            }
+        }
+        else if(compareBuf(token, "rtsp", 4))
+        {
+            token = strtok(NULL, SPLIT_CHAR);
+
+            if(token == NULL)
+            {
+                for (i = 0; i < MAX_CHANNEL; i++)
+                {
+                    if (cmdArg.cam_en[i] && cmdArg.stream_en[STREAM_RTSP])
+                    {
+                        if (gst_pad_is_linked(videoBin[i / 2].getBinRtspSrcPad(i)) == TRUE)
+                        {
+                            if (gst_pad_unlink(videoBin[i / 2].getBinRtspSrcPad(i), rtspServerBin[i].getBinSinkPad()))
+                            {
+                                g_print("ch%d rtsp unlink ok!\n", i);
+                            }
+                            else
+                                g_print("ch%d rtsp unlink err!\n", i);
+                        }
+                        else
+                            g_print("ch%d rtsp already unlink!\n", i);
+                    }
+                }
+            }
+            else
+            {
+                i = charArrayToInt(token);
+
+                if (i < 0 || i > 3)
+                {
+                    g_print("channel %d not supported\n", i);
+                    return -1;
+                }
+
+                if (cmdArg.cam_en[i] && cmdArg.stream_en[STREAM_RTSP])
+                {
+                    if (gst_pad_is_linked(videoBin[i / 2].getBinRtspSrcPad(i)) == TRUE)
+                    {
+                        if (gst_pad_unlink(videoBin[i / 2].getBinRtspSrcPad(i), rtspServerBin[i].getBinSinkPad()))
+                        {
+                            g_print("ch%d rtsp unlink ok!\n", i);
+                        }
+                        else
+                            g_print("ch%d rtsp unlink err!\n", i);
+                    }
+                    else
+                        g_print("ch%d rtsp already unlink!\n", i);
+                }
+            }
+        }
+        else
+            g_print("wrong cmd!\n");
+    }   //unlink
+    else if (compareBuf(token, "add", 3))
+    {
+        token = strtok(NULL, SPLIT_CHAR);
+        if (compareBuf(token, "cap", 3))
+        {
+            token = strtok(NULL, SPLIT_CHAR);
+            if(token == NULL)
+            {
+                for (i = 0; i < MAX_CHANNEL; i++)
+                {
+                    if (cmdArg.cam_en[i] && cmdArg.stream_en[STREAM_CAP])
+                    {
+                        if(captureBin[i].addBinToPipe(pipeline)) g_print("ch%d capture bin add\n", i);
+                        else g_print("ch%d capture bin add error\n", i);
+                    }
+                }
+            }
+            else
+            {
+                i = charArrayToInt(token);
+
+                if (i < 0 || i > 3)
+                {
+                    g_print("channel %d not supported\n", i);
+                    return -1;
+                }
+
+                if (cmdArg.cam_en[i] && cmdArg.stream_en[STREAM_CAP]) {
+                    //g_print("ch%d caputre bin add\n", i);
+                    if(captureBin[i].addBinToPipe(pipeline)) g_print("ch%d capture bin add\n", i);
+                    else g_print("ch%d capture bin add error\n", i);
+                }
+            }
+        }
+        else if (compareBuf(token, "rec", 3))
+        {
+            token = strtok(NULL, SPLIT_CHAR);
+            if(token == NULL)
+            {
+                for (i = 0; i < MAX_CHANNEL; i++)
+                {
+                    if (cmdArg.cam_en[i] && cmdArg.stream_en[STREAM_REC])
+                    {
+                        if(recordBin[i].addBinToPipe(pipeline)) g_print("ch%d record bin add\n", i);
+                        else g_print("ch%d record bin add error\n", i);
+                    }
+                }
+            }
+            else
+            {
+                i = charArrayToInt(token);
+
+                if (i < 0 || i > 3)
+                {
+                    g_print("channel %d not supported\n", i);
+                    return -1;
+                }
+
+                if (cmdArg.cam_en[i] && cmdArg.stream_en[STREAM_REC]) {
+                    //g_print("ch%d caputre bin add\n", i);
+                    if(recordBin[i].addBinToPipe(pipeline)) g_print("ch%d record bin add\n", i);
+                    else g_print("ch%d record bin add error\n", i);
+                }
+            }
+        }
+        else if (compareBuf(token, "rtsp", 4))
+        {
+            token = strtok(NULL, SPLIT_CHAR);
+            if(token == NULL)
+            {
+                for (i = 0; i < MAX_CHANNEL; i++)
+                {
+                    if (cmdArg.cam_en[i] && cmdArg.stream_en[STREAM_RTSP])
+                    {
+                        if(rtspServerBin[i].addBinToPipe(pipeline)) g_print("ch%d rtsp bin add\n", i);
+                        else g_print("ch%d rtsp bin add error\n", i);
+                    }
+                }
+            }
+            else
+            {
+                i = charArrayToInt(token);
+
+                if (i < 0 || i > 3)
+                {
+                    g_print("channel %d not supported\n", i);
+                    return -1;
+                }
+
+                if (cmdArg.cam_en[i] && cmdArg.stream_en[STREAM_RTSP]) {
+                    //g_print("ch%d caputre bin add\n", i);
+                    if(rtspServerBin[i].addBinToPipe(pipeline)) g_print("ch%d rtsp bin add\n", i);
+                    else g_print("ch%d rtsp bin add error\n", i);
+                }
+            }
+        } 
+        else
+            g_print("wrong cmd!\n");
+    }   //add
+    else if (compareBuf(token, "rm", 2))     //else if (!strncmp(buffer, "rm", 2))
+    {
+        token = strtok(NULL, SPLIT_CHAR);
+
+        if (compareBuf(token, "cap", 3))
+        {
+            token = strtok(NULL, SPLIT_CHAR);
+
+            if(token == NULL)
+            {
+                for (i = 0; i < MAX_CHANNEL; i++)
+                    if (cmdArg.cam_en[i] && cmdArg.stream_en[STREAM_CAP])
+                    {
+                        if (gst_pad_unlink(videoBin[i / 2].getBinCaptureSrcPad(i), captureBin[i].getBinSinkPad()) != TRUE)
+                        {
+                            g_print("ch%d capture unlink error!\n", i);
+                        }
+                        else
+                            g_print("ch%d capture unlink ok!\n", i);
+
+                        if(captureBin[i].removeBinToPipe(pipeline)) g_print("ch%d capture bin remove\n", i);
+                        else g_print("ch%d capture bin remove error\n", i);
+                    }
+            }
+            else
+            {
+                i = charArrayToInt(token);
+
+                if (i < 0 || i > 3)
+                {
+                    g_print("channel %d not supported\n", i);
+                    return -1;
+                }
+
+                if (gst_pad_unlink(videoBin[i / 2].getBinCaptureSrcPad(i), captureBin[i].getBinSinkPad()) != TRUE)
+                {
+                    g_print("ch%d capture unlink error!\n", i);
+                }
+                else
+                {
+                    g_print("ch%d capture unlink ok!\n", i);
+                    if(captureBin[i].removeBinToPipe(pipeline)) g_print("ch%d capture bin remove\n", i);
+                    else g_print("ch%d capture bin remove error\n", i);
+                }
+            }
+        }
+        else if (compareBuf(token, "rec", 3))
+        {
+            token = strtok(NULL, SPLIT_CHAR);
+
+            if(token == NULL)
+            {
+                for (i = 0; i < MAX_CHANNEL; i++)
+                    if (cmdArg.cam_en[i] && cmdArg.stream_en[STREAM_REC])
+                    {
+                        if (gst_pad_unlink(videoBin[i / 2].getBinRecordSrcPad(i), recordBin[i].getBinSinkPad()) != TRUE)
+                        {
+                            g_print("ch%d recordBin unlink error!\n", i);
+                        }
+                        else
+                        {
+                            g_print("ch%d recordBin unlink ok!\n", i);
+                            if(recordBin[i].removeBinToPipe(pipeline)) g_print("ch%d record bin remove\n", i);
+                            else g_print("ch%d record bin remove error\n", i);
+                        }
+                    }
+            }
+            else
+            {
+                i = charArrayToInt(token);
+
+                if (i < 0 || i > 3)
+                {
+                    g_print("channel %d not supported\n", i);
+                    return -1;
+                }
+
+                if (gst_pad_unlink(videoBin[i / 2].getBinRecordSrcPad(i), recordBin[i].getBinSinkPad()) != TRUE)
+                {
+                    g_print("ch%d recordBin unlink error!\n", i);
+                }
+                else
+                {
+                    g_print("ch%d recordBin unlink ok!\n", i);
+                    if(recordBin[i].removeBinToPipe(pipeline)) g_print("ch%d record bin remove\n", i);
+                    else g_print("ch%d record bin remove error\n", i);
+                }
+            }
+        }
+        else if (compareBuf(token, "rtsp", 4))
+        {
+            token = strtok(NULL, SPLIT_CHAR);
+
+            if(token == NULL)
+            {
+                for (i = 0; i < MAX_CHANNEL; i++)
+                    if (cmdArg.cam_en[i] && cmdArg.stream_en[STREAM_RTSP])
+                    {
+                        if (gst_pad_unlink(videoBin[i / 2].getBinRtspSrcPad(i), rtspServerBin[i].getBinSinkPad()) != TRUE)
+                        {
+                            g_print("ch%d rtspServerBin unlink error!\n", i);
+                        }
+                        else
+                        {
+                            g_print("ch%d rtspServerBin unlink ok!\n", i);
+                            if(rtspServerBin[i].removeBinToPipe(pipeline)) g_print("ch%d rtspServerBin remove\n", i);
+                            else g_print("ch%d record bin remove error\n", i);
+                        }
+                    }
+            }
+            else
+            {
+                i = charArrayToInt(token);
+
+                if (i < 0 || i > 3)
+                {
+                    g_print("channel %d not supported\n", i);
+                    return -1;
+                }
+
+                if (gst_pad_unlink(videoBin[i / 2].getBinRtspSrcPad(i), rtspServerBin[i].getBinSinkPad()) != TRUE)
+                {
+                    g_print("ch%d rtspServerBin unlink error!\n", i);
+                }
+                else
+                {
+                    g_print("ch%d rtspServerBin unlink ok!\n", i);
+                    if(rtspServerBin[i].removeBinToPipe(pipeline)) g_print("ch%d rtspServerBin remove\n", i);
+                    else g_print("ch%d record bin remove error\n", i);
+                }
+            }
+        }
+        else
+            g_print("wrong cmd!\n");
+    }   //rm
     else
     {
         g_print("wrong cmd!\n");
     }
+#endif
 
     return 0;
 }

@@ -15,13 +15,13 @@
 #define _CAPTUREBIN_H_
 
 #include "util.h"
-#include <gst/app/gstappsink.h>
 
 typedef struct _CaptureData
 {
+    GstElement *appsrc;
     guint8 ch;
-    guint16 captureCnt;
-    guint16 captureMaxCnt;
+    gint captureCnt;
+    gint captureMaxCnt;
     GstBuffer *buf;
     gchar *filePath;
     guint8 mode;
@@ -34,6 +34,7 @@ typedef struct _CaptureElement
     GstElement *enc;
     GstElement *queue;
     GstElement *queue2;
+    GstElement *imx_convert;
     GstElement *convert;
     GstElement *parse;
     GstElement *bin;
@@ -49,16 +50,17 @@ public :
 	static CaptureBin* getInstance();
     CaptureBin();
     ~CaptureBin();
-	gint init(guint8 num, gboolean crop_en);
-	gint destroy() ;
+	gboolean init(guint8 num, gboolean crop_en);
     gint setFilePath();
-    gint startCapture(guint8 mode);
+    gint startCapture(gint maxCnt);
     gint stopCapture();
+    gint getCaptureCnt();
     GstPad* getBinSinkPad();
     GstStateChangeReturn setState(GstState state);
     GstState getState();
     gboolean addBinToPipe(GstElement *pipe);
     gboolean removeBinToPipe(GstElement *pipe);
+    void setAppsrc(GstElement *appsrc);
 
 private :
 	

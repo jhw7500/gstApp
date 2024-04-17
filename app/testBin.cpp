@@ -37,16 +37,14 @@ GstPad* TestBin::getBinSrcPad(guint8 ch)
     return gst_element_get_static_pad(be.bin, g_strdup_printf("test_src_ch%d", ch));;
 }
 
-gint TestBin::addBinSrcPad(guint8 ch)
+gboolean TestBin::addBinSrcPad(guint8 ch)
 {
     __LOG(LOG_NOTICE, "[GST][%s:%d] %s ch:%d ptr:%d", _FILE_, __LINE__, __FUNCTION__, ch, ptr);
-    if(!gst_element_add_pad(be.bin, gst_ghost_pad_new(g_strdup_printf("test_src_ch%d", ch), gst_element_get_request_pad(be.element[ptr], "src_%u"))))
-        g_error("error");
-    
-    return 0;
+
+    return gst_element_add_pad(be.bin, gst_ghost_pad_new(g_strdup_printf("test_src_ch%d", ch), gst_element_get_request_pad(be.element[ptr], "src_%u")));
 }
 
-gint TestBin::linkElement()
+gboolean TestBin::linkElement()
 {
     guint8 i = 0;
     __LOG(LOG_NOTICE, "[GST][%s:%d] %s", _FILE_, __LINE__, __FUNCTION__);
@@ -59,7 +57,7 @@ gint TestBin::linkElement()
     return 1;
 }
 
-gint TestBin::addElement(const gchar* firstStr, ...)
+void TestBin::addElement(const gchar* firstStr, ...)
 {
     guint8 i = 0;
     va_list args;
@@ -82,14 +80,14 @@ gint TestBin::addElement(const gchar* firstStr, ...)
     va_end(args);
     g_print("\n");
 
-    return 0;
+    return;
 }
 
-gint TestBin::init()
+gboolean TestBin::init()
 {
-    gint ret = 0;
+    gboolean ret = 0;
     
-    if(be.bin) return ret;
+    if(be.bin) return 0;
 
     ptr = 0;
     be.bin = gst_bin_new("TestBin");

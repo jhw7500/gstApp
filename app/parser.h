@@ -52,8 +52,9 @@
 #define DEFAULT_TCP_PORT    8555
 
 #define DEFAULT_PLAY_DELAY  5
-#define DEFAULT_CAPTURE_MAX_CNT 1
-#define DEFAULT_SPLIT_DIFF_MSEC    200
+#define DEFAULT_CAPTURE_MAX_CNT 3
+#define DEFAULT_SPLIT_SEC           0
+#define DEFAULT_SPLIT_DIFF_MSEC     200
 #define DEFAULT_SPLIT_MAX_MSEC      5000
 
 #define DEFAULT_START_VIDEO_TIME_PATH   "/tmp/start_video_time"
@@ -77,8 +78,7 @@ public :
     ParserClass();
     ~ParserClass();
 	gint init() ;
-	gint destroy() ;
-    gint cmd_parser(gchar *path, gpointer data);
+    gint cmd_parser(gchar* buffer, gint len, gpointer data);
     gint json_parser(const gchar *path, const gchar *header);
     gint arg_parser(int *argc, char **argv[]);
     gint check_arg();

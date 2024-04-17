@@ -11,11 +11,114 @@
  */
 
 #include "recordBin.h"
+#include <gst/app/gstappsrc.h>
+#include <gst/app/gstappsink.h>
+
+#if 0
+static void eos_callback(GstAppSink *appsink, gpointer user_data) 
+{
+    __LOG(LOG_NOTICE, "[GST][%s:%d] %s", _FILE_, __LINE__, __FUNCTION__);
+}
+
+static GstFlowReturn new_preroll_handler(GstElement *sink, gpointer data) 
+{
+    __LOG(LOG_NOTICE, "[GST][%s:%d] %s", _FILE_, __LINE__, __FUNCTION__);
+
+    return GST_FLOW_OK;
+}
+
+static GstFlowReturn new_sample_handler(GstElement *sink, gpointer userData) 
+{
+    GstSample *sample;
+    GstBuffer *buffer;
+    RecordData *info = (RecordData *)userData;
+    GstMapInfo map;
+
+    g_print("%s\n", __FUNCTION__);
+    //__LOG(LOG_NOTICE, "[GST][%s:%d] %s", _FILE_, __LINE__, __FUNCTION__);
+#ifdef DYNAMIC_CAPS
+    if(!info->caps) {
+        info->caps = gst_pad_get_current_caps(gst_element_get_static_pad(sink, "sink"));
+        //__LOG(LOG_NOTICE, "[GST][%s:%d] ch %d caps : %s", _FILE_, __LINE__, __FUNCTION__, info->ch, gst_caps_to_string(info->caps));
+        //g_print("ch%d caps : %s\n", info->ch, gst_caps_to_string(info->caps));
+    }
+#endif
+
+    sample = gst_app_sink_pull_sample(GST_APP_SINK(sink));
+    if (!sample) {
+        //__LOG(LOG_CRIT, "[GST][%s:%d] sample cannot get from sink", _FILE_, __LINE__);
+        return GST_FLOW_ERROR;
+    }
+    buffer = gst_sample_get_buffer(sample);
+    //gst_sample_unref(sample);
+    if(info->debug)
+    {
+        GstClockTime timestamp = GST_BUFFER_PTS(buffer);
+        g_message("Timestamp: %" GST_TIME_FORMAT "\n", GST_TIME_ARGS(timestamp));
+        //info->debug = 0;
+    }
+    
+#if 0
+    GstFlowReturn ret;
+    g_signal_emit_by_name(info->appsrc, "push-buffer", buffer, &ret);
+    if(ret != GST_FLOW_OK)
+    {
+        g_print("Failed to push buffer\n");
+    }
+#endif
+
+#if 1
+    if(info->appsrc == NULL || GST_STATE(GST_ELEMENT(info->appsrc)) != GST_STATE_PLAYING)
+    {
+        //g_print("appsrc null return!\n");
+        gst_sample_unref(sample);
+        return GST_FLOW_OK;
+    }
+#endif
+
+    if (!buffer) {
+        __LOG(LOG_CRIT, "[GST][%s:%d] buffer cannot get from sample", _FILE_, __LINE__);
+        gst_sample_unref(sample);
+        return GST_FLOW_ERROR;
+    }
+
+    if (!gst_buffer_map(buffer, &map, GST_MAP_READ)) {
+        gst_sample_unref(sample);
+        g_printerr("Failed to map buffer\n");
+        return GST_FLOW_ERROR;
+    }
+
+    // Create a new buffer and copy data
+    info->buf = gst_buffer_new_and_alloc(map.size);
+    gst_buffer_fill(info->buf, 0, map.data, map.size);
+
+    // Unmap the original buffer
+    // gst_buffer_unmap(buffer, &map);
+    // info->buf = newBuffer;
+
+    // Push the new buffer to the appsrc
+    // g_thread_new("data-processing-thread", (GThreadFunc)process_data_thread, info);
+    gst_app_src_push_buffer(GST_APP_SRC(info->appsrc), info->buf);
+
+    gst_buffer_unmap(buffer, &map);
+    gst_sample_unref(sample);
+
+    return GST_FLOW_OK;
+}
+#endif
 
 RecordBin* RecordBin::getInstance()
 {
 	static RecordBin instance;
 	return &instance;
+}
+
+GstElement* RecordBin::getBinAppsrc()
+{
+    __LOG(LOG_NOTICE, "[GST][%s:%d] %s ch:%d", _FILE_, __LINE__, __FUNCTION__, ch);
+
+    return gst_bin_get_by_name_recurse_up(GST_BIN(re.bin), recordData.appSrcName);
+    //return recordData.appsrc;
 }
 
 GstPad* RecordBin::getBinSrcPad()
@@ -181,6 +284,25 @@ GstStateChangeReturn RecordBin::setState(GstState state)
     return gst_element_set_state(re.bin , state);
 }
 
+gboolean RecordBin::addBinToPipe(GstElement *pipe)
+{
+    if(gst_bin_get_by_name(GST_BIN(pipe), g_strdup_printf("captureBin%d", recordData.ch)) != NULL)
+    {
+        __LOG(LOG_NOTICE, "[GST][%s:%d] ch%d capture bin is already added", _FILE_, __LINE__, recordData.ch);
+        return 1;
+    }
+
+    return gst_bin_add(GST_BIN(pipe), re.bin);
+}
+
+gboolean RecordBin::removeBinToPipe(GstElement *pipe)
+{
+    //gst_element_set_state(be.bin, GST_STATE_NULL);
+    __LOG(LOG_NOTICE, "[GST][%s:%d] ch%d %s", _FILE_, __LINE__, recordData.ch, __FUNCTION__);
+
+    return gst_bin_remove(GST_BIN(pipe), re.bin);
+}
+
 RecordBin::RecordBin()
 {
     // 생성자 코드 추가
@@ -188,6 +310,8 @@ RecordBin::RecordBin()
     sinkPad = NULL;
     srcPad = NULL;
     re.bin = NULL;
+    recordData.appsrc = NULL;
+    recordData.debug = FALSE;
 }
 
 // RecordBin 클래스의 소멸자 정의
@@ -197,14 +321,16 @@ RecordBin::~RecordBin()
     __LOG(LOG_INFO, "[GST][%s:%d] %s[%d]", _FILE_, __LINE__, __FUNCTION__, ch);
 }
 
-gint RecordBin::init(guint8 num, gboolean crop_en)
+gboolean RecordBin::init(guint8 num, gboolean crop_en)
 {
-    gint ret = 0;
+    gboolean ret = 0;
     ch = num;
+    recordData.ch = ch;
     //sinkPad = NULL;
     __LOG(LOG_INFO, "[GST][%s:%d] %s ch : %d, crop %s", _FILE_, __LINE__, __FUNCTION__, ch, crop_en? "enable":"disable");
 
     re.bin = gst_bin_new(g_strdup_printf("recordBin%d", ch));
+    re.bin2 = gst_bin_new(g_strdup_printf("recordBin%d_2", ch));
     re.queue = gst_element_factory_make(QUEUE_TYPE, "queue");
     re.queue2 = gst_element_factory_make(QUEUE_TYPE, "queue2");
     re.parse = gst_element_factory_make("h264parse", "h264parse");
@@ -214,23 +340,67 @@ gint RecordBin::init(guint8 num, gboolean crop_en)
     re.convert = gst_element_factory_make("imxvideoconvert_g2d", "convert");
     re.crop = gst_element_factory_make("videocrop", "crop");
     re.overlay = gst_element_factory_make("textoverlay", "overlay");
+    re.appsink = gst_element_factory_make("appsink", "appsink");
+    recordData.appSrcName = g_strdup_printf("record_appsrc%d", ch);
+    re.appsrc = gst_element_factory_make("appsrc", recordData.appSrcName);
+    recordData.appsrc = re.appsrc;
+    re.sink = gst_element_factory_make("filesink", g_strdup_printf("sink%d", ch));
+    g_object_set(re.sink, "location", g_strdup_printf("/home/user/dot/test%d.mp4", ch), NULL);
+    //g_object_set(re.sink, "max-size-time", 60*GST_SECOND, NULL);
 
-    if (!re.bin || !re.queue || !re.queue2 || !re.parse || !re.enc || !re.rate || !re.convert || !re.capsfilter || !re.crop || !re.overlay) {
+    if (!re.bin || !re.queue || !re.queue2 || !re.parse || !re.enc || !re.rate || !re.convert || !re.capsfilter || !re.crop || !re.overlay || !re.appsink || !re.appsrc) {
         __LOG(LOG_CRIT, "[GST][%s:%d] record element create error", _FILE_, __LINE__);
         return ret;
     }
 
-    gst_bin_add_many(GST_BIN(re.bin), re.queue, re.rate, re.convert, re.capsfilter, re.enc, re.parse, re.queue2, re.crop, re.overlay, NULL);
+#if 0
+    gst_bin_add_many(GST_BIN(re.bin), re.queue, re.crop, re.convert, re.rate, re.capsfilter, re.appsink, NULL);
     ret = gst_bin_add(GST_BIN(pipeline), re.bin);
+    if (!ret) {
+        __LOG(LOG_CRIT, "[GST][%s:%d] record link err", _FILE_, __LINE__);
+        return ret;
+    }
     if(!ret) {
         __LOG(LOG_CRIT, "[GST][%s:%d] record bin add error in pipeline", _FILE_, __LINE__);
         return ret;
     }
 
+    ret = gst_element_link_many(re.queue, re.crop, re.convert, re.capsfilter, re.appsink, NULL);
+    if (!ret) {
+        __LOG(LOG_CRIT, "[GST][%s:%d] record link err", _FILE_, __LINE__);
+        return ret;
+    }
+#if 0
+    gst_bin_add_many(GST_BIN(re.bin2), re.appsrc, re.enc, re.parse, re.queue2, NULL);
+    ret = gst_bin_add(GST_BIN(pipeline), re.bin2);
+    if (!ret) {
+        __LOG(LOG_CRIT, "[GST][%s:%d] record link err", _FILE_, __LINE__);
+        return ret;
+    }
+
+    ret = gst_element_link_many(re.appsrc, re.enc, re.parse, re.queue2, NULL);
+    if (!ret) {
+        __LOG(LOG_CRIT, "[GST][%s:%d] record link err", _FILE_, __LINE__);
+        return ret;
+    }
+#endif
+
+#endif
+
+#if 1
+    //gst_bin_add_many(GST_BIN(re.bin), re.appsrc, re.sink, NULL);
+    gst_bin_add_many(GST_BIN(re.bin), re.queue, re.rate, re.convert, re.capsfilter, re.enc, re.parse, re.queue2, re.crop, re.overlay, NULL);
+    ret = gst_bin_add(GST_BIN(pipeline), re.bin);
+    if(!ret) {
+        __LOG(LOG_CRIT, "[GST][%s:%d] record bin add err", _FILE_, __LINE__);
+        return ret;
+    }
+    //ret = gst_bin_add(GST_BIN(pipeline2), re.bin);
 #ifdef CHANNEL_EACH_CROP
     if(crop_en && cmdArg.overlay_en) ret = gst_element_link_many(re.queue, re.crop, re.overlay, re.convert, re.rate, re.capsfilter, re.enc, re.parse, re.queue2, NULL);
     else if(cmdArg.overlay_en) ret = gst_element_link_many(re.queue, re.overlay, re.convert, re.rate, re.capsfilter, re.enc, re.parse, re.queue2, NULL);
     else if(crop_en) ret = gst_element_link_many(re.queue, re.crop, re.convert, re.rate, re.capsfilter, re.enc, re.parse, re.queue2, NULL);
+    //else if(crop_en) ret = gst_element_link_many(re.queue, re.convert, re.rate, re.capsfilter, re.enc, re.parse, re.queue2, NULL);
     else ret = gst_element_link_many(re.queue, re.rate, re.capsfilter, re.enc, re.parse, re.queue2, NULL);
     //if(cmdArg.mode) ret = gst_element_link_many(re.queue, re.crop, re.convert, re.enc, re.parse, re.queue2, NULL);
 #else
@@ -240,8 +410,15 @@ gint RecordBin::init(guint8 num, gboolean crop_en)
         __LOG(LOG_CRIT, "[GST][%s:%d] record link err", _FILE_, __LINE__);
         return ret;
     }
+#endif
 
-    GstCaps *caps = gst_caps_new_simple("video/x-raw", "framerate", GST_TYPE_FRACTION, cmdArg.fps[STREAM_REC][ch], 1, NULL);
+    GstCaps *caps = gst_caps_new_simple("video/x-raw",
+                                        //"format", G_TYPE_STRING, "NV12",
+                                        //"width", G_TYPE_INT, cmdArg.width,
+                                        //"height", G_TYPE_INT, cmdArg.height,
+                                        "framerate", GST_TYPE_FRACTION, cmdArg.fps[STREAM_REC][ch], 1,
+                                        NULL);
+
     g_object_set(re.capsfilter, "caps", caps, NULL);
     gst_caps_unref(caps);
 
@@ -263,8 +440,24 @@ gint RecordBin::init(guint8 num, gboolean crop_en)
     //g_object_set(re.rate, "max-rate", MAIN_FPS, "drop-only", FALSE, NULL);
     g_object_set(re.queue, "max-size-time", GST_SECOND, "max-size-buffers", cmdArg.fps[STREAM_REC][ch], "leaky", LEAKY_DOWNSTREAM, NULL);
     g_object_set(re.queue2, "max-size-time", GST_SECOND, "max-size-buffers", cmdArg.fps[STREAM_REC][ch], "leaky", LEAKY_DOWNSTREAM, NULL);
+    //g_object_set(re.convert, "videocrop-meta-enable", TRUE, NULL);
+    //g_object_set(re.enc, "bitrate", cmdArg.rtsp_bitrate, NULL);
 
-    sinkPad = gst_ghost_pad_new(g_strdup_printf("recordBin_sink_ch%d", ch), gst_element_get_static_pad(re.queue, "sink"));
+#if 0
+    g_object_set(re.appsrc, "do-timestamp", 1, NULL);
+    g_object_set(re.appsrc, "name", recordData.appSrcName, NULL);
+    g_object_set(re.appsrc, "min-percent", 0, NULL);
+    g_object_set(re.appsrc, "is-live", 1, NULL);
+    g_object_set(re.appsrc, "format", 3, NULL);
+    g_object_set(re.appsrc, "block", TRUE, NULL);
+    g_object_set(re.appsink, "max-buffers", cmdArg.fps[STREAM_REC][ch], NULL);
+    g_object_set(re.appsink, "drop", TRUE, NULL);
+    g_object_set(re.appsink, "emit-signals", TRUE, "sync", FALSE, NULL);
+    recordData.appsrc = gst_bin_get_by_name_recurse_up(GST_BIN(re.bin2), recordData.appSrcName);
+    g_signal_connect(re.appsink, "eos", G_CALLBACK(eos_callback), NULL);
+    g_signal_connect(re.appsink, "new-sample", G_CALLBACK(new_sample_handler), &recordData);
+    g_signal_connect(re.appsink, "new-preroll", G_CALLBACK(new_preroll_handler), NULL );
+#endif
 
     if(cmdArg.levelMode == MODE_TEST)
     {
@@ -276,16 +469,23 @@ gint RecordBin::init(guint8 num, gboolean crop_en)
         //gst_pad_add_probe(gst_element_get_static_pad(re.convert, "src"), GST_PAD_PROBE_TYPE_BUFFER, (GstPadProbeCallback)probe_function, re.convert, NULL);
     }
 
-    if(!gst_element_add_pad(re.bin, sinkPad))
-        g_error("error");
-
-    srcPad = gst_ghost_pad_new(g_strdup_printf("recordBin_src_ch%d", ch), gst_element_get_static_pad(re.queue2, "src"));
+#if 1
+    sinkPad = gst_ghost_pad_new(g_strdup_printf("recordBin_sink_ch%d", ch), gst_element_get_static_pad(re.queue, "sink"));
+    ret = gst_element_add_pad(re.bin, sinkPad);
+    if(!ret) {
+        __LOG(LOG_CRIT, "[GST][%s:%d] record bin add err", _FILE_, __LINE__);
+        return ret;
+    }
+#endif
 
 #if 1
-    if(!gst_element_add_pad(re.bin, srcPad))
-        g_error("error");
+    srcPad = gst_ghost_pad_new(g_strdup_printf("recordBin_src_ch%d", ch), gst_element_get_static_pad(re.queue2, "src"));
+    ret = gst_element_add_pad(re.bin, srcPad);
+    if(!ret) {
+        __LOG(LOG_CRIT, "[GST][%s:%d] record bin add err", _FILE_, __LINE__);
+        return ret;
+    }
 #else
-
     re.sink = gst_element_factory_make("splitmuxsink", "splitmuxsink");
     g_object_set(re.sink, "max-size-time", 60*GST_SECOND, NULL);
     if(ch == 0) g_object_set(re.sink, "location", "test_ch0_%02d.mp4", NULL);
@@ -306,7 +506,6 @@ gint RecordBin::init(guint8 num, gboolean crop_en)
     }
 
     //sinkPad = gst_element_get_request_pad(sink, "audio_%u");
-
 #endif
 
     return ret;

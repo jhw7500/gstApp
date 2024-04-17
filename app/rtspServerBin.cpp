@@ -11,6 +11,9 @@
  */
 
 #include "rtspServerBin.h"
+#include <gst/app/gstappsrc.h>
+#include <gst/app/gstappsink.h>
+#include <gst/rtsp-server/rtsp-server.h>
 
 GstRTSPMountPoints *rtspMounts = NULL;
 GstRTSPServer *rtspServer = NULL;
@@ -188,7 +191,7 @@ static GstFlowReturn new_sample_handler(GstElement *sink, gpointer userData)
 #endif
 
 #if 1
-    if(info->appsrc == NULL)
+    if(info->appsrc == NULL || GST_STATE(GST_ELEMENT(info->appsrc)) != GST_STATE_PLAYING)
     {
         //g_print("appsrc null return!\n");
         gst_sample_unref(sample);
@@ -420,6 +423,22 @@ RtspServerBin::~RtspServerBin()
     __LOG(LOG_INFO, "[GST][%s:%d] %s[%d]", _FILE_, __LINE__, __FUNCTION__, rtspServerData.ch);
 }
 
+gboolean RtspServerBin::addBinToPipe(GstElement *pipe)
+{
+    if(gst_bin_get_by_name(GST_BIN(pipe), g_strdup_printf("captureBin%d", rtspServerData.ch)) != NULL)
+    {
+        __LOG(LOG_NOTICE, "[GST][%s:%d] ch%d capture bin is already added", _FILE_, __LINE__, rtspServerData.ch);
+        return 1;
+    }
+
+    return gst_bin_add(GST_BIN(pipe), re.bin);
+}
+
+gboolean RtspServerBin::removeBinToPipe(GstElement *pipe)
+{
+    return gst_bin_remove(GST_BIN(pipe), re.bin);
+}
+
 GstPad* RtspServerBin::getBinSinkPad()
 {
     __LOG(LOG_INFO, "[GST][%s:%d] %s[%d]", _FILE_, __LINE__, __FUNCTION__, rtspServerData.ch);
@@ -427,10 +446,10 @@ GstPad* RtspServerBin::getBinSinkPad()
     return sinkPad;
 }
 
-gint RtspServerBin::init(guint8 ch, gboolean crop_en)
+gboolean RtspServerBin::init(guint8 ch, gboolean crop_en)
 {
     GstPad *staticPad;
-    gint ret = 0;
+    gboolean ret = 0;
     rtspServerData.ch = ch;
     //sinkPad = NULL;
     __LOG(LOG_INFO, "[GST][%s:%d] %s ch : %d, crop : %s", _FILE_, __LINE__, __FUNCTION__, rtspServerData.ch, crop_en? "enable":"disable");
@@ -459,7 +478,7 @@ gint RtspServerBin::init(guint8 ch, gboolean crop_en)
 
     gst_bin_add_many(GST_BIN(re.bin), re.queue, re.rate, re.convert, re.enc, re.parse, re.queue2, re.sink, re.capsfilter, re.crop, re.overlay, NULL);
     
-    //gst_bin_add_many(GST_BIN(re.bin), re.convert2, re.compositor, re.capsfilter2, re.videoflip, NULL);
+    //gst_bin_add_many(GST_BIN(re.bin), re.convert2, re.compositor, re.capsfilter2, re.videoflip, re.convert2, NULL);
 
     ret = gst_bin_add(GST_BIN(pipeline), re.bin);
     if(!ret) {
@@ -487,7 +506,13 @@ gint RtspServerBin::init(guint8 ch, gboolean crop_en)
     //g_object_set(re.convert, "composition-meta-enable", TRUE, NULL);
     //g_object_set(re.convert, "videocrop-meta-enable", TRUE, NULL);
 
-    GstCaps *caps = gst_caps_new_simple("video/x-raw", "framerate", GST_TYPE_FRACTION, cmdArg.fps[STREAM_RTSP][ch], 1, NULL);
+    GstCaps *caps = gst_caps_new_simple("video/x-raw", 
+                                        //"format", G_TYPE_STRING, "NV12",
+                                        //"width", G_TYPE_INT, cmdArg.width,
+                                        //"height", G_TYPE_INT, cmdArg.height,
+                                        "framerate", GST_TYPE_FRACTION, cmdArg.fps[STREAM_RTSP][ch], 1,
+                                        NULL);
+
     g_object_set(re.capsfilter, "caps", caps, NULL);
     gst_caps_unref(caps);
 
@@ -529,6 +554,7 @@ gint RtspServerBin::init(guint8 ch, gboolean crop_en)
     //g_object_set(pipe->sink, "max-lateness", 1*GST_SECOND, NULL);
     //g_object_set(pipe->sink, "render-delay", 100*GST_MSECOND, NULL);
     g_object_set(re.sink, "emit-signals", TRUE, "sync", FALSE, NULL);
+    //g_object_set(re.convert, "videocrop-meta-enable", TRUE, NULL);
 
     g_signal_connect(re.sink, "eos", G_CALLBACK(eos_callback), NULL);
     g_signal_connect(re.sink, "new-sample", G_CALLBACK(new_sample_handler), &rtspServerData);
@@ -547,10 +573,11 @@ gint RtspServerBin::init(guint8 ch, gboolean crop_en)
 
     GstRTSPMediaFactory *factory = gst_rtsp_media_factory_new();
     //rtspServerData.appSrcName = g_strdup_printf("%s%d", "appsrc", ch);
-    rtspServerData.appSrcName = g_strdup_printf("%s", "appsrc");
+    rtspServerData.appSrcName = g_strdup_printf("%s%d", "rtsp_appsrc", ch);
 
-    gchar *launch_str = g_strdup_printf("( appsrc name=%s do-timestamp=1 is-live=1 format=3 ! queue max-size-buffers=1 leaky=2 ! h264parse ! rtph264pay name=pay0 config-interval=-1 )", rtspServerData.appSrcName);
-    
+    //gchar *launch_str = g_strdup_printf("( appsrc name=%s ! queue max-size-buffers=60 leaky=2 ! vpuenc_h264 bitrate=1024 ! h264parse config-interval=-1 ! rtph264pay name=pay0 config-interval=-1 )", rtspServerData.appSrcName);
+    gchar *launch_str = g_strdup_printf("( appsrc name=%s do-timestamp=1 is-live=1 format=3 ! queue max-size-buffers=%d leaky=2 ! h264parse ! rtph264pay name=pay0 config-interval=-1 )", rtspServerData.appSrcName, cmdArg.fps[STREAM_RTSP][ch]);
+
     gst_rtsp_media_factory_set_launch(factory, launch_str);
     gst_rtsp_media_factory_set_shared(factory, TRUE);
     g_free(launch_str);
@@ -579,14 +606,14 @@ gint RtspServerBin::init(guint8 ch, gboolean crop_en)
 #if 1
 void rtspServerStop()
 {
+    __LOG(LOG_EMERG, "[RTSP][%s:%d] %s", _FILE_, __LINE__, __FUNCTION__);
     if(rtspServer) g_object_unref(rtspServer);
     if(cleanRtsp_id) g_source_remove(cleanRtsp_id);
 }
 
-gint rtspServerStart()
+guint rtspServerStart()
 {
-    gint ret = 0;
-    if(rtspServer) return ret;
+    if(rtspServer) return 1;
 
     __LOG(LOG_NOTICE, "[RTSP][%s:%d] %s", _FILE_, __LINE__, __FUNCTION__);
     rtspServer = gst_rtsp_server_new ();
@@ -612,12 +639,7 @@ gint rtspServerStart()
     g_object_unref (auth);
     //g_timeout_add_seconds (2, (GSourceFunc) timeout, rtspServer);
 
-    ret = gst_rtsp_server_attach (rtspServer, NULL);
-    if (!ret) {
-        __LOG(LOG_CRIT, "[RTSP][%s:%d] rtsp server attach failed", _FILE_, __LINE__);
-        return ret;
-    }
 
-    return ret;
+    return gst_rtsp_server_attach (rtspServer, NULL);
 }
 #endif

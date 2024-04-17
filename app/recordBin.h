@@ -24,11 +24,26 @@ typedef struct _RecordElement
     GstElement *convert;
     GstElement *parse;
     GstElement *bin;
+    GstElement *bin2;
     GstElement *sink;
     GstElement *capsfilter;
     GstElement *crop;
     GstElement *overlay;
+    GstElement *appsink;
+    GstElement *appsrc;
 } RecordElement;
+
+typedef struct _RecordData
+{
+    GstElement *appsrc;
+    gchar *appSrcName;
+    guint8 start_f;
+    GstBuffer *buf;
+    GstCaps *caps;
+    gboolean debug;
+    guint8 ch;
+
+} RecordData;
 
 class RecordBin
 {
@@ -36,8 +51,7 @@ public :
 	static RecordBin* getInstance() ;
     RecordBin();
     ~RecordBin();
-	gint init(guint8 num, gboolean crop_en) ;
-	gint destroy() ;
+	gboolean init(guint8 num, gboolean crop_en) ;
     GstPad* getBinSinkPad();
     GstPad* getBinSrcPad();
     void setBitrate(guint16 data);
@@ -53,19 +67,23 @@ public :
     void setkeyframe(guint16 data);
     GstStateChangeReturn setState(GstState state);
     GstState getState();
+    GstElement* getBinAppsrc();
+    gboolean addBinToPipe(GstElement *pipe);
+    gboolean removeBinToPipe(GstElement *pipe);
 
 private :
 	
 public :
 	gboolean m_flagDestroy;
+    RecordElement re;
     //GstPad *sinkPad;
     //GstElement *pipeline[2];
 	
 private :
-    RecordElement re;
     guint8 ch;
     GstPad *sinkPad;
     GstPad *srcPad;
+    RecordData recordData;
 };
 
 #endif

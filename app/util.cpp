@@ -14,6 +14,7 @@
 #include <glib-unix.h>
 
 GstElement *pipeline = NULL;
+GstElement *pipeline2 = NULL;
 GMainLoop *loop = NULL;
 volatile sig_atomic_t is_interrupted = 0;
 gboolean is_live = FALSE;
@@ -66,13 +67,17 @@ static void fault_handler_sighandler (int signum)
   switch (signum) {
     case SIGSEGV:
       fprintf (stderr, "Caught SIGSEGV\n");
+      __LOG(LOG_CRIT, "[GST][%s:%d] Caught SIGSEGV", _FILE_, __LINE__);
       break;
     case SIGQUIT:
-      if (!quiet)
+      if (!quiet) {
         printf ("Caught SIGQUIT\n");
+        __LOG(LOG_CRIT, "[GST][%s:%d] Caught SIGQUIT", _FILE_, __LINE__);
+      }
       break;
     default:
       fprintf (stderr, "signo:  %d\n", signum);
+      __LOG(LOG_CRIT, "[GST][%s:%d] signo %d", _FILE_, __LINE__, signum);
       break;
   }
   fault_spin ();
@@ -89,6 +94,10 @@ static void fault_spin (void)
       "Spinning.  Please run 'gdb gstApp " GST_API_VERSION " %d' to "
       "continue debugging, Ctrl-C to quit, or Ctrl-\\ to dump core.\n",
       (gint) getpid ());
+  
+  __LOG(LOG_CRIT, "[GST][%s:%d] Spinning.  Please run 'gdb gstApp " GST_API_VERSION " %d' to\
+ continue debugging, Ctrl-C to quit, or Ctrl-\\ to dump core.", _FILE_, __LINE__, (gint) getpid ());
+
   while (spinning)
     g_usleep (1000000);
 }
@@ -232,14 +241,18 @@ void mylog(gint opt, const gchar* _szfmt, ... )
 	va_end( va );
 }
 
-guint charArrayToInt(gchar *arr)
+gint charArrayToInt(gchar *arr)
 {
     guint8 i;
-    guint result = 0;
+    gint result = 0;
+
+    if(arr == NULL) return -1;
 
     for(i=0; (arr[i]!='\n' && arr[i]!='\r' && arr[i]!='\0' && arr[i]!=' '); i++)
     {
       //g_print("arr[%d] : %c %d\n", i, arr[i], arr[i]);
+      if(arr[i] < '0' || arr[i] > '9') return -1;
+
       result = (result * 10) + (arr[i] - '0');
     }
 
@@ -248,9 +261,11 @@ guint charArrayToInt(gchar *arr)
     return result;
 }
 
-gboolean compareBuf(guint8 *cmp1, guint8 *cmp2, guint8 len)
+gboolean compareBuf(const gchar *cmp1, const gchar *cmp2, guint8 len)
 {
 	guint8 i;
+
+  if(cmp1 == NULL || cmp2 == NULL) return 0;
 
 	for(i=0;i<len;i++)
 	{
