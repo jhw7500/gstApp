@@ -17,7 +17,7 @@
 
 typedef struct _TestElement
 {
-    GstElement *element[10];
+    GstElement *element[20];
     GstElement *bin;
 } TestElement;
 

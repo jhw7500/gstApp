@@ -344,9 +344,6 @@ gboolean RecordBin::init(guint8 num, gboolean crop_en)
     recordData.appSrcName = g_strdup_printf("record_appsrc%d", ch);
     re.appsrc = gst_element_factory_make("appsrc", recordData.appSrcName);
     recordData.appsrc = re.appsrc;
-    re.sink = gst_element_factory_make("filesink", g_strdup_printf("sink%d", ch));
-    g_object_set(re.sink, "location", g_strdup_printf("/home/user/dot/test%d.mp4", ch), NULL);
-    //g_object_set(re.sink, "max-size-time", 60*GST_SECOND, NULL);
 
     if (!re.bin || !re.queue || !re.queue2 || !re.parse || !re.enc || !re.rate || !re.convert || !re.capsfilter || !re.crop || !re.overlay || !re.appsink || !re.appsrc) {
         __LOG(LOG_CRIT, "[GST][%s:%d] record element create error", _FILE_, __LINE__);
@@ -395,7 +392,7 @@ gboolean RecordBin::init(guint8 num, gboolean crop_en)
         __LOG(LOG_CRIT, "[GST][%s:%d] record bin add err", _FILE_, __LINE__);
         return ret;
     }
-    //ret = gst_bin_add(GST_BIN(pipeline2), re.bin);
+
 #ifdef CHANNEL_EACH_CROP
     if(crop_en && cmdArg.overlay_en) ret = gst_element_link_many(re.queue, re.crop, re.overlay, re.convert, re.rate, re.capsfilter, re.enc, re.parse, re.queue2, NULL);
     else if(cmdArg.overlay_en) ret = gst_element_link_many(re.queue, re.overlay, re.convert, re.rate, re.capsfilter, re.enc, re.parse, re.queue2, NULL);
@@ -436,6 +433,7 @@ gboolean RecordBin::init(guint8 num, gboolean crop_en)
 
     g_object_set(re.enc, "bitrate", cmdArg.camConfig[ch].bps[STREAM_REC], NULL);
     g_object_set(re.enc, "gop-size", cmdArg.camConfig[ch].gop[STREAM_REC], NULL);
+    //g_object_set(re.enc, "quant", 35, NULL);
     //g_object_set(re.parse, "config-interval", -1, NULL);
     //g_object_set(re.rate, "max-rate", MAIN_FPS, "drop-only", FALSE, NULL);
     g_object_set(re.queue, "max-size-time", GST_SECOND, "max-size-buffers", cmdArg.fps[STREAM_REC][ch], "leaky", LEAKY_DOWNSTREAM, NULL);

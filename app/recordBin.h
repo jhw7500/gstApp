@@ -25,7 +25,6 @@ typedef struct _RecordElement
     GstElement *parse;
     GstElement *bin;
     GstElement *bin2;
-    GstElement *sink;
     GstElement *capsfilter;
     GstElement *crop;
     GstElement *overlay;

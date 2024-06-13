@@ -58,6 +58,7 @@ public :
     RtspServerBin();
     ~RtspServerBin();
 	gboolean init(guint8 num, gboolean crop_en) ;
+    gboolean audioInit();
     GstPad* getBinSinkPad();
     gboolean getStartFlag();
     void getBitrate();

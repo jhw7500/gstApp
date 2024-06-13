@@ -19,6 +19,9 @@
 #define JSON_NAME_PREFIX  "edgeconf_"
 #define JSON_NAME_SUFFIX  ".json"
 
+#define DEFAULT_ENABLE_PATH_01	"/sys/bus/i2c/devices/i2c-2/2-0048/enable"
+#define DEFAULT_ENABLE_PATH_23	"/sys/bus/i2c/devices/i2c-1/1-0048/enable"
+
 #define DEFAULT_ROTATE_PATH_01	"/sys/bus/i2c/devices/i2c-2/2-0048/rotate"
 #define DEFAULT_ROTATE_PATH_23	"/sys/bus/i2c/devices/i2c-1/1-0048/rotate"
 
@@ -32,8 +35,8 @@
 #define DEFAULT_CAPTURE_FPS     15
 #define DEFAULT_GOP_SIZE        15
 #define DEFUALT_DURATION        1
-#define DEFAULT_DBG_LEVEL       5
-#define DEFAULT_LOG_LEVEL       6
+#define DEFAULT_DBG_LEVEL       4
+#define DEFAULT_LOG_LEVEL       5
 #define DEFAULT_CH_ENABLE       0x00
 #define DEFAULT_CH_ROTATE       0x00
 #define DEFAULT_WIDTH           1920
@@ -56,6 +59,7 @@
 #define DEFAULT_SPLIT_SEC           0
 #define DEFAULT_SPLIT_DIFF_MSEC     200
 #define DEFAULT_SPLIT_MAX_MSEC      5000
+#define DEFAULT_SPLIT_AUDIO_MIN_MSEC      59000
 
 #define DEFAULT_START_VIDEO_TIME_PATH   "/tmp/start_video_time"
 #define DEFAULT_DOT_PATH    "/tmp"

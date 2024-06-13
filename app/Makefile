@@ -26,15 +26,17 @@ LIBS += gstreamer-1.0 gstreamer-rtsp-server-1.0 glib-2.0 gstreamer-plugins-base-
 #LIBS += gstreamer-pbutils-1.0
 LDFLAGS+="-Wl,--copy-dt-needed-entries"
 LDFLAGS+=$(shell pkg-config --libs $(LIBS))
+LDFLAGS+=-L/opt/desktop/gitlab/gst-jhw/gstapp/gstapp/app/rnnoise/lib -lrnnoise
 ALL_LDFLAGS=$(LDFLAGS)
 
 CFLAGS+=-Wall
 CFLAGS+=$(shell pkg-config --cflags $(LIBS))
+CFLAGS+=-I/opt/desktop/gitlab/gst-jhw/gstapp/gstapp/app/rnnoise/include
 ALL_CFLAGS=-I$(IDIR) $(CFLAGS)
 
 ALLFLAGS=$(ALL_CFLAGS) $(ALL_LDFLAGS)
 #OBJS = videoBin.o recordBin.o muxSinkBin.o rtspServerBin.o audioBin.o muxBin.o
-OBJS = videoBin.o recordBin.o muxSinkBin.o rtspServerBin.o testBin.o captureBin.o util.o parser.o aes.o tcpServer.o
+OBJS = videoBin.o recordBin.o muxSinkBin.o rtspServerBin.o testBin.o captureBin.o util.o parser.o aes.o tcpServer.o audioBin.o
 
 gstApp : $(OBJS) main.cpp
 	$(CXX) -o $@ $^ $(ALLFLAGS)
@@ -73,6 +75,9 @@ aes.o : aes.cpp aes.h
 
 tcpServer.o : tcpServer.cpp tcpServer.h
 	$(CXX) $(ALLFLAGS) -c tcpServer.cpp
+
+audioBin.o : audioBin.cpp audioBin.h
+	$(CXX) $(ALLFLAGS) -c audioBin.cpp
 
 #json_c.o : json_c.cpp json_c.h
 #	$(CXX) $(ALLFLAGS) -c json_c.cpp

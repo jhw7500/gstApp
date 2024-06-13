@@ -14,6 +14,7 @@
 #include <gst/app/gstappsrc.h>
 #include <gst/app/gstappsink.h>
 #include <gst/rtsp-server/rtsp-server.h>
+#include <rnnoise.h>
 
 GstRTSPMountPoints *rtspMounts = NULL;
 GstRTSPServer *rtspServer = NULL;
@@ -112,7 +113,7 @@ static void	media_configure(GstRTSPMediaFactory *factory, GstRTSPMedia *media, g
     //static GMutex mutex;
 
 	//g_mutex_lock(&mutex);
-    __LOG(LOG_NOTICE, "[GST][%s:%d] media connect ch:%d", _FILE_, __LINE__, __FUNCTION__, info->ch);
+    __LOG(LOG_NOTICE, "[GST][%s:%d] media connect ch:%d", _FILE_, __LINE__, info->ch);
 	element = gst_rtsp_media_get_element(media);
     //name = GST_ELEMENT_NAME(GST_APP_SRC(element));
     //name = gst_object_get_name(GST_OBJECT(element));
@@ -151,6 +152,7 @@ static void eos_callback(GstAppSink *appsink, gpointer user_data)
     __LOG(LOG_NOTICE, "[GST][%s:%d] %s", _FILE_, __LINE__, __FUNCTION__);
 }
 
+static DenoiseState *den;
 static GstFlowReturn new_sample_handler(GstElement *sink, gpointer userData) 
 {
     GstSample *sample;
@@ -211,9 +213,19 @@ static GstFlowReturn new_sample_handler(GstElement *sink, gpointer userData)
         return GST_FLOW_ERROR;
     }
 
+#if 0
+    if(info->ch == 4)
+    {
+        float *data = (float *)map.data;
+        rnnoise_process_frame(den, data, data);
+    }
+#endif
+
     // Create a new buffer and copy data
-    info->buf = gst_buffer_new_and_alloc(map.size);
-    gst_buffer_fill(info->buf, 0, map.data, map.size);
+    //info->buf = gst_buffer_new_and_alloc(map.size);
+    //gst_buffer_fill(info->buf, 0, map.data, map.size);
+    GstBuffer *out_buffer = gst_buffer_new_allocate(NULL, map.size, NULL);
+    gst_buffer_fill(out_buffer, 0, map.data, map.size);
 
     // Unmap the original buffer
     // gst_buffer_unmap(buffer, &map);
@@ -221,7 +233,8 @@ static GstFlowReturn new_sample_handler(GstElement *sink, gpointer userData)
 
     // Push the new buffer to the appsrc
     // g_thread_new("data-processing-thread", (GThreadFunc)process_data_thread, info);
-    gst_app_src_push_buffer(GST_APP_SRC(info->appsrc), info->buf);
+    //gst_app_src_push_buffer(GST_APP_SRC(info->appsrc), info->buf);
+    gst_app_src_push_buffer(GST_APP_SRC(info->appsrc), out_buffer);
 
     gst_buffer_unmap(buffer, &map);
     gst_sample_unref(sample);
@@ -446,6 +459,95 @@ GstPad* RtspServerBin::getBinSinkPad()
     return sinkPad;
 }
 
+gboolean RtspServerBin::audioInit()
+{
+    gboolean ret = 0;
+    GstPad *staticPad;
+
+    if(re.bin != NULL) return ret;
+
+    __LOG(LOG_NOTICE, "[GST][%s:%d] %s", _FILE_, __LINE__, __FUNCTION__);
+
+    rtspServerData.ch = 4;
+    den = rnnoise_create(NULL);
+    re.bin = gst_bin_new(g_strdup_printf("rtspServerBin%d", rtspServerData.ch));
+    re.queue = gst_element_factory_make(QUEUE_TYPE, "queue");
+    re.sink = gst_element_factory_make("appsink", "appsink");
+    
+    if (!re.bin || !re.queue || !re.sink) {
+        __LOG(LOG_CRIT, "[GST][%s:%d] audio rtsp element create error", _FILE_, __LINE__);
+        return ret;
+    }
+
+    gst_bin_add_many(GST_BIN(re.bin), re.queue, re.sink, NULL);
+
+    ret = gst_bin_add(GST_BIN(pipeline), re.bin);
+    if(!ret) {
+        __LOG(LOG_CRIT, "[GST][%s:%d] audio rtsp bin add error in pipeline", _FILE_, __LINE__);
+        return ret;
+    }
+
+    ret = gst_element_link_many(re.queue, re.sink, NULL);
+
+    if (!ret) {
+        __LOG(LOG_CRIT, "[GST][%s:%d] rtsp link err", _FILE_, __LINE__);
+        return ret;
+    }
+    
+    //g_object_set(re.sink, "max-buffers", 30, NULL);
+    g_object_set(re.sink, "drop", TRUE, NULL);
+    //g_object_set(pipe->sink, "max-lateness", 1*GST_SECOND, NULL);
+    //g_object_set(pipe->sink, "render-delay", 100*GST_MSECOND, NULL);
+    g_object_set(re.sink, "emit-signals", TRUE, "sync", FALSE, NULL);
+    //g_object_set(re.convert, "videocrop-meta-enable", TRUE, NULL);
+
+    g_signal_connect(re.sink, "eos", G_CALLBACK(eos_callback), NULL);
+    g_signal_connect(re.sink, "new-sample", G_CALLBACK(new_sample_handler), &rtspServerData);
+    g_signal_connect(re.sink, "new-preroll", G_CALLBACK(new_preroll_handler), &rtspServerData);
+
+    staticPad = gst_element_get_static_pad(re.queue, "sink");
+    sinkPad = gst_ghost_pad_new(g_strdup_printf("rtspServerBin_sink_ch%d", rtspServerData.ch), staticPad);
+
+    ret = gst_element_add_pad(re.bin, sinkPad);
+    if(!ret) {
+        __LOG(LOG_CRIT, "[GST][%s:%d] rtsp pad add err", _FILE_, __LINE__);
+        return ret;
+    }
+
+    gst_object_unref(staticPad);
+
+    GstRTSPMediaFactory *factory = gst_rtsp_media_factory_new();
+    //rtspServerData.appSrcName = g_strdup_printf("%s%d", "appsrc", ch);
+    rtspServerData.appSrcName = g_strdup_printf("%s", "audio_rtsp_appsrc");
+
+    //gchar *launch_str = g_strdup_printf("( appsrc name=%s ! queue max-size-buffers=60 leaky=2 ! vpuenc_h264 bitrate=1024 ! h264parse config-interval=-1 ! rtph264pay name=pay0 config-interval=-1 )", rtspServerData.appSrcName);
+    gchar *launch_str = g_strdup_printf("appsrc name=%s do-timestamp=1 is-live=1 format=3 ! queue max-size-buffers=15 leaky=2 ! mpegaudioparse ! rtpmpapay name=pay0 pt=97 )", rtspServerData.appSrcName);
+
+    gst_rtsp_media_factory_set_launch(factory, launch_str);
+    gst_rtsp_media_factory_set_shared(factory, TRUE);
+    g_free(launch_str);
+    
+    log_once(LOG_INFO, g_strdup_printf("[GST][%s:%d] eos shutdown : %s", _FILE_, __LINE__, gst_rtsp_media_factory_is_eos_shutdown(factory)? "TRUE":"FALSE"));
+    log_once(LOG_INFO, g_strdup_printf("[GST][%s:%d] latency : %d", _FILE_, __LINE__, gst_rtsp_media_factory_get_latency(factory)));
+    //rtspServerData.appsrc = gst_element_factory_make("appsrc", rtspServerData.appSrcName);
+    g_signal_connect(factory, "media-configure", (GCallback)media_configure, &rtspServerData);
+
+    gchar *point = g_strdup_printf("/ch%d", rtspServerData.ch);
+    //__LOG(LOG_INFO, "[RTSP][%s:%d] point : %s", _FILE_, __LINE__, point);
+
+    gst_rtsp_mount_points_add_factory(rtspMounts, point, factory);
+
+    gst_rtsp_media_factory_add_role(factory, cmdArg.rtsp_id,
+                                    GST_RTSP_PERM_MEDIA_FACTORY_ACCESS, G_TYPE_BOOLEAN, TRUE,
+                                    GST_RTSP_PERM_MEDIA_FACTORY_CONSTRUCT, G_TYPE_BOOLEAN, TRUE, NULL);
+
+    __LOG(LOG_NOTICE, "[RTSP][%s:%d]stream ready at rtsp://%s:%s@127.0.0.1:%s%s", _FILE_, __LINE__, cmdArg.rtsp_id, cmdArg.rtsp_passwd, cmdArg.rtsp_port, point);
+    
+    g_free(point);
+
+    return ret;
+}
+
 gboolean RtspServerBin::init(guint8 ch, gboolean crop_en)
 {
     GstPad *staticPad;
@@ -606,8 +708,11 @@ gboolean RtspServerBin::init(guint8 ch, gboolean crop_en)
 #if 1
 void rtspServerStop()
 {
-    __LOG(LOG_EMERG, "[RTSP][%s:%d] %s", _FILE_, __LINE__, __FUNCTION__);
-    if(rtspServer) g_object_unref(rtspServer);
+    if(rtspServer) {
+        __LOG(LOG_EMERG, "[RTSP][%s:%d] %s", _FILE_, __LINE__, __FUNCTION__);
+        g_object_unref(rtspServer);
+    }
+
     if(cleanRtsp_id) g_source_remove(cleanRtsp_id);
 }
 

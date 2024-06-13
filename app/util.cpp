@@ -14,7 +14,6 @@
 #include <glib-unix.h>
 
 GstElement *pipeline = NULL;
-GstElement *pipeline2 = NULL;
 GMainLoop *loop = NULL;
 volatile sig_atomic_t is_interrupted = 0;
 gboolean is_live = FALSE;
@@ -24,15 +23,37 @@ static gboolean quiet = FALSE;
 extern volatile gboolean glib_on_error_halt;
 guint signal_watch_intr_id = 0;
 guint signal_watch_hup_id = 0;
+guint signal_watch_term_id = 0;
+guint signal_watch_kill_id = 0;
 gboolean ch_en_array[MAX_CHANNEL] = { TRUE, TRUE, TRUE, TRUE };
 
 static void fault_restore (void);
 static void fault_spin (void);
 
+static void term_handler(int signum) {
+    //g_print("Received SIGTERM, sending EOS to pipeline...\n");
+    __LOG(LOG_EMERG, "[CFG][%s:%d] Received SIGTERM, sending EOS to pipeline...", _FILE_, __LINE__);
+    gst_element_send_event(pipeline, gst_event_new_eos());
+
+    //sleep(5);
+    //is_interrupted = TRUE;
+}
+
+static void kill_handler(int signum) {
+    //g_print("Received SIGKILL, sending EOS to pipeline...\n");
+    __LOG(LOG_EMERG, "[CFG][%s:%d] Received SIGKILL, sending EOS to pipeline...", _FILE_, __LINE__);
+    gst_element_send_event(pipeline, gst_event_new_eos());
+
+    //sleep(5);
+    //is_interrupted = TRUE;
+}
+
 static gboolean intr_handler (gpointer user_data)
 {
   GstElement *pipeline = (GstElement *) user_data;
   g_print("handling interrupt.\n");
+  //__LOG(LOG_EMERG, "[CFG][%s:%d] Received SIGINTR, sending EOS to pipeline...", _FILE_, __LINE__);
+  gst_element_send_event(pipeline, gst_event_new_eos());
   /* post an application specific message */
   gst_element_post_message (GST_ELEMENT (pipeline),
       gst_message_new_application (GST_OBJECT (pipeline),
@@ -40,13 +61,19 @@ static gboolean intr_handler (gpointer user_data)
               "message", G_TYPE_STRING, "Pipeline interrupted", NULL)));
   /* remove signal handler */
   signal_watch_intr_id = 0;
-  is_interrupted = TRUE;
+
+  //sleep(5);
+  //is_interrupted = TRUE;
+
   return G_SOURCE_REMOVE;
 }
 
 static gboolean hup_handler (gpointer user_data)
 {
   GstElement *pipeline = (GstElement *) user_data;
+
+  __LOG(LOG_EMERG, "[CFG][%s:%d] Received SIGHUP, sending EOS to pipeline...", _FILE_, __LINE__);
+
   if (g_getenv ("GST_DEBUG_DUMP_DOT_DIR") != NULL) {
     g_print("SIGHUP: dumping dot file snapshot ...\n");
   } else {
@@ -56,6 +83,9 @@ static gboolean hup_handler (gpointer user_data)
   /* dump graph on hup */
   GST_DEBUG_BIN_TO_DOT_FILE_WITH_TS (GST_BIN (pipeline),
       GST_DEBUG_GRAPH_SHOW_ALL, "gst-launch.snapshot");
+
+  gst_element_send_event(pipeline, gst_event_new_eos());
+
   return G_SOURCE_CONTINUE;
 }
 
@@ -114,6 +144,9 @@ static void fault_restore (void)
 void fault_setup (void)
 {
   struct sigaction action;
+
+  __LOG(LOG_NOTICE, "[GST][%s:%d] %s", _FILE_, __LINE__, __FUNCTION__);
+
   memset (&action, 0, sizeof (action));
   action.sa_handler = fault_handler_sighandler;
   sigaction (SIGSEGV, &action, NULL);
@@ -123,8 +156,12 @@ void fault_setup (void)
 void sigHandler(int sig)
 {
   static guint8 cnt = 0;
-  __LOG(LOG_NOTICE, "[GST][%s:%d] sigHandler(%d)", _FILE_, __LINE__, sig);
-	is_interrupted = TRUE;
+  __LOG(LOG_EMERG, "[GST][%s:%d] sigHandler(%d)", _FILE_, __LINE__, sig);
+  //is_interrupted = TRUE;
+
+  gst_element_send_event(pipeline, gst_event_new_eos());
+  //sleep(1);
+
   if(cnt++ > 3)
   {
     g_main_loop_unref(loop);
@@ -147,20 +184,24 @@ void addSignalHandler()
 {
   signal_watch_intr_id = g_unix_signal_add (SIGINT, (GSourceFunc) intr_handler, pipeline);
   signal_watch_hup_id = g_unix_signal_add (SIGHUP, (GSourceFunc) hup_handler, pipeline);
+  //signal_watch_term_id = g_unix_signal_add (SIGTERM, (GSourceFunc) term_handler, pipeline);
+  //signal_watch_kill_id = g_unix_signal_add (SIGKILL, (GSourceFunc) kill_handler, pipeline);
 }
 
 void removeSignalHandler()
 {
   if (signal_watch_intr_id > 0) g_source_remove(signal_watch_intr_id);
   if (signal_watch_hup_id > 0) g_source_remove(signal_watch_hup_id);
+  //if (signal_watch_term_id > 0) g_source_remove(signal_watch_term_id);
+  //if (signal_watch_kill_id > 0) g_source_remove(signal_watch_kill_id);
 }
 
 void attachInterruptHandlers()
 {
   //signal(SIGUSR1, ipcHandler);
-  signal(SIGINT, sigHandler);
-  signal(SIGKILL, sigHandler);
-  signal(SIGTERM, sigHandler);
+  //signal(SIGINT, sigHandler);
+  signal(SIGKILL, kill_handler);
+  signal(SIGTERM, term_handler);
 }
 
 void cleanup()

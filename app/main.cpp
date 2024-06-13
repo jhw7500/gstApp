@@ -20,11 +20,12 @@
 #include "parser.h"
 #include "aes.h"
 #include "tcpServer.h"
+#include "audioBin.h"
 #include <fcntl.h>
 #include <unistd.h>
 //#include <signal.h>
 
-#define APP_VERSION "0.5"
+#define APP_VERSION "0.6"
 
 #define SEGFAULT_DEBUG
 #define RECORDBIN_ENABLE
@@ -32,6 +33,12 @@
 #define AUDIOBIN_ENABLE
 #define SPLIT_TIME_RECOVERY
 //MuxSinkBin muxSinkBin[MAX_CHANNEL];
+
+void handle_sigint(int sig) {
+    //g_print("Caught signal %d, sending EOS to pipeline\n", sig);
+    __LOG(LOG_EMERG, "[GST][%s:%d] Caught signal %d, sending EOS to pipeline", _FILE_, __LINE__, sig);
+    gst_element_send_event(pipeline, gst_event_new_eos());
+}
 
 gboolean bus_message_parse(GstBus *bus, GstMessage *message, gpointer data)
 {
@@ -87,7 +94,7 @@ gboolean bus_message_parse(GstBus *bus, GstMessage *message, gpointer data)
         case GST_MESSAGE_EOS:
         {
             //printf("GST_MESSAGE_EOS (index:%d sigflag:%d)\n", info->index, sigflag);
-            //__LOG(LOG_NOTICE, "[GST][%s:%d] GST_MESSAGE_EOS (index:%d sigflag:%d)", _FILE_, __LINE__, info->index, sigflag);
+            __LOG(LOG_EMERG, "[GST][%s:%d] GST_MESSAGE_EOS", _FILE_, __LINE__);
             if(is_interrupted)
             {
                 cam_cnt++;
@@ -95,11 +102,12 @@ gboolean bus_message_parse(GstBus *bus, GstMessage *message, gpointer data)
             }
             else
             {
-                gst_element_set_state(pipeline, GST_STATE_READY);
+                is_interrupted = TRUE;
+                //gst_element_set_state(pipeline, GST_STATE_READY);
+                //gst_element_set_state(pipeline, GST_STATE_PLAYING);
                 //gst_element_get_state(pipeline[info->index], NULL, NULL, GST_CLOCK_TIME_NONE);
                 //gst_element_seek(pipeline[info->index], 1.0, GST_FORMAT_TIME, GST_SEEK_FLAG_FLUSH, GST_SEEK_TYPE_SET, 0, GST_SEEK_TYPE_SET, -1);
                 //gst_element_set_state(pipeline[info->index], GST_STATE_NULL);
-                gst_element_set_state(pipeline, GST_STATE_PLAYING);
                 //change_file_datetime(NULL);
             }
 
@@ -389,24 +397,29 @@ static void splitCheck(gpointer data, guint8 startSec)
     }
     __LOG(LOG_NOTICE, "[GST][%s:%d] splitMax : %d, splitMin : %d", _FILE_, __LINE__, splitMax, splitMin);
 
-    if (splitMax - splitMin >= cmdArg.split_diff_msec || splitMax >= cmdArg.split_max_msec)
+    do 
     {
-        gchar *str = g_strdup_printf("echo '%s' > %s &", g_date_time_format(g_date_time_new_now_local(), "%Y%m%d %H:%M:%S"), DEFAULT_START_VIDEO_TIME_PATH);
+        if (splitMax - splitMin >= cmdArg.split_diff_msec || (splitMax >= cmdArg.split_max_msec))
+        {
+            //if(cmdArg.audio_en && splitMax >= cmdArg.split_audio_min_msec) break;
 
-        __LOG(LOG_ERR, "[GST][%s:%d] split time check error : splitMax : %d, splitMin : %d", _FILE_, __LINE__, splitMax, splitMin);
+            gchar *str = g_strdup_printf("echo '%s' > %s &", g_date_time_format(g_date_time_new_now_local(), "%Y%m%d %H:%M:%S"), DEFAULT_START_VIDEO_TIME_PATH);
 
-        if (system(str) < 0)
-            __LOG(LOG_ERR, "[GST][%s:%d] %s error in %s", _FILE_, __LINE__, str, __FUNCTION__);
-        else
-            __LOG(LOG_NOTICE, "[GST][%s:%d] %s in %s", _FILE_, __LINE__, str, __FUNCTION__);
+            __LOG(LOG_ERR, "[GST][%s:%d] split time check error : splitMax : %d, splitMin : %d", _FILE_, __LINE__, splitMax, splitMin);
 
-        g_free(str);
+            if (system(str) < 0)
+                __LOG(LOG_ERR, "[GST][%s:%d] %s error in %s", _FILE_, __LINE__, str, __FUNCTION__);
+            else
+                __LOG(LOG_NOTICE, "[GST][%s:%d] %s in %s", _FILE_, __LINE__, str, __FUNCTION__);
 
-        __LOG(LOG_NOTICE, "[GST][%s:%d] split now", _FILE_, __LINE__);
-        for (i = 0; i < MAX_CHANNEL; i++)
-            if (muxSinkBin[i].getBinVideoSinkPad())
-                muxSinkBin[i].splitNow(NULL, FALSE);
-    }
+            g_free(str);
+
+            __LOG(LOG_NOTICE, "[GST][%s:%d] split now", _FILE_, __LINE__);
+            for (i = 0; i < MAX_CHANNEL; i++)
+                if (muxSinkBin[i].getBinVideoSinkPad())
+                    muxSinkBin[i].splitNow(NULL, FALSE);
+        }
+    } while(0);
 
 #endif
     target_min = g_date_time_get_minute(g_date_time_add_minutes(datetime, cmdArg.duration));
@@ -660,7 +673,7 @@ gint main(gint argc, gchar *argv[])
     parser->init_arg(argv[0]);
     cmdArg = parser->arg;
     //getPasswdWithAES(&parser->arg);
-    //attachInterruptHandlers();
+
     if(parser->json_parser(DEFAULT_JSON_PATH, DEFAULT_JSON_HEADER) < 0)
         return -1;
 
@@ -670,8 +683,7 @@ gint main(gint argc, gchar *argv[])
     getPasswdWithAES(&parser->arg);
     //if(!strcmp(parser->arg.rtsp_passwd, DEFAULT_RTSP_PASSWD) == 0)
     
-
-    __LOG(LOG_NOTICE, "[GST][%s:%d] %s version : %s linked against Gstreamer %d.%d.%d %s", __FILE__, __LINE__, parser->arg.appname, APP_VERSION, major, minor, micro, nano_str);
+    __LOG(LOG_ALERT, "[GST][%s:%d] %s version : %s linked against Gstreamer %d.%d.%d %s", __FILE__, __LINE__, parser->arg.appname, APP_VERSION, major, minor, micro, nano_str);
 
     cmdArg = parser->arg;
     if(parser->check_arg() < 0)
@@ -681,14 +693,13 @@ gint main(gint argc, gchar *argv[])
     GstBus *bus;
     VideoBin videoBin[MAX_VIDEO_SRC];
     RecordBin recordBin[MAX_CHANNEL];
-    RtspServerBin rtspServerBin[MAX_CHANNEL];
+    RtspServerBin rtspServerBin[MAX_CHANNEL+1];
     MuxSinkBin muxSinkBin[MAX_CHANNEL];
     CaptureBin captureBin[MAX_CHANNEL];
-    TestBin audioBin;
     CTCPServer *tcpServer = CTCPServer::getInstance();
     GThread *splitThread = NULL, *terminalThread = NULL;
     GstStateChangeReturn ret;
-    guint8 i;
+    guint8 i = 0;
     guint srtTimer_id = 0;
     ThreadArgs* thraedArgs = g_new(ThreadArgs, 1);
     const gchar *stateChangeReturnStr[4] = {"GST_STATE_CHANGE_FAILURE", "GST_STATE_CHANGE_SUCCESS", "GST_STATE_CHANGE_ASYNC", "GST_STATE_CHANGE_NO_PREROLL"};
@@ -699,13 +710,13 @@ gint main(gint argc, gchar *argv[])
     thraedArgs->arg3 = muxSinkBin;
     thraedArgs->arg4 = captureBin;
 
+    //pipeline = gst_pipeline_new("test-pipeline");
     pipeline = gst_pipeline_new(g_strdup_printf("%s_%s", cmdArg.appname, g_date_time_format(g_date_time_new_now_local(), "%Y%m%d_%H%M%S")));
     //pipeline2 = gst_pipeline_new(g_strdup_printf("%s2_%s", cmdArg.appname, g_date_time_format(g_date_time_new_now_local(), "%Y%m%d_%H%M%S")));
     //muxBin.init();
     //g_print("width : %d\n", cmdArg.res[cmdArg.resolution_mode].height);
 
-    //signal_watch_intr_id = g_unix_signal_add (SIGINT, (GSourceFunc) intr_handler, pipeline);
-    //signal_watch_hup_id = g_unix_signal_add (SIGHUP, (GSourceFunc) hup_handler, pipeline);
+    attachInterruptHandlers();
     addSignalHandler();
 
     if(!cmdArg.fault) fault_setup();
@@ -717,6 +728,14 @@ gint main(gint argc, gchar *argv[])
     guint8 csiNum;
     cmdArg.crop_en[0] = cmdArg.cam_en[0]&&cmdArg.cam_en[1];
     cmdArg.crop_en[1] = cmdArg.cam_en[2]&&cmdArg.cam_en[3];
+
+    //TestBin audioBin;
+    AudioBin audioBin;
+    
+    if (cmdArg.audio_en)
+    {
+        audioBin.init();
+    }
 
     for(i=0; i<MAX_CHANNEL; i++)
     {
@@ -842,26 +861,9 @@ gint main(gint argc, gchar *argv[])
 
         if(cmdArg.audio_en)
         {
-            if(audioBin.init())
-            {
-                audioBin.addElement("alsasrc", "audioconvert", "audiorate", "lamemp3enc", "mpegaudioparse", "queue", "tee", NULL);
-                if(!audioBin.linkElement()) {
-                    __LOG(LOG_CRIT, "[GST][%s:%d] audio element link err", _FILE_, __LINE__);
-                    goto main_end;
-                }
-                g_object_set(audioBin.be.element[0], "device", "plughw:0,0", NULL);
-                //g_object_set(audioBin.be.element[0], "is-live", TRUE, NULL);
-                //g_object_set(audioBin.be.element[0], "wave", 5, NULL);
-                //g_object_set(audioBin.be.element[0], "wave", 8, NULL);
-                //g_object_set(audioBin.be.element[0], "tick-interval", 200000000, NULL);
-                //g_object_set(audioBin.be.element[2], "max-size-time", 5*GST_SECOND, "max-size-buffers", 60, "leaky", 2, NULL);
-                g_object_set(audioBin.be.element[5], "max-size-time", 5*GST_SECOND, "max-size-buffers", 60, "leaky", 2, NULL);
-                //g_object_set(audioBin.be.element[6], "max-size-bytes", 0, "max-size-time", 0, "max-size-buffers", 60, "leaky", LEAKY_DOWNSTREAM, NULL);
-            }
-
             if(!audioBin.addBinSrcPad(i))
             {
-                __LOG(LOG_CRIT, "[GST][%s:%d] ch%d audio pad add err", _FILE_, __LINE__, i);
+                __LOG(LOG_CRIT, "[GST][%s:%d] ch%d audio src pad add err", _FILE_, __LINE__, i);
                 goto main_end;
             }
 
@@ -877,14 +879,32 @@ gint main(gint argc, gchar *argv[])
                 //return -1;
                 goto main_end;
             }
-            else __LOG(LOG_NOTICE, "[GST][%s:%d] ch%d audio pad link", _FILE_, __LINE__, i);
+            else __LOG(LOG_INFO, "[GST][%s:%d] ch%d audio pad link", _FILE_, __LINE__, i);
+#if 1
+            if(rtspServerBin[4].audioInit())
+            {
+                if(!audioBin.addBinSrcPad(4))
+                {
+                    __LOG(LOG_CRIT, "[GST][%s:%d] rtsp audio src pad add err", _FILE_, __LINE__);
+                    goto main_end;
+                }
+
+                if(gst_pad_link(audioBin.getBinSrcPad(4), rtspServerBin[4].getBinSinkPad()) != GST_PAD_LINK_OK)
+                {
+                    __LOG(LOG_CRIT, "[GST][%s:%d] rtsp audio pad link err", _FILE_, __LINE__);
+                    goto main_end;
+                }
+
+            }
+#endif
         }
     }
 
     //gst_element_set_state(pipeline, GST_STATE_PLAYING);
-
+    //signal(SIGINT, handle_sigint);
     GST_DEBUG_BIN_TO_DOT_FILE(GST_BIN(pipeline), GST_DEBUG_GRAPH_SHOW_ALL, gst_element_get_name(pipeline));
     //GST_DEBUG_BIN_TO_DOT_FILE_WITH_TS(GST_BIN(pipeline), GST_DEBUG_GRAPH_SHOW_VERBOSE, gst_element_get_name(pipeline));
+    gst_pipeline_use_clock(GST_PIPELINE(pipeline), gst_system_clock_obtain());
 
     bus = gst_element_get_bus(pipeline);
     if (!bus)
@@ -896,7 +916,7 @@ gint main(gint argc, gchar *argv[])
     gst_bus_add_watch(bus, bus_message_parse, NULL);
 
     gst_object_unref(bus);
-
+#if 1
     ret = gst_element_set_state(pipeline, GST_STATE_PAUSED);
     
     __LOG(LOG_NOTICE, "[GST][%s:%d] paused : %s", _FILE_, __LINE__, stateChangeReturnStr[ret]);
@@ -922,7 +942,7 @@ gint main(gint argc, gchar *argv[])
             config_camera(i);
         }
     }
-
+#endif
     ret = gst_element_set_state(pipeline, GST_STATE_PLAYING);
     __LOG(LOG_NOTICE, "[GST][%s:%d] playing : %s", _FILE_, __LINE__, stateChangeReturnStr[ret]);
     if (ret == GST_STATE_CHANGE_FAILURE)
@@ -931,16 +951,7 @@ gint main(gint argc, gchar *argv[])
         gst_object_unref(pipeline);
         goto main_end;
     }
-#if 0
-    ret = gst_element_set_state(pipeline2, GST_STATE_PLAYING);
-    __LOG(LOG_NOTICE, "[GST][%s:%d] playing : %s", _FILE_, __LINE__, stateChangeReturnStr[ret]);
-    if (ret == GST_STATE_CHANGE_FAILURE)
-    {
-        __LOG(LOG_CRIT, "[GST][%s:%d] pipeline2 state playing error", _FILE_, __LINE__);
-        gst_object_unref(pipeline2);
-        goto main_end;
-    }
-#endif
+
     if(cmdArg.input_en) {
         terminalThread = g_thread_new("terminal-thread", (GThreadFunc)check_terminal_input, thraedArgs);
     }
@@ -983,19 +994,19 @@ gint main(gint argc, gchar *argv[])
 #else
     for(i=0; i<MAX_CHANNEL; i++)
     {
+        //if(muxSinkBin[i].getBinVideoSinkPad()) muxSinkBin[i].handle_last_sample();
         if(muxSinkBin[i].getBinVideoSinkPad()) gst_pad_send_event(muxSinkBin[i].getBinVideoSinkPad(), gst_event_new_eos());
         if(muxSinkBin[i].getBinAudioSinkPad()) gst_pad_send_event(muxSinkBin[i].getBinAudioSinkPad(), gst_event_new_eos());
         //if(rtspServerBin[i].getBinSinkPad()) gst_pad_send_event(rtspServerBin[i].getBinSinkPad(), gst_event_new_eos());
         //if(captureBin[i].getBinSinkPad()) gst_pad_send_event(captureBin[i].getBinSinkPad(), gst_event_new_eos());
     }
 #endif
+    //gst_element_send_event(pipeline, gst_event_new_eos());
 
     //sleep(1);
 
 main_end:
     __LOG(LOG_NOTICE, "[GST][%s:%d] main loop end", _FILE_, __LINE__);
-
-    if(loop) g_main_loop_unref(loop);
 
     if(thraedArgs) g_free(thraedArgs);
 
@@ -1026,6 +1037,8 @@ main_end:
     if(cmdArg.tcp_en) {
         tcpServer->destroy();
     }
+
+    if(loop) g_main_loop_unref(loop);
 
     removeSignalHandler();
 

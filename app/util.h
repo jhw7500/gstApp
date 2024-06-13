@@ -153,6 +153,7 @@ typedef struct _CmdArg
     gint captureMaxCnt;
     gint split_diff_msec;
     gint split_max_msec;
+    gint split_audio_min_msec;
     gint split_sec;
     gboolean input_en;
     const gchar *rtsp_port;
@@ -177,6 +178,7 @@ extern gboolean is_live;
 
 void fault_setup (void);
 void addSignalHandler();
+void attachInterruptHandlers();
 void removeSignalHandler();
 void mylog(gint opt, const gchar* _szfmt, ... );
 void log_once(gint opt, const gchar *message);

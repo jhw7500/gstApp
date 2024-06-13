@@ -52,6 +52,7 @@ void ParserClass::init_arg(gchar *argv)
     arg.overlay_en = FALSE;
     arg.split_diff_msec = DEFAULT_SPLIT_DIFF_MSEC;
     arg.split_max_msec = DEFAULT_SPLIT_MAX_MSEC;
+    arg.split_audio_min_msec = DEFAULT_SPLIT_AUDIO_MIN_MSEC;
     arg.split_sec = DEFAULT_SPLIT_SEC;
     arg.stream_en[STREAM_REC] = TRUE;
     arg.stream_en[STREAM_RTSP] = TRUE;
@@ -425,6 +426,22 @@ gint ParserClass::arg_parser(int *argc, char **argv[])
         //__LOG(LOG_CRIT, "[GST][%s:%d] arg.cam_en : %d", _FILE_, __LINE__, arg.cam_en[i]);
     }
 
+    sprintf(str, "echo %d > %s", arg.ch_enable&0x03, DEFAULT_ENABLE_PATH_01);
+    __LOG(LOG_NOTICE, "[%s][%s:%d] %s", LOG_KEY, _FILE_, __LINE__, str);
+    ret = system(str);
+    if (ret < 0) {
+        __LOG(LOG_CRIT, "[%s][%s:%d] ret:%d", LOG_KEY, _FILE_, __LINE__, ret);
+        return ret;
+    }
+
+    sprintf(str, "echo %d > %s", (arg.ch_enable>>2)&0x03, DEFAULT_ENABLE_PATH_23);
+    __LOG(LOG_NOTICE, "[%s][%s:%d] %s", LOG_KEY, _FILE_, __LINE__, str);
+    ret = system(str);
+    if (ret < 0) {
+        __LOG(LOG_CRIT, "[%s][%s:%d] ret:%d", LOG_KEY, _FILE_, __LINE__, ret);
+        return ret;
+    }
+
     sprintf(str, "echo %d > %s", arg.ch_rotate&0x0f, DEFAULT_ROTATE_PATH_01);
     __LOG(LOG_NOTICE, "[%s][%s:%d] %s", LOG_KEY, _FILE_, __LINE__, str);
     ret = system(str);
@@ -748,7 +765,7 @@ gint ParserClass::cmd_parser(gchar* buffer, gint len, gpointer data)
                 }
                 else if (compareBuf(token, "1", 1))
                 {
-                    gst_element_get_state(pipeline2, &state, NULL, GST_CLOCK_TIME_NONE);
+                    //gst_element_get_state(pipeline2, &state, NULL, GST_CLOCK_TIME_NONE);
                     g_print("pipe1 state : %s\n", stateStr[state]);
                 }
                 else

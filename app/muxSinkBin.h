@@ -18,8 +18,8 @@
 typedef struct _MuxSinkElement
 {
     GstElement *sink;
-    GstElement *mp4mux;
     GstElement *bin;
+    GstElement *mp4mux;
 } MuxSinkElement;
 
 typedef struct _MuxSinkData
@@ -45,6 +45,7 @@ public :
     guint8 getStartFlag();
     gint getSplitMsec();
     void setSplitMsec(gint msec);
+    void handle_last_sample();
     //gchararray format_location(GstElement *sink, guint arg0, gpointer data);
 private :
     //static gchararray format_location(GstElement *sink, guint arg0, gpointer data);
@@ -57,6 +58,7 @@ private :
     MuxSinkElement be;
     MuxSinkData muxSinkData;
     GstPad *sinkAudioPad;
+    GstPad *sinkAudioPad_;
     GstPad *sinkVideoPad;
 };
 

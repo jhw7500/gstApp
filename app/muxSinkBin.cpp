@@ -136,9 +136,17 @@ gchararray format_location(GstElement *sink, guint arg0, gpointer data)
     gchar *date_str;
 
     //info->split_msec = sec;
-    info->split_msec = sec*1000 + usec/1000;
+    info->split_msec = sec*1000 + usec/1000; 
     //__LOG(LOG_NOTICE, "[GST][%s:%d] ch%d, %d*1000+%d/1000=%d", _FILE_, __LINE__, info->ch, sec, msec, info->split_msec);
+
+    if(cmdArg.audio_en && info->split_msec >= cmdArg.split_audio_min_msec) {
+        __LOG(LOG_NOTICE, "[GST][%s:%d] audio limit %d msec over..", _FILE_, __LINE__, cmdArg.split_audio_min_msec);
+        //datetime = g_date_time_add_minutes(datetime, 1);
+    }
+
     date_str = g_date_time_format(datetime, "%Y%m%d_%H%M00");
+    //date_str = g_date_time_format(datetime, "%Y%m%d_%H%M%S");
+
     gchararray file_name = g_strdup_printf("%s/%s_%s-ch%d.mp4", cmdArg.mntDir, cmdArg.ohtName, date_str, info->ch);
     
     //__LOG(LOG_NOTICE, "[GST][%s:%d] %s : %s", _FILE_, __LINE__, __FUNCTION__, file_name);
@@ -147,6 +155,33 @@ gchararray format_location(GstElement *sink, guint arg0, gpointer data)
     g_free(date_str);
 
     return file_name;
+}
+
+void MuxSinkBin::handle_last_sample() {
+    GstSample *sample;
+    g_object_get(be.sink, "last-sample", &sample, NULL);
+
+    if (sample) {
+        GstCaps *caps = gst_sample_get_caps(sample);
+        GstBuffer *buffer = gst_sample_get_buffer(sample);
+        GstMapInfo map;
+
+        if (gst_buffer_map(buffer, &map, GST_MAP_READ)) {
+            // 마지막 샘플 데이터 처리
+            g_print("Last sample size: %zu\n", map.size);
+            gst_buffer_unmap(buffer, &map);
+        }
+
+        if (caps) {
+            gchar *caps_str = gst_caps_to_string(caps);
+            g_print("Last sample caps: %s\n", caps_str);
+            g_free(caps_str);
+        }
+
+        gst_sample_unref(sample);
+    } else {
+        g_print("No last sample available.\n");
+    }
 }
 
 MuxSinkBin* MuxSinkBin::getInstance()
@@ -177,6 +212,8 @@ gboolean MuxSinkBin::addBinVideoSinkPad()
     __LOG(LOG_INFO, "[GST][%s:%d] %s ch:%d", _FILE_, __LINE__, __FUNCTION__, muxSinkData.ch);
     
     sinkVideoPad = gst_ghost_pad_new(g_strdup_printf("muxBinSink_video_ch%d", muxSinkData.ch), gst_element_get_request_pad(be.sink, "video_aux_%u"));
+    //sinkVideoPad = gst_ghost_pad_new(g_strdup_printf("muxBinSink_video_ch%d", muxSinkData.ch), gst_element_get_request_pad(be.mux, "video_0"));
+    //sinkAudioPad = gst_element_get_static_pad(be.mux, g_strdup_printf("sinkvideopad%d", muxSinkData.ch));
     gst_pad_add_probe(sinkVideoPad, GST_PAD_PROBE_TYPE_EVENT_BOTH, (GstPadProbeCallback)handle_eos_event, &muxSinkData, NULL);
     
     return gst_element_add_pad(be.bin, sinkVideoPad);
@@ -187,6 +224,8 @@ gboolean MuxSinkBin::addBinAudioSinkPad()
     __LOG(LOG_INFO, "[GST][%s:%d] %s ch:%d", _FILE_, __LINE__, __FUNCTION__, muxSinkData.ch);
 
     sinkAudioPad = gst_ghost_pad_new(g_strdup_printf("muxBinSink_audio_ch%d", muxSinkData.ch), gst_element_get_request_pad(be.sink, "audio_%u"));
+    //sinkAudioPad = gst_ghost_pad_new(g_strdup_printf("muxBinSink_audio_ch%d", muxSinkData.ch), gst_element_get_request_pad(be.mux, "audio_0"));
+    //sinkAudioPad = gst_ghost_pad_new(g_strdup_printf("sinkaudiopad%d", muxSinkData.ch), gst_element_get_static_pad(be.mux, g_strdup_printf("sinkaudiostaticpad%d", muxSinkData.ch)));
     gst_pad_add_probe(sinkAudioPad, GST_PAD_PROBE_TYPE_EVENT_BOTH, (GstPadProbeCallback)handle_eos_event, &muxSinkData, NULL);
 
     return gst_element_add_pad(be.bin, sinkAudioPad);
@@ -210,12 +249,43 @@ gboolean MuxSinkBin::init(guint8 num)
     muxSinkData.ch = num;
     muxSinkData.start_f = 0;
 
+    if(be.bin) return 0;
+
     be.bin = gst_bin_new(g_strdup_printf("muxSinkBin%d", muxSinkData.ch));
     //me.sink = gst_element_factory_make("splitmuxsink", "splitmuxsink");
     __LOG(LOG_INFO, "[GST][%s:%d] %s ch : %d", _FILE_, __LINE__, __FUNCTION__, muxSinkData.ch);
     //g_object_set(me.sink, "max-size-time", 10*GST_SECOND, NULL);
     be.sink = gst_element_factory_make("splitmuxsink", g_strdup_printf("splitmuxsink%d", muxSinkData.ch));
-    be.mp4mux = gst_element_factory_make("mp4mux", g_strdup_printf("mp4mux%d", muxSinkData.ch));
+    be.mp4mux = gst_element_factory_make("mp4mux", g_strdup_printf("mux%d", muxSinkData.ch));
+#if 0
+    be.filesink = gst_element_factory_make("filesink", g_strdup_printf("filesink%d", muxSinkData.ch));
+    g_object_set(be.mp4mux, "movie-timescale", 3000, NULL);
+    g_object_set(be.filesink, "location", "output_test.mp4", NULL);
+    //g_object_set(be.filesink, "last-sample", 3000, NULL);
+
+    gst_bin_add_many(GST_BIN(be.bin), be.mp4mux, be.filesink, NULL);
+    //GstCaps *caps = gst_caps_new_simple("audio/x-raw","channel", G_TYPE_INT, 1, NULL);
+
+    ret = gst_element_link_many(be.mp4mux, be.filesink, NULL);
+    //ret = gst_element_link_filtered(be.mux, be.resample, caps);
+    //ret = gst_element_link_filtered(be.mux, be.filesink, caps);
+    if (!ret) {
+        __LOG(LOG_CRIT, "[GST][%s:%d] link error in bin", _FILE_, __LINE__);
+        return ret;
+    }
+    //gst_caps_unref(caps);
+#if 0
+    ret = gst_element_link(be.resample, be.filesink);
+    if (!ret) {
+        __LOG(LOG_CRIT, "[GST][%s:%d] link error in bin", _FILE_, __LINE__);
+        return ret;
+    }
+
+    
+#endif
+
+#endif
+
 #if 0
     g_object_set(be.sink, "max-size-time", 60*GST_SECOND, NULL);
     if(ch==0) g_object_set(be.sink, "location", "test_ch0_%02d.mp4", NULL);
@@ -223,7 +293,12 @@ gboolean MuxSinkBin::init(guint8 num)
     if(ch==2) g_object_set(be.sink, "location", "test_ch2_%02d.mp4", NULL);
     if(ch==3) g_object_set(be.sink, "location", "test_ch3_%02d.mp4", NULL);
 #endif
-    g_object_set(be.sink, "max-size-time", GST_SECOND*60*cmdArg.duration, NULL);
+    guint64 duration;
+    //duration = ((615)*GST_SECOND*cmdArg.duration)/10;
+    duration = GST_SECOND*cmdArg.duration*60;
+    __LOG(LOG_INFO, "[GST][%s:%d] file duration : %lld", _FILE_, __LINE__, duration);
+    
+    g_object_set(be.sink, "max-size-time", duration, NULL);
     //g_object_set(be.sink, "reserved-max-duration", 3000000000000000000, NULL);
     //g_object_set(be.sink, "reserved-moov-update-period", 1000000000, NULL);
     //g_object_set(be.sink, "use-robust-muxing", TRUE, NULL);
@@ -243,10 +318,39 @@ gboolean MuxSinkBin::init(guint8 num)
     g_object_set(be.sink, "muxer-properties", muxer_properties, NULL);
     gst_structure_free(muxer_properties);
 #endif
+
     g_object_set(be.mp4mux, "reserved-moov-update-period", 10000000000, NULL);
     //g_object_set(be.mp4mux, "latency", 100000, NULL);
     //g_object_set(be.mp4mux, "min-upstream-latency", 1000, NULL);
     //g_object_set(be.mp4mux, "fragment-duration", 1000, NULL);
+#if 0
+    g_object_set(be.mp4mux, "dts-method", 1, NULL);
+    g_object_set(be.mp4mux, "emit-signals", 0, NULL);
+    g_object_set(be.mp4mux, "faststart", 0, NULL);
+    g_object_set(be.mp4mux, "faststart-file", "/tmp/qtmux-1870964074", NULL);
+    g_object_set(be.mp4mux, "force-chunks", 0, NULL);
+    g_object_set(be.mp4mux, "force-create-timecode-trak", 0, NULL);
+    g_object_set(be.mp4mux, "fragment-duration", 0, NULL);
+    g_object_set(be.mp4mux, "interleave-bytes", 0, NULL);
+    g_object_set(be.mp4mux, "interleave-time", 250000000, NULL);
+    g_object_set(be.mp4mux, "latency", 0, NULL);
+    g_object_set(be.mp4mux, "max-raw-audio-drift", 40000000, NULL);
+    g_object_set(be.mp4mux, "min-upstream-latency", 0, NULL);
+    g_object_set(be.mp4mux, "moov-recovery-file", NULL, NULL);
+    g_object_set(be.mp4mux, "movie-timescale", 0, NULL);
+    g_object_set(be.mp4mux, "name", "mp4mux0", NULL);
+    //g_object_set(be.mp4mux, "parent", 0, NULL);
+    g_object_set(be.mp4mux, "presentation-time", 1, NULL);
+    g_object_set(be.mp4mux, "reserved-bytes-per-sec", 550, NULL);
+    g_object_set(be.mp4mux, "reserved-max-duration", 18446744073709551615, NULL);
+    g_object_set(be.mp4mux, "reserved-moov-update-period", 18446744073709551615, NULL);
+    g_object_set(be.mp4mux, "reserved-prefill", 0, NULL);
+    g_object_set(be.mp4mux, "start-gap-threshold", 0, NULL);
+    g_object_set(be.mp4mux, "start-time", 18446744073709551615, NULL);
+    g_object_set(be.mp4mux, "start-time-selection", 0, NULL);
+    g_object_set(be.mp4mux, "streamable", 0, NULL);
+    g_object_set(be.mp4mux, "trak-timescale", 0, NULL);
+#endif
     g_object_set(be.sink, "muxer", be.mp4mux, NULL);
 
     g_signal_connect(be.sink, "format-location", G_CALLBACK(format_location), &muxSinkData);
@@ -258,11 +362,7 @@ gboolean MuxSinkBin::init(guint8 num)
         return ret;
     }
     
-    ret = gst_bin_add(GST_BIN(be.bin), be.sink);
-    if(!ret) {
-        __LOG(LOG_CRIT, "[GST][%s:%d] sink add error in bin", _FILE_, __LINE__);
-        return ret;
-    }
+    gst_bin_add_many(GST_BIN(be.bin), be.sink, NULL);
 
     ret =gst_bin_add(GST_BIN(pipeline), be.bin);
     if(!ret) {

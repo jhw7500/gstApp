@@ -256,7 +256,8 @@ gboolean VideoBin::init(guint8 num, gboolean crop_en)
                                     //"pixel-aspect-ratio", GST_TYPE_FRACTION, 1, 1,
                                     NULL);
 
-        ret = gst_element_link_many(be.src, be.capsfilter, be.teeCrop, NULL);
+        //ret = gst_element_link_many(be.src, be.capsfilter, be.teeCrop, NULL);
+        ret = gst_element_link_filtered(be.src, be.teeCrop, caps);
         if (!ret)
         {
             __LOG(LOG_CRIT, "[GST][%s:%d] video main link err", _FILE_, __LINE__);

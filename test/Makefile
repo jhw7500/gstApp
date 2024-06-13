@@ -1,7 +1,9 @@
 
 #TOP_DIR = $(shell pwd)
+#CC = aarch64-linux-gnu-gcc
 OUTPUT = bin
 
+SOURCE += soundApp
 #SOURCE += basic-tutorial-15
 #SOURCE+=cropApp
 #SOURCE=rtspApp
@@ -12,7 +14,7 @@ OUTPUT = bin
 #SOURCE=rtspApp
 #SOURCE+= timeApp
 #SOURCE+= mp4App
-SOURCE+= mp4App_backup
+#SOURCE+= mp4App_backup
 #SOURCE+= muxApp
 #SOURCE+= audioApp
 #SOURCE+= dynamicApp
