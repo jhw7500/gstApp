@@ -37,6 +37,7 @@ typedef struct _AudioElement
     GstElement *mux;
     GstElement *sink;
     GstElement *filter;
+    GstElement *jitter;
 } AudioElement;
 
 class AudioBin

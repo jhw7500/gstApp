@@ -16,7 +16,7 @@
 #include "util.h"
 
 #define DYNAMIC_CAPSx
-#define DEFAULT_RTSP_SESSION_CLEAN_PERIOD   300
+#define DEFAULT_RTSP_SESSION_CLEAN_PERIOD   30  //300
 
 guint rtspServerStart();
 void rtspServerStop();
@@ -30,6 +30,7 @@ typedef struct _RtspServerData
     GstCaps *caps;
     gboolean debug;
     guint8 ch;
+    GstClockTime last_timestamp;
 } RtspServerData;
 
 typedef struct _RtspServerElement
@@ -49,6 +50,7 @@ typedef struct _RtspServerElement
     GstElement *crop;
     GstElement *overlay;
     GstElement *compositor;
+    GstElement *identity;
 } RtspServerElement;
 
 class RtspServerBin

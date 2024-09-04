@@ -622,6 +622,7 @@ gint ParserClass::cmd_parser(gchar* buffer, gint len, gpointer data)
     //gint len = strlen(buffer);
     buffer[len] = '\0';
     g_print("Input: %s\n", buffer);
+    //__LOG(LOG_NOTICE, "[TCP][%s:%d] Input: %s", _FILE_, __LINE__, buffer);
 
     token = strtok(buffer, " ");
     if (compareBuf(token, "cmd", 3))
@@ -1031,6 +1032,31 @@ gint ParserClass::cmd_parser(gchar* buffer, gint len, gpointer data)
                 
                 g_print("rtsp state : %s\n", stateStr[state]);
             }
+            else if (compareBuf(token, "audio", 5))
+            {
+                token = strtok(NULL, SPLIT_CHAR);
+                key = charArrayToInt(token);
+                i = 4;
+
+                if (key < 0 || key > 4)
+                {
+                    g_print("state %d not supported\n", key);
+                    return -1;
+                }
+
+                if(cmdArg.audio_en)
+                {
+                    g_print("rtsp ch%d state : %s\n", i, stateStr[rtspServerBin[i].getState()]);
+                    if(rtspServerBin[i].setState((GstState)key) == GST_STATE_CHANGE_FAILURE)
+                    {
+                        g_print("rtsp %s state change error\n", stateStr[key]);
+                    }
+                    else
+                    {
+                        g_print("rtsp ch%d state : %s\n", i, stateStr[rtspServerBin[i].getState()]);
+                    }
+                }
+            }
             else if (compareBuf(token, "cap", 3))
             {
                 token = strtok(NULL, SPLIT_CHAR);
@@ -1182,6 +1208,8 @@ gint ParserClass::cmd_parser(gchar* buffer, gint len, gpointer data)
                 for (i = 0; i < MAX_CHANNEL; i++)
                     if (cmdArg.cam_en[i] && cmdArg.stream_en[STREAM_RTSP])
                         rtspServerBin[i].setTimeStampDebug();
+
+                if(cmdArg.audio_en) rtspServerBin[4].setTimeStampDebug();
             }
             else if (compareBuf(token, "rec", 3))
             {

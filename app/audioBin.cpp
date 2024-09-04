@@ -54,7 +54,6 @@ gboolean AudioBin::init()
 {
     gboolean ret = 0;
     GstCaps *audio_caps;
-    GstCaps *audioresample_caps;
     be.bin = gst_bin_new("audioBin");
 
     __LOG(LOG_INFO, "[GST][%s:%d] %s", _FILE_, __LINE__, __FUNCTION__);
@@ -70,11 +69,18 @@ gboolean AudioBin::init()
     be.tee = gst_element_factory_make("tee", "audiotee");
     be.rate = gst_element_factory_make("audiorate", "audiorate");
     //be.filter = gst_element_factory_make("webrtcdsp", "webrtcdsp");
+    //be.jitter = gst_element_factory_make("audiolatency", "jitter");
 
     g_object_set(be.src, "device", "plughw:0,0", NULL);
-    g_object_set(be.src, "provide-clock", FALSE, NULL);
+    //g_object_set(be.src, "provide-clock", TRUE, NULL);
+    //g_object_set(be.src, "latency-time", 200000, NULL);
     //g_object_set(be.src, "slave-method", 0, NULL);
     g_object_set(be.enc, "target", 1, "bitrate", 192, NULL);
+    //g_object_set(be.enc, "bitrate", 128, NULL);
+    //g_object_set(be.jitter, "sleep-time", 1000, NULL);
+    //g_object_set(be.jitter, "print-latency", TRUE, NULL);
+    g_object_set(be.queue, "max-size-time", GST_SECOND, "max-size-buffers", 0, "leaky", LEAKY_DOWNSTREAM, NULL);
+    g_object_set(be.queue2, "max-size-time", GST_SECOND, "max-size-buffers", 0, "leaky", LEAKY_DOWNSTREAM, NULL);
 
     audio_caps = gst_caps_new_simple("audio/x-raw",
                                 "format", G_TYPE_STRING, "S24LE",
@@ -97,15 +103,15 @@ gboolean AudioBin::init()
     }
 #endif
     //gst_element_link_many(be.convert, be.resample, NULL);
-#if 1
-    audioresample_caps = gst_caps_new_simple("audio/x-raw",
-                                "channels", G_TYPE_INT, 2,
-                                NULL);
-
+#if 0
+    GstCaps *audioresample_caps; = gst_caps_new_simple("audio/x-raw", "rate", G_TYPE_INT, 48000, NULL);
     g_object_set(G_OBJECT(be.capsfilter), "caps", audioresample_caps, NULL);
+    gst_caps_unref(audioresample_caps);
 #endif
     if(!gst_element_link_filtered(be.src, be.convert, audio_caps) ||
-        !gst_element_link_many(be.convert, be.resample, be.capsfilter, be.rate, be.queue, be.enc, be.parse, be.queue2, be.tee, NULL))
+        !gst_element_link_many(be.convert, be.queue, be.resample, be.capsfilter, be.rate, be.enc, be.queue2, be.tee, NULL))
+        //!gst_element_link_many(be.convert, be.rate, be.queue, be.enc, be.tee, NULL))
+        //!gst_element_link_many(be.convert, be.queue, be.rate, be.enc, be.tee, NULL))
     {
         __LOG(LOG_CRIT, "[GST][%s:%d] link error", _FILE_, __LINE__);
         return -1;
@@ -122,7 +128,6 @@ gboolean AudioBin::init()
     //gst_element_set_clock(be.src, gst_system_clock_obtain());
 
     gst_caps_unref(audio_caps);
-    gst_caps_unref(audioresample_caps);
 
     return ret;
 }

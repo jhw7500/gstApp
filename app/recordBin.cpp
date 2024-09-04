@@ -339,7 +339,8 @@ gboolean RecordBin::init(guint8 num, gboolean crop_en)
     re.rate = gst_element_factory_make("videorate", "videorate");
     re.convert = gst_element_factory_make("imxvideoconvert_g2d", "convert");
     re.crop = gst_element_factory_make("videocrop", "crop");
-    re.overlay = gst_element_factory_make("textoverlay", "overlay");
+    //re.overlay = gst_element_factory_make("textoverlay", "overlay");
+    re.overlay = gst_element_factory_make("timeoverlay", "overlay");
     re.appsink = gst_element_factory_make("appsink", "appsink");
     recordData.appSrcName = g_strdup_printf("record_appsrc%d", ch);
     re.appsrc = gst_element_factory_make("appsrc", recordData.appSrcName);

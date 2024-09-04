@@ -14,11 +14,13 @@
 #include <gst/app/gstappsrc.h>
 #include <gst/app/gstappsink.h>
 #include <gst/rtsp-server/rtsp-server.h>
-#include <rnnoise.h>
+//#include <rnnoise.h>
+//static DenoiseState *den;
 
 GstRTSPMountPoints *rtspMounts = NULL;
 GstRTSPServer *rtspServer = NULL;
-guint cleanRtsp_id = 0;
+guint cleanSesson_id = 0;
+guint removeSesson_id = 0;
 
 static void enough_data(GstElement *source, gpointer user_data) 
 {
@@ -30,7 +32,7 @@ static gboolean cleanRtspSession(GstRTSPServer *server)
 {
   GstRTSPSessionPool *pool;
 
-   //__LOG(LOG_DEBUG, "[GST][%s:%d] rtsp session pool", _FILE_, __LINE__);
+   __LOG(LOG_INFO, "[GST][%s:%d] rtsp session pool", _FILE_, __LINE__);
 
   pool = gst_rtsp_server_get_session_pool (server);
   gst_rtsp_session_pool_cleanup (pool);
@@ -75,6 +77,89 @@ static gboolean handle_client_connected(GstRTSPServer *server, GstRTSPClient *cl
     return TRUE;
 }
 
+/* called when a stream has received an RTCP packet from the client */
+static void on_ssrc_active (GObject * session, GObject * source, GstRTSPMedia * media)
+{
+  GstStructure *stats;
+
+  (void)media;
+
+  //GST_INFO ("source %p in session %p is active", source, session);
+  __LOG(LOG_INFO, "[RTSP][%s:%d] received source %p in session %p is active", _FILE_, __LINE__, source, session);
+
+  g_object_get (source, "stats", &stats, NULL);
+  if (stats) {
+    gchar *sstr;
+
+    sstr = gst_structure_to_string (stats);
+    //g_print ("structure: %s\n", sstr);
+    //__LOG(LOG_DEBUG, "[RTSP][%s:%d] received structure: %s", _FILE_, __LINE__, sstr);
+    g_free (sstr);
+
+    gst_structure_free (stats);
+  }
+}
+
+static void on_sender_ssrc_active (GObject * session, GObject * source, GstRTSPMedia * media)
+{
+  GstStructure *stats;
+
+  (void)media;
+
+  //GST_INFO ("source %p in session %p is active", source, session);
+  __LOG(LOG_INFO, "[RTSP][%s:%d] sender source %p in session %p is active", _FILE_, __LINE__, source, session);
+
+  g_object_get (source, "stats", &stats, NULL);
+  if (stats) {
+    gchar *sstr;
+
+    sstr = gst_structure_to_string (stats);
+    //g_print ("Sender stats:\nstructure: %s\n", sstr);
+    //__LOG(LOG_DEBUG, "[RTSP][%s:%d] Sender structure: %s", _FILE_, __LINE__, sstr);
+    g_free (sstr);
+
+    gst_structure_free (stats);
+  }
+}
+
+#if 0
+static void on_ssrc_active(GstElement *rtpbin, guint session_id, GstRTSPMedia *media) {
+    g_print("SSRC is active, handling RTCP data\n");
+
+    GstElement *rtcp_src = gst_bin_get_by_name(GST_BIN(rtpbin), "recv_rtcp_sink_0");
+
+    if (rtcp_src) {
+        GstBuffer *buffer;
+        while (gst_pad_pull_range(gst_element_get_static_pad(rtcp_src, "sink"), 0, -1, &buffer) == GST_FLOW_OK) {
+            // RTCP 데이터를 읽고 처리하거나 무시
+            g_print("Discarded RTCP data\n");
+            gst_buffer_unref(buffer);
+        }
+        gst_object_unref(rtcp_src);
+    }
+}
+#endif
+
+#include <gst/rtp/gstrtcpbuffer.h>
+static gboolean on_receive_rtcp(GstPad *pad, GstPadProbeInfo *info, gpointer user_data) {
+    GstBuffer *buffer = GST_PAD_PROBE_INFO_BUFFER(info);
+    GstRTCPBuffer rtcp_buffer = GST_RTCP_BUFFER_INIT;
+    GstRTCPPacket packet;
+
+    if (gst_rtcp_buffer_map(buffer, GST_MAP_READ, &rtcp_buffer)) {
+        if (gst_rtcp_buffer_get_first_packet(&rtcp_buffer, &packet)) {
+            do {
+                GstRTCPType type = gst_rtcp_packet_get_type(&packet);
+                g_print("Received RTCP packet type: %d\n", type);
+                __LOG(LOG_NOTICE, "[RTSP][%s:%d] Received RTCP packet type: %d", _FILE_, __LINE__, type);
+            } while (gst_rtcp_packet_move_to_next(&packet));
+        }
+        gst_rtcp_buffer_unmap(&rtcp_buffer);
+    }
+
+    return GST_PAD_PROBE_OK;
+}
+
 /* signal callback when the media is prepared for streaming. We can get the
  * session manager for each of the streams and connect to some signals. */
 static void media_prepared_cb (GstRTSPMedia * media)
@@ -100,6 +185,9 @@ static void media_prepared_cb (GstRTSPMedia * media)
 
     //g_signal_connect (session, "on-ssrc-active", (GCallback) on_ssrc_active, media);
     //g_signal_connect (session, "on-sender-ssrc-active", (GCallback) on_sender_ssrc_active, media);
+    //GstElement *rtpbin = gst_rtsp_media_get_element(media);
+    //g_signal_connect(rtpbin, "on-ssrc-active", (GCallback)on_ssrc_active, media);
+    //gst_object_unref(rtpbin);
   }
 }
 
@@ -130,6 +218,17 @@ static void	media_configure(GstRTSPMediaFactory *factory, GstRTSPMedia *media, g
 
     g_signal_connect(media, "prepared", (GCallback) media_prepared_cb, factory);
     g_signal_connect(info->appsrc, "enough-data", (GCallback) enough_data, info);
+
+    //g_object_set(element, "rtcp-min-interval", 10.0, NULL);
+    //g_object_set(element, "rtcp-max-interval", 60.0, NULL);
+    GstPad *pad = gst_element_get_static_pad(element, "recv_rtcp_sink_0");
+    if (pad) {
+        __LOG(LOG_NOTICE, "[GST][%s:%d] pad add : recv_rtcp_sink_0", _FILE_, __LINE__);
+        gst_pad_add_probe(pad, GST_PAD_PROBE_TYPE_BUFFER, (GstPadProbeCallback) on_receive_rtcp, user_data, NULL);
+        gst_object_unref(pad);
+    }
+
+    //gst_object_unref(rtpbin);
 	//g_mutex_unlock(&mutex);
 
 #ifdef DYNAMIC_CAPS
@@ -147,12 +246,43 @@ static void	media_configure(GstRTSPMediaFactory *factory, GstRTSPMedia *media, g
     return;
 }
 
+static void on_identity_handoff(GstElement *identity, GstBuffer *buffer, GstPad *pad, gpointer user_data) {
+    GstClockTime timestamp = GST_BUFFER_PTS(buffer);
+    RtspServerData *info = (RtspServerData*)user_data;
+    //printf("Formatted date with microseconds: %s\n", full_date);
+    //if (GST_CLOCK_DIFF(last_timestamp_audio, timestamp) >= GST_SECOND) 
+    {
+        g_print("Timestamp: %" GST_TIME_FORMAT "\n", GST_TIME_ARGS(timestamp));
+        info->last_timestamp = timestamp;
+    }
+}
+
+static gboolean remove_func (GstRTSPSessionPool * pool, GstRTSPSession * session, GstRTSPServer * server)
+{
+  (void)pool;
+  (void)session;
+  (void)server;
+
+  return GST_RTSP_FILTER_REMOVE;
+}
+
+static gboolean remove_sessions (GstRTSPServer * server)
+{
+  GstRTSPSessionPool *pool;
+
+  __LOG(LOG_NOTICE, "[RTSP][%s:%d] removing all sessions", _FILE_, __LINE__);
+  pool = gst_rtsp_server_get_session_pool (server);
+  gst_rtsp_session_pool_filter (pool, (GstRTSPSessionPoolFilterFunc) remove_func, server);
+  g_object_unref (pool);
+
+  return FALSE;
+}
+
 static void eos_callback(GstAppSink *appsink, gpointer user_data) 
 {
     __LOG(LOG_NOTICE, "[GST][%s:%d] %s", _FILE_, __LINE__, __FUNCTION__);
 }
 
-static DenoiseState *den;
 static GstFlowReturn new_sample_handler(GstElement *sink, gpointer userData) 
 {
     GstSample *sample;
@@ -176,12 +306,6 @@ static GstFlowReturn new_sample_handler(GstElement *sink, gpointer userData)
     }
     buffer = gst_sample_get_buffer(sample);
     //gst_sample_unref(sample);
-    if(info->debug)
-    {
-        GstClockTime timestamp = GST_BUFFER_PTS(buffer);
-        g_message("Timestamp: %" GST_TIME_FORMAT "\n", GST_TIME_ARGS(timestamp));
-        //info->debug = 0;
-    }
     
 #if 0
     GstFlowReturn ret;
@@ -202,15 +326,37 @@ static GstFlowReturn new_sample_handler(GstElement *sink, gpointer userData)
 #endif
 
     if (!buffer) {
-        __LOG(LOG_CRIT, "[GST][%s:%d] buffer cannot get from sample", _FILE_, __LINE__);
+        __LOG(LOG_CRIT, "[RTSP][%s:%d] ch%d buffer cannot get from sample", _FILE_, __LINE__, info->ch);
         gst_sample_unref(sample);
         return GST_FLOW_ERROR;
     }
 
     if (!gst_buffer_map(buffer, &map, GST_MAP_READ)) {
         gst_sample_unref(sample);
-        g_printerr("Failed to map buffer\n");
+        g_printerr("ch%d Failed to map buffer\n", info->ch);
         return GST_FLOW_ERROR;
+    }
+
+    if(info->debug)
+    {
+        GstClockTime timestamp = GST_BUFFER_PTS(buffer);
+        //g_message("Timestamp: %" GST_TIME_FORMAT "\n", GST_TIME_ARGS(timestamp));
+        //info->debug = 0;
+        //g_message("ch%d curstamp: %" GST_TIME_FORMAT " laststamp : %" GST_TIME_FORMAT "\n", info->ch, GST_TIME_ARGS(timestamp), GST_TIME_ARGS(info->last_timestamp));
+        //if (GST_CLOCK_DIFF(info->last_timestamp, timestamp) >= GST_SECOND)
+        if(info->ch == 0)
+        {
+            //GDateTime *now = g_date_time_new_now_local();
+            //gchar *formatted_date = g_date_time_format(now, "%Y-%m-%d %H:%M:%S");
+            //gint microsecond = g_date_time_get_microsecond(now);
+            //gchar *full_date = g_strdup_printf("%s.%06d", formatted_date, microsecond);
+            //g_warning("ch%d date: %s, Timestamp: %" GST_TIME_FORMAT "\n", info->ch, full_date, GST_TIME_ARGS(timestamp));
+            g_warning("ch%d Timestamp: %" GST_TIME_FORMAT "\n", info->ch, GST_TIME_ARGS(timestamp));
+            info->last_timestamp = timestamp;
+            //g_free(formatted_date);
+            //g_free(full_date);
+            //g_date_time_unref(now);
+        }
     }
 
 #if 0
@@ -260,8 +406,8 @@ void RtspServerBin::setOverlayText(gchar *text)
 {
     g_object_set(re.overlay, "text", text, NULL);
 }
-
 void RtspServerBin::setTimeStampDebug()
+
 {
     rtspServerData.debug = !rtspServerData.debug;
 }
@@ -429,6 +575,7 @@ RtspServerBin::RtspServerBin()
     rtspServerData.appsrc = NULL;
     rtspServerData.start_f = FALSE;
     rtspServerData.debug = FALSE;
+    rtspServerData.last_timestamp = GST_CLOCK_TIME_NONE;
 }
 
 RtspServerBin::~RtspServerBin()
@@ -469,10 +616,11 @@ gboolean RtspServerBin::audioInit()
     __LOG(LOG_NOTICE, "[GST][%s:%d] %s", _FILE_, __LINE__, __FUNCTION__);
 
     rtspServerData.ch = 4;
-    den = rnnoise_create(NULL);
+    //den = rnnoise_create(NULL);
     re.bin = gst_bin_new(g_strdup_printf("rtspServerBin%d", rtspServerData.ch));
     re.queue = gst_element_factory_make(QUEUE_TYPE, "queue");
     re.sink = gst_element_factory_make("appsink", "appsink");
+    re.identity = gst_element_factory_make("identity", "identity");
     
     if (!re.bin || !re.queue || !re.sink) {
         __LOG(LOG_CRIT, "[GST][%s:%d] audio rtsp element create error", _FILE_, __LINE__);
@@ -498,12 +646,13 @@ gboolean RtspServerBin::audioInit()
     g_object_set(re.sink, "drop", TRUE, NULL);
     //g_object_set(pipe->sink, "max-lateness", 1*GST_SECOND, NULL);
     //g_object_set(pipe->sink, "render-delay", 100*GST_MSECOND, NULL);
-    g_object_set(re.sink, "emit-signals", TRUE, "sync", FALSE, NULL);
+    g_object_set(re.sink, "emit-signals", TRUE, "sync", TRUE, "async", false, NULL);
     //g_object_set(re.convert, "videocrop-meta-enable", TRUE, NULL);
 
     g_signal_connect(re.sink, "eos", G_CALLBACK(eos_callback), NULL);
     g_signal_connect(re.sink, "new-sample", G_CALLBACK(new_sample_handler), &rtspServerData);
     g_signal_connect(re.sink, "new-preroll", G_CALLBACK(new_preroll_handler), &rtspServerData);
+    //g_signal_connect(re.identity, "handoff", G_CALLBACK(on_identity_handoff), &rtspServerData);
 
     staticPad = gst_element_get_static_pad(re.queue, "sink");
     sinkPad = gst_ghost_pad_new(g_strdup_printf("rtspServerBin_sink_ch%d", rtspServerData.ch), staticPad);
@@ -521,7 +670,9 @@ gboolean RtspServerBin::audioInit()
     rtspServerData.appSrcName = g_strdup_printf("%s", "audio_rtsp_appsrc");
 
     //gchar *launch_str = g_strdup_printf("( appsrc name=%s ! queue max-size-buffers=60 leaky=2 ! vpuenc_h264 bitrate=1024 ! h264parse config-interval=-1 ! rtph264pay name=pay0 config-interval=-1 )", rtspServerData.appSrcName);
-    gchar *launch_str = g_strdup_printf("appsrc name=%s do-timestamp=1 is-live=1 format=3 ! queue max-size-buffers=15 leaky=2 ! mpegaudioparse ! rtpmpapay name=pay0 pt=97 )", rtspServerData.appSrcName);
+    //gchar *launch_str = g_strdup_printf("appsrc name=%s ! rtpjitterbuffer latency=200 ! rtpmp4adepay ! mpegaudioparse ! rtpmpapay name=pay0 pt=97 )", rtspServerData.appSrcName);
+    gchar *launch_str = g_strdup_printf("appsrc name=%s do-timestamp=1 is-live=1 format=3 ! queue max-size-buffers=10 leaky=2 ! mpegaudioparse ! rtpmpapay name=pay0 pt=97 config-interval=-1 )", rtspServerData.appSrcName);
+    //gchar *launch_str = g_strdup_printf("appsrc name=%s do-timestamp=1 is-live=1 format=3 ! queue max-size-buffers=15 leaky=2 ! mpegaudioparse ! rtpmpapay name=pay0 pt=97 )", rtspServerData.appSrcName);
 
     gst_rtsp_media_factory_set_launch(factory, launch_str);
     gst_rtsp_media_factory_set_shared(factory, TRUE);
@@ -569,21 +720,23 @@ gboolean RtspServerBin::init(guint8 ch, gboolean crop_en)
     re.rate = gst_element_factory_make("videorate", "videorate");
     re.sink = gst_element_factory_make("appsink", "appsink");
     re.crop = gst_element_factory_make("videocrop", "crop");
-    re.overlay = gst_element_factory_make("textoverlay", "overlay");
+    //re.overlay = gst_element_factory_make("textoverlay", "overlay");
+    re.overlay = gst_element_factory_make("timeoverlay", "overlay");
+    re.identity = gst_element_factory_make("identity", "identity");
     re.compositor = gst_element_factory_make("imxcompositor_g2d", "compositor");
 
     if (!re.bin || !re.queue || !re.capsfilter || !re.parse || !re.enc || !re.rate || !re.sink || !re.convert || !re.queue2 || !re.crop \
-        || !re.overlay || !re.compositor || !re.convert2 || !re.capsfilter2 || !re.videoflip) {
+        || !re.overlay || !re.compositor || !re.convert2 || !re.capsfilter2 || !re.videoflip || !re.identity) {
         __LOG(LOG_CRIT, "[GST][%s:%d] rtsp element create error", _FILE_, __LINE__);
         return ret;
     }
 
-    gst_bin_add_many(GST_BIN(re.bin), re.queue, re.rate, re.convert, re.enc, re.parse, re.queue2, re.sink, re.capsfilter, re.crop, re.overlay, NULL);
+    gst_bin_add_many(GST_BIN(re.bin), re.queue, re.rate, re.convert, re.enc, re.parse, re.queue2, re.sink, re.capsfilter, re.crop, re.overlay, re.identity, NULL);
     
     //gst_bin_add_many(GST_BIN(re.bin), re.convert2, re.compositor, re.capsfilter2, re.videoflip, re.convert2, NULL);
 
     ret = gst_bin_add(GST_BIN(pipeline), re.bin);
-    if(!ret) {
+    if(!ret) { 
         __LOG(LOG_CRIT, "[GST][%s:%d] rtsp bin add error in pipeline", _FILE_, __LINE__);
         return ret;
     }
@@ -655,12 +808,13 @@ gboolean RtspServerBin::init(guint8 ch, gboolean crop_en)
     g_object_set(re.sink, "drop", TRUE, NULL);
     //g_object_set(pipe->sink, "max-lateness", 1*GST_SECOND, NULL);
     //g_object_set(pipe->sink, "render-delay", 100*GST_MSECOND, NULL);
-    g_object_set(re.sink, "emit-signals", TRUE, "sync", FALSE, NULL);
+    g_object_set(re.sink, "emit-signals", TRUE, "sync", TRUE, NULL);
     //g_object_set(re.convert, "videocrop-meta-enable", TRUE, NULL);
 
     g_signal_connect(re.sink, "eos", G_CALLBACK(eos_callback), NULL);
     g_signal_connect(re.sink, "new-sample", G_CALLBACK(new_sample_handler), &rtspServerData);
     g_signal_connect(re.sink, "new-preroll", G_CALLBACK(new_preroll_handler), &rtspServerData);
+    //g_signal_connect(re.identity, "handoff", G_CALLBACK(on_identity_handoff), &rtspServerData);
 
     staticPad = gst_element_get_static_pad(re.queue, "sink");
     sinkPad = gst_ghost_pad_new(g_strdup_printf("rtspServerBin_sink_ch%d", rtspServerData.ch), staticPad);
@@ -679,6 +833,7 @@ gboolean RtspServerBin::init(guint8 ch, gboolean crop_en)
 
     //gchar *launch_str = g_strdup_printf("( appsrc name=%s ! queue max-size-buffers=60 leaky=2 ! vpuenc_h264 bitrate=1024 ! h264parse config-interval=-1 ! rtph264pay name=pay0 config-interval=-1 )", rtspServerData.appSrcName);
     gchar *launch_str = g_strdup_printf("( appsrc name=%s do-timestamp=1 is-live=1 format=3 ! queue max-size-buffers=%d leaky=2 ! h264parse ! rtph264pay name=pay0 config-interval=-1 )", rtspServerData.appSrcName, cmdArg.fps[STREAM_RTSP][ch]);
+    //gchar *launch_str = g_strdup_printf("( appsrc name=%s do-timestamp=1 is-live=1 block=true ! queue max-size-buffers=5 leaky=2 min-threshold-time=500000000 ! h264parse ! rtph264pay name=pay0 config-interval=0 )", rtspServerData.appSrcName);
 
     gst_rtsp_media_factory_set_launch(factory, launch_str);
     gst_rtsp_media_factory_set_shared(factory, TRUE);
@@ -713,7 +868,8 @@ void rtspServerStop()
         g_object_unref(rtspServer);
     }
 
-    if(cleanRtsp_id) g_source_remove(cleanRtsp_id);
+    if(cleanSesson_id) g_source_remove(cleanSesson_id);
+    if(removeSesson_id) g_source_remove(removeSesson_id);
 }
 
 guint rtspServerStart()
@@ -726,7 +882,14 @@ guint rtspServerStart()
 
     rtspMounts = gst_rtsp_server_get_mount_points (rtspServer);
 
-    cleanRtsp_id = g_timeout_add_seconds (DEFAULT_RTSP_SESSION_CLEAN_PERIOD, (GSourceFunc) cleanRtspSession, rtspServer);
+    //GstRTSPSessionPool *session_pool = gst_rtsp_server_get_session_pool(rtspServer);
+    //g_object_set(session_pool, "max-sessions", 10, NULL);
+    //g_object_set(session_pool, "timeout", 60, NULL);
+    //gst_object_unref(session_pool);
+    
+    //cleanSesson_id = g_timeout_add_seconds (DEFAULT_RTSP_SESSION_CLEAN_PERIOD, (GSourceFunc) cleanRtspSession, rtspServer);
+    cleanSesson_id = g_timeout_add_seconds (cmdArg.duration*60, (GSourceFunc) cleanRtspSession, rtspServer);
+    //removeSesson_id = g_timeout_add_seconds (60, (GSourceFunc) remove_sessions, rtspServer);
 
     g_signal_connect(rtspServer, "client-connected", G_CALLBACK(handle_client_connected), NULL);
 

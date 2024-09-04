@@ -233,10 +233,16 @@ gboolean bus_message_parse(GstBus *bus, GstMessage *message, gpointer data)
 
         }
 #endif
+        case GST_MESSAGE_CLOCK_PROVIDE: {
+            g_print("Clock provide event from element %s\n", GST_OBJECT_NAME(message->src));
+            break;
+        }
+
         case GST_MESSAGE_CLOCK_LOST:
         {
             /* Get a new clock */
-            g_print ("GST_MESSAGE_CLOCK_LOST\r");
+            //g_print ("GST_MESSAGE_CLOCK_LOST\r");
+            g_print("Clock lost event from element %s\n", GST_OBJECT_NAME(message->src));
             gst_element_set_state (pipeline, GST_STATE_PAUSED);
             gst_element_set_state (pipeline, GST_STATE_PLAYING);
             break;
@@ -904,7 +910,13 @@ gint main(gint argc, gchar *argv[])
     //signal(SIGINT, handle_sigint);
     GST_DEBUG_BIN_TO_DOT_FILE(GST_BIN(pipeline), GST_DEBUG_GRAPH_SHOW_ALL, gst_element_get_name(pipeline));
     //GST_DEBUG_BIN_TO_DOT_FILE_WITH_TS(GST_BIN(pipeline), GST_DEBUG_GRAPH_SHOW_VERBOSE, gst_element_get_name(pipeline));
+
     gst_pipeline_use_clock(GST_PIPELINE(pipeline), gst_system_clock_obtain());
+    //gst_pipeline_use_clock(GST_PIPELINE(pipeline), gst_element_get_clock(videoBin[0].be.src));
+    //gst_pipeline_use_clock(GST_PIPELINE(pipeline), gst_element_get_clock(audioBin.be.src));
+
+    //gst_element_set_base_time(pipeline, 0);
+    //gst_element_set_start_time(pipeline, GST_CLOCK_TIME_NONE);
 
     bus = gst_element_get_bus(pipeline);
     if (!bus)
@@ -961,7 +973,7 @@ gint main(gint argc, gchar *argv[])
     }
     
     if(cmdArg.overlay_en) {
-        srtTimer_id = g_timeout_add(500, (GSourceFunc)setSRT, thraedArgs);
+        srtTimer_id = g_timeout_add(100, (GSourceFunc)setSRT, thraedArgs);
     }
 
     if(cmdArg.tcp_en) {
