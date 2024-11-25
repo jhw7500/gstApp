@@ -72,7 +72,7 @@ static GstFlowReturn new_sample_handler(GstElement *sink, gpointer userData)
         gst_buffer_unmap(buffer, &map);
         return GST_FLOW_OK;
     }
-
+    
     //g_print("captureCnt %d, captureMax %d\n", info->captureCnt, info->captureMaxCnt);
     if(cmdArg.capture_encoder_en) extention = g_strdup_printf("%s", "jpg");
     else extention = g_strdup_printf("%s", "rgb");
@@ -210,17 +210,25 @@ GstPad* CaptureBin::getBinSinkPad()
     return sinkPad;
 }
 
-gint CaptureBin::setFilePath()
+gint CaptureBin::setFilePath(guint8 *prefix)
 {
-    GDateTime *datetime = g_date_time_new_now_local();
-    gchar *date_str = g_date_time_format(datetime, "%Y%m%d_%H%M%S");
+    if(prefix == NULL)
+    {
+        GDateTime *datetime = g_date_time_new_now_local();
+        gchar *date_str = g_date_time_format(datetime, "%Y%m%d_%H%M%S");
 
-    captureData.filePath = g_strdup_printf("%s/%s_%s-ch%d", cmdArg.captureDir, cmdArg.ohtName, date_str, captureData.ch);
+        captureData.filePath = g_strdup_printf("%s/%s_%s-ch%d", cmdArg.captureDir, cmdArg.ohtName, date_str, captureData.ch);
 
-    __LOG(LOG_NOTICE, "[GST][%s:%d] filePath : %s", _FILE_, __LINE__, captureData.filePath);
+        __LOG(LOG_NOTICE, "[GST][%s:%d] filePath : %s", _FILE_, __LINE__, captureData.filePath);
 
-    g_date_time_unref(datetime);
-    g_free(date_str);
+        g_date_time_unref(datetime);
+        g_free(date_str);
+    }
+    else
+    {
+        captureData.filePath = g_strdup_printf("%s/%s-ch%d", cmdArg.captureDir, prefix, captureData.ch);
+        __LOG(LOG_NOTICE, "[GST][%s:%d] filePath : %s", _FILE_, __LINE__, captureData.filePath);
+    }
 
     return 1;
 }

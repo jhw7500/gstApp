@@ -51,7 +51,7 @@ public :
     CaptureBin();
     ~CaptureBin();
 	gboolean init(guint8 num, gboolean crop_en);
-    gint setFilePath();
+    gint setFilePath(guint8 *prefix);
     gint startCapture(gint maxCnt);
     gint stopCapture();
     gint getCaptureCnt();

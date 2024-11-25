@@ -63,6 +63,9 @@ void ParserClass::init_arg(gchar *argv)
     arg.tcp_en = FALSE;
     arg.tcp_port = DEFAULT_TCP_PORT;
 
+    arg.ipc_en = FALSE;
+    arg.ipc_mid = DEFAULT_IPC_MID;
+
     arg.i2cConfig[CSI_1].exp_time = DEFAULT_EXP_TIME;
     arg.i2cConfig[CSI_2].exp_time = DEFAULT_EXP_TIME;
     for(guint8 i=0; i<MAX_CHANNEL; i++)
@@ -338,7 +341,7 @@ gint ParserClass::arg_parser(int *argc, char **argv[])
         {"capalways", 'y', 0, G_OPTION_ARG_INT, &arg.capture_always, "video capture bin always add, default(FALSE)", "INT"},
         {"etcp", 'C', 0, G_OPTION_ARG_INT, &arg.tcp_en, "tcp server enable, default(FALSE)", "INT"},
         {"ein", 'i', 0, G_OPTION_ARG_INT, &arg.input_en, "terminal input enable, default(FALSE)", "INT"},
-        {"port", 'P', 0, G_OPTION_ARG_STRING, &arg.rtsp_port, "rtsp port number, default(8554)", "STRING"},
+        {"rport", 'P', 0, G_OPTION_ARG_STRING, &arg.rtsp_port, "rtsp port number, default(8554)", "STRING"},
         {"id", 'u', 0, G_OPTION_ARG_STRING, &arg.rtsp_id, "rtsp id, default(user)", "STRING"},
         {"passwd", 'p', 0, G_OPTION_ARG_STRING, &arg.rtsp_passwd, "rtsp passwd, default(user)", "STRING"},
         {"cmax", 'x', 0, G_OPTION_ARG_INT, &arg.captureMaxCnt, "capture max count, default(3)", "INT"},
@@ -347,7 +350,9 @@ gint ParserClass::arg_parser(int *argc, char **argv[])
         {"split_max", 'X', 0, G_OPTION_ARG_INT, &arg.split_max_msec, "split max msec, default(2000)", "INT"},
         {"split_sec", 'S', 0, G_OPTION_ARG_INT, &arg.split_sec, "split sec, default(0)", "INT"},
         {"fault", 0, 0, G_OPTION_ARG_INT, &arg.fault, "no fault setup, default(FALSE)", "INT"},
-        {"tcp_port", 0, 0, G_OPTION_ARG_INT, &arg.tcp_port, "tcp port num, default(8555)", "INT"},
+        {"tport", 0, 0, G_OPTION_ARG_INT, &arg.tcp_port, "tcp port num, default(8555)", "INT"},
+        {"eipc", 'f', 0, G_OPTION_ARG_INT, &arg.ipc_en, "ipc enable, default(FALSE)", "INT"},
+        {"ipc_mid", 'F', 0, G_OPTION_ARG_INT, &arg.ipc_mid, "ipc message id, default(0x65)", "INT"},
         {"fmain0", 0, 0, G_OPTION_ARG_INT, &arg.main_fps[CSI_1], "csi1 main frame per second, default(15)", "INT"},
         {"fmain1", 0, 0, G_OPTION_ARG_INT, &arg.main_fps[CSI_2], "csi2 main frame per second, default(15)", "INT"},
         {"frec0", 0, 0, G_OPTION_ARG_INT, &arg.fps[STREAM_REC][0], "ch0 record frame per second, default(15)", "INT"},
@@ -519,9 +524,9 @@ gint ParserClass::check_arg()
     __LOG(LOG_NOTICE, "[%s][%s:%d] oht_name:%s, duration:%d, width:%d, height:%d, csi1_fps:%d, csi2_fps:%d", LOG_KEY, _FILE_, __LINE__, \
                         arg.ohtName, arg.duration, arg.width, arg.height, arg.main_fps[CSI_1], arg.main_fps[CSI_2]);
                     
-    __LOG(LOG_NOTICE, "[%s][%s:%d] chEn:0x%x, recEn:%d, rtspEn:%d, capEn:%d, audoEn:%d, inputEn:%d, overlayEn:%d tcpEn:%d", \
+    __LOG(LOG_NOTICE, "[%s][%s:%d] chEn:0x%x, recEn:%d, rtspEn:%d, capEn:%d, audoEn:%d, inputEn:%d, overlayEn:%d tcpEn:%d, ipc_en:%d", \
                         LOG_KEY, _FILE_, __LINE__, arg.ch_enable, arg.stream_en[STREAM_REC], arg.stream_en[STREAM_RTSP], arg.stream_en[STREAM_CAP], \
-                        arg.audio_en, arg.input_en, arg.overlay_en, arg.tcp_en);
+                        arg.audio_en, arg.input_en, arg.overlay_en, arg.tcp_en, arg.ipc_en);
     __LOG(LOG_NOTICE, "[%s][%s:%d] rtspID:%s, rtspPW:%s, rtspPort:%s, splitSec:%d, splitMargin:%d, splitMax:%d", LOG_KEY, _FILE_, __LINE__, \
                         arg.rtsp_id, arg.rtsp_passwd, arg.rtsp_port, arg.split_sec, arg.split_diff_msec, arg.split_max_msec);
 
@@ -546,6 +551,7 @@ gint ParserClass::check_arg()
     }
 
     if(arg.tcp_en) __LOG(LOG_NOTICE, "[%s][%s:%d] tcpPort:%d", LOG_KEY, _FILE_, __LINE__, arg.tcp_port);
+    if(arg.ipc_en) __LOG(LOG_NOTICE, "[%s][%s:%d] ipc_mid:%d", LOG_KEY, _FILE_, __LINE__, arg.ipc_mid);
 
     for(i=0; i<MAX_CHANNEL; i++) {
         __LOG(LOG_NOTICE, "[%s][%s:%d] ch%d en:%s, vflip:%s, hflip:%s, bps:%d,%d, ae_on:%d, ae_gain:%d, exp_time:%d", \
@@ -597,6 +603,52 @@ gint ParserClass::check_arg()
     }
 
     __LOG(LOG_NOTICE, "[%s][%s:%d] total_fps : %d", LOG_KEY, _FILE_, __LINE__, total_fps);
+
+    return 0;
+}
+
+gint ParserClass::cfi_parser(gchar* buffer, gint len, gpointer data)
+{
+    ThreadArgs *thraedArgs = (ThreadArgs *)data;
+    VideoBin *videoBin = (VideoBin *)(thraedArgs->arg0);
+    RecordBin *recordBin = (RecordBin *)(thraedArgs->arg1);
+    RtspServerBin *rtspServerBin = (RtspServerBin *)(thraedArgs->arg2);
+    MuxSinkBin *muxSinkBin = (MuxSinkBin *)(thraedArgs->arg3);
+    CaptureBin *captureBin = (CaptureBin *)(thraedArgs->arg4);
+    TCfiData _TCfiData;
+    uint8_t i = 0;
+    gint ret = -1;
+
+#if 1
+	if(len != CFI_DATA_LEN) {
+		__LOG(LOG_ERR, "[CFI][%s:%d] recv byte %d != %d", _FILE_, __LINE__, len, CFI_DATA_LEN);
+		return ret;
+	}
+
+    //memset(_TCfiData.byte, 0, CFI_DATA_LEN);
+    memcpy(_TCfiData.byte, buffer, len);
+
+	if(_TCfiData.data.len != len) {
+		__LOG(LOG_ERR, "[CFI][%s:%d] header len %d != %d", _FILE_, __LINE__, _TCfiData.data.len, len);
+		return ret;
+	}
+
+	if(_TCfiData.data.cmd_id != CFI_CAPTURE_CMD_ID) {
+		__LOG(LOG_ERR, "[CFI][%s:%d] header cmd_id 0x%x != 0x%x", _FILE_, __LINE__, _TCfiData.data.cmd_id, CFI_CAPTURE_CMD_ID);
+		return ret;
+	}
+
+    //__LOG(LOG_INFO, "[CFI][%s:%d] prefix : %s", _FILE_, __LINE__, _TCfiData.data.prefix);
+
+    for(i=0; i<MAX_CHANNEL; i++)
+    {
+        if (cmdArg.cam_en[i] && cmdArg.stream_en[STREAM_CAP])
+        {
+            captureBin[i].setFilePath(_TCfiData.data.prefix);
+            captureBin[i].startCapture(_TCfiData.data.cap_cnt);
+        }
+    }
+#endif
 
     return 0;
 }
@@ -1344,7 +1396,7 @@ gint ParserClass::cmd_parser(gchar* buffer, gint len, gpointer data)
                     }
                 }
                 
-                captureBin[key].setFilePath();
+                captureBin[key].setFilePath(NULL);
 
                 if(key1 == 0) {
                     key2 = cmdArg.fps[STREAM_CAP][key]*60;

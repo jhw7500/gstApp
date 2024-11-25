@@ -406,8 +406,8 @@ void RtspServerBin::setOverlayText(gchar *text)
 {
     g_object_set(re.overlay, "text", text, NULL);
 }
-void RtspServerBin::setTimeStampDebug()
 
+void RtspServerBin::setTimeStampDebug()
 {
     rtspServerData.debug = !rtspServerData.debug;
 }

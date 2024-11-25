@@ -21,6 +21,7 @@
 #include "aes.h"
 #include "tcpServer.h"
 #include "audioBin.h"
+#include "ipc.h"
 #include <fcntl.h>
 #include <unistd.h>
 //#include <signal.h>
@@ -703,6 +704,7 @@ gint main(gint argc, gchar *argv[])
     MuxSinkBin muxSinkBin[MAX_CHANNEL];
     CaptureBin captureBin[MAX_CHANNEL];
     CTCPServer *tcpServer = CTCPServer::getInstance();
+    CIPCInsance *ipcInstance = CIPCInsance::getInstance();
     GThread *splitThread = NULL, *terminalThread = NULL;
     GstStateChangeReturn ret;
     guint8 i = 0;
@@ -979,6 +981,12 @@ gint main(gint argc, gchar *argv[])
     if(cmdArg.tcp_en) {
         tcpServer->init(thraedArgs);
     }
+
+    if(cmdArg.ipc_en) {
+        //__LOG(LOG_NOTICE, "[GST][%s:%d] ipc enable", _FILE_, __LINE__);
+        ipcInstance->init(thraedArgs);
+    }
+
 
     loop = g_main_loop_new(NULL, FALSE);
 

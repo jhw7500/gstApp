@@ -12,6 +12,7 @@
 
 #include "util.h"
 #include <glib-unix.h>
+#include <sys/stat.h>
 
 GstElement *pipeline = NULL;
 GMainLoop *loop = NULL;
@@ -391,4 +392,11 @@ void print_tag(const GstTagList * list, const gchar * tag, gpointer unused)
 
     g_free (str);
   }
+}
+
+void makeDir(const char* path)
+{
+    __LOG(LOG_NOTICE, "[CFG][%s:%d] %s : %s", _FILE_, __LINE__, __FUNCTION__, path);
+    mkdir(path, 0755);
+    return;
 }

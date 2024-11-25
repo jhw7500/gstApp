@@ -403,11 +403,12 @@ int CTCPServer::waitingConnect(void* pData)
 
 int CTCPServer::parseRecvData(int fd, char* data, int len, void* pData)
 {
-	int ret = 0;
+	int ret = -1;
     //ThreadArgs *thraedArgs = (ThreadArgs *)pData;
 
 	ParserClass* parser = ParserClass::getInstance();
-	parser->cmd_parser(data, len, pData);
+	ret = parser->cmd_parser(data, len, pData);
+	//ret = parser->cfi_parser(data, len, pData);
 
     return ret;
 }

@@ -53,6 +53,7 @@
 #define DEFAULT_RTSP_PASSWD "user"
 
 #define DEFAULT_TCP_PORT    8555
+#define DEFAULT_IPC_MID     0x65
 
 #define DEFAULT_PLAY_DELAY  5
 #define DEFAULT_CAPTURE_MAX_CNT 3
@@ -75,6 +76,26 @@
 #define MAX_FPS_HD  240
 #define MAX_FPS_FHD 180
 
+#define CFI_DATA_LEN        50
+#define CFI_VERSION         0x300
+#define CFI_CAPTURE_CMD_ID  0x300
+
+#pragma pack(push, 1)
+union TCfiData {
+  guint8 byte[CFI_DATA_LEN];
+  struct THeader {
+    guint16 len;
+	guint16 ver;
+    guint8 sid[6];
+    guint16 cmd_id;
+    guint16 tx_id;
+    guint16 reserved;
+    guint16 cap_cnt;
+    guint8 prefix[32];
+  } data;
+};
+#pragma pack(pop)
+
 class ParserClass
 {
 public :
@@ -83,6 +104,7 @@ public :
     ~ParserClass();
 	gint init() ;
     gint cmd_parser(gchar* buffer, gint len, gpointer data);
+    gint cfi_parser(gchar* buffer, gint len, gpointer data);
     gint json_parser(const gchar *path, const gchar *header);
     gint arg_parser(int *argc, char **argv[]);
     gint check_arg();

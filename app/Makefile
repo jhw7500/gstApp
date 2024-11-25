@@ -36,7 +36,7 @@ ALL_CFLAGS=-I$(IDIR) $(CFLAGS)
 
 ALLFLAGS=$(ALL_CFLAGS) $(ALL_LDFLAGS)
 #OBJS = videoBin.o recordBin.o muxSinkBin.o rtspServerBin.o audioBin.o muxBin.o
-OBJS = videoBin.o recordBin.o muxSinkBin.o rtspServerBin.o testBin.o captureBin.o util.o parser.o aes.o tcpServer.o audioBin.o
+OBJS = videoBin.o recordBin.o muxSinkBin.o rtspServerBin.o testBin.o captureBin.o util.o parser.o aes.o tcpServer.o audioBin.o ipc.o
 
 gstApp : $(OBJS) main.cpp
 	$(CXX) -o $@ $^ $(ALLFLAGS)
@@ -78,6 +78,9 @@ tcpServer.o : tcpServer.cpp tcpServer.h
 
 audioBin.o : audioBin.cpp audioBin.h
 	$(CXX) $(ALLFLAGS) -c audioBin.cpp
+
+ipc.o : ipc.cpp ipc.h
+	$(CXX) $(ALLFLAGS) -c ipc.cpp
 
 #json_c.o : json_c.cpp json_c.h
 #	$(CXX) $(ALLFLAGS) -c json_c.cpp

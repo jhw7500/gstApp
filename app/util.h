@@ -164,6 +164,8 @@ typedef struct _CmdArg
     gint width;
     gint height;
     gboolean crop_en[2];
+    gint ipc_en;
+    gint ipc_mid;
 } CmdArg;
 
 #pragma pack(pop)
@@ -188,6 +190,7 @@ GstPadProbeReturn probe_function(GstPad *pad, GstPadProbeInfo *info, gpointer us
 gboolean print_delay(GstPad *pad, GstObject *parent, GstBuffer *buffer);
 gchar *search_file(const gchar* path, const gchar* prefix, const gchar* suffix);
 void print_tag(const GstTagList * list, const gchar * tag, gpointer unused);
+void makeDir(const char* path);
 
 #define __LOG(opt, fmt, args...) do { mylog(opt, (char*)fmt, ##args); } while(0)
 #define CHARNEXT(x,y)    (strrchr(x,y)? strrchr(x,y)+1:x)
