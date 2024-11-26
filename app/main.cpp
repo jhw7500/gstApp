@@ -987,7 +987,6 @@ gint main(gint argc, gchar *argv[])
         ipcInstance->init(thraedArgs);
     }
 
-
     loop = g_main_loop_new(NULL, FALSE);
 
 	if(!loop) {
@@ -1018,7 +1017,7 @@ gint main(gint argc, gchar *argv[])
         if(muxSinkBin[i].getBinVideoSinkPad()) gst_pad_send_event(muxSinkBin[i].getBinVideoSinkPad(), gst_event_new_eos());
         if(muxSinkBin[i].getBinAudioSinkPad()) gst_pad_send_event(muxSinkBin[i].getBinAudioSinkPad(), gst_event_new_eos());
         //if(rtspServerBin[i].getBinSinkPad()) gst_pad_send_event(rtspServerBin[i].getBinSinkPad(), gst_event_new_eos());
-        //if(captureBin[i].getBinSinkPad()) gst_pad_send_event(captureBin[i].getBinSinkPad(), gst_event_new_eos());
+        //if(captureBin[i].add_cap_f == TRUE) gst_pad_send_event(captureBin[i].getBinSinkPad(), gst_event_new_eos());
     }
 #endif
     //gst_element_send_event(pipeline, gst_event_new_eos());

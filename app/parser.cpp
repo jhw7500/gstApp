@@ -410,10 +410,10 @@ gint ParserClass::arg_parser(int *argc, char **argv[])
         }
     }
 
-    if(max[0] > 0) arg.main_fps[CSI_2] = max[0];
-    if(max[1] > 0) arg.main_fps[CSI_1] = max[1];
+    //if(max[0] > 0) arg.main_fps[CSI_2] = max[0];
+    //if(max[1] > 0) arg.main_fps[CSI_1] = max[1];
 
-    __LOG(LOG_NOTICE, "[%s][%s:%d] arg.main_fps[CSI_2]:%d, arg.main_fps[CSI_1]:%d", LOG_KEY, _FILE_, __LINE__, arg.main_fps[CSI_2], arg.main_fps[CSI_1]);
+    __LOG(LOG_NOTICE, "[%s][%s:%d] arg.main_fps[CSI_1]:%d, arg.main_fps[CSI_2]:%d", LOG_KEY, _FILE_, __LINE__, arg.main_fps[CSI_1], arg.main_fps[CSI_2]);
 #endif
 
     //__LOG(LOG_CRIT, "[GST][%s:%d] arg.ch_enable : 0x%02x", _FILE_, __LINE__, arg.ch_enable);
@@ -607,19 +607,132 @@ gint ParserClass::check_arg()
     return 0;
 }
 
+static void captureThreadFunc(gpointer data)
+{
+    ThreadArgs *thraedArgs = (ThreadArgs *)data;
+    VideoBin *videoBin = (VideoBin *)(thraedArgs->arg0);
+    //RecordBin *recordBin = (RecordBin *)(thraedArgs->arg1);
+    //RtspServerBin *rtspServerBin = (RtspServerBin *)(thraedArgs->arg2);
+    //MuxSinkBin *muxSinkBin = (MuxSinkBin *)(thraedArgs->arg3);
+    CaptureBin *captureBin = (CaptureBin *)(thraedArgs->arg4);
+    GstState state;
+    TCfiData *_TCfiData = (TCfiData *)(thraedArgs->arg5);
+    //guint i = (guint)thraedArgs->arg5;
+    guint k;
+
+    guint i = _TCfiData->data.channel;
+    //guint i = (guint)(thraedArgs->arg6);
+    g_print("ch%d %s\n", i, __FUNCTION__);
+
+    do  //if (cmdArg.cam_en[i] && cmdArg.stream_en[STREAM_CAP])
+    {
+        if (!captureBin[i].init(i, cmdArg.crop_en[i / 2]))
+            g_print("ch%d captrueBin init failed\n", i);
+
+        if (captureBin[i].addBinToPipe(pipeline))
+            g_print("ch%d capture bin add\n", i);
+        else
+            g_print("ch%d capture bin add error\n", i);
+        // g_usleep(10000);
+
+        if (gst_pad_is_linked(videoBin[i / 2].getBinCaptureSrcPad(i)) != TRUE)
+        {
+            // g_print("ch%d capture not linked\n", key);
+            if (gst_pad_link(videoBin[i / 2].getBinCaptureSrcPad(i), captureBin[i].getBinSinkPad()) != GST_PAD_LINK_OK)
+            {
+                g_print("ch%d capture link error!\n", i);
+                // captureBin[i].removeBinToPipe(pipeline);
+                break;
+            }
+            else
+            {
+                g_print("ch%d capture link ok!\n", i);
+                // gst_element_sync_state_with_parent(captureBin[i].be.bin);
+                // gst_element_set_state(pipeline, GST_STATE_PLAYING);
+            }
+        }
+        else
+        {
+            g_print("ch%d capture already linked!\n", i);
+            // gst_element_sync_state_with_parent(captureBin[i].be.bin);
+            // gst_element_set_state(pipeline, GST_STATE_PLAYING);
+        }
+
+        for (guint k = 0; k < 500; k++)
+        {
+            g_print("pipeline playing\n");
+            gst_element_set_state(pipeline, GST_STATE_PLAYING);
+            // g_print("ch%d captrue state sync\n", key);
+            // gst_element_sync_state_with_parent(captureBin[key].be.bin);
+            // g_usleep(1000);
+            state = captureBin[i].getState();
+            if (state == GST_STATE_PLAYING)
+                break;
+            else
+                g_print("state : %d\n", state);
+
+            g_usleep(1000);
+        }
+
+        captureBin[i].setFilePath(_TCfiData->data.prefix);
+        captureBin[i].startCapture(_TCfiData->data.cap_cnt);
+        // g_print("ch:%d, fps:%d, mode : %d, max_cnt : %d\n", key, cmdArg.fps[STREAM_CAP][key], key1, key2);
+        // captureBin[key].startCapture(key2);
+
+        for (k = 0; k < 500; k++)
+        {
+            if (captureBin[i].getCaptureCnt() >= _TCfiData->data.cap_cnt)
+                break;
+
+            g_usleep(10000);
+        }
+
+        __LOG(LOG_NOTICE, "[GST][%s:%d] capture end", _FILE_, __LINE__);
+
+        if (gst_pad_unlink(videoBin[i / 2].getBinCaptureSrcPad(i), captureBin[i].getBinSinkPad()))
+        {
+            g_print("ch%d capture unlink ok!\n", i);
+            state = captureBin[i].getState();
+            g_print("state : %d\n", state);
+            for (k = 0; k < 500; k++)
+            {
+                captureBin[i].setState(GST_STATE_NULL);
+                state = captureBin[i].getState();
+                g_print("state : %d\n", i);
+                if (state == GST_STATE_NULL)
+                {
+                    if (captureBin[i].removeBinToPipe(pipeline))
+                        g_print("ch%d capture bin remove\n", i);
+                    else
+                        g_print("ch%d capture bin remove error\n", i);
+
+                    break;
+                }
+                g_usleep(10000);
+            }
+        }
+        else
+            g_print("ch%d capture unlink err!\n", i);
+
+        // captureBin[i].removeBinToPipe(pipeline);
+    } while(0);
+}
+
 gint ParserClass::cfi_parser(gchar* buffer, gint len, gpointer data)
 {
     ThreadArgs *thraedArgs = (ThreadArgs *)data;
     VideoBin *videoBin = (VideoBin *)(thraedArgs->arg0);
-    RecordBin *recordBin = (RecordBin *)(thraedArgs->arg1);
-    RtspServerBin *rtspServerBin = (RtspServerBin *)(thraedArgs->arg2);
-    MuxSinkBin *muxSinkBin = (MuxSinkBin *)(thraedArgs->arg3);
+    //RecordBin *recordBin = (RecordBin *)(thraedArgs->arg1);
+    //RtspServerBin *rtspServerBin = (RtspServerBin *)(thraedArgs->arg2);
+    //MuxSinkBin *muxSinkBin = (MuxSinkBin *)(thraedArgs->arg3);
     CaptureBin *captureBin = (CaptureBin *)(thraedArgs->arg4);
+    //CaptureBin *captureBin = (CaptureBin *)(data);
+    //ThreadArgs *arg[2];
+
     TCfiData _TCfiData;
-    uint8_t i = 0;
+    guint i = 0;
     gint ret = -1;
 
-#if 1
 	if(len != CFI_DATA_LEN) {
 		__LOG(LOG_ERR, "[CFI][%s:%d] recv byte %d != %d", _FILE_, __LINE__, len, CFI_DATA_LEN);
 		return ret;
@@ -644,11 +757,23 @@ gint ParserClass::cfi_parser(gchar* buffer, gint len, gpointer data)
     {
         if (cmdArg.cam_en[i] && cmdArg.stream_en[STREAM_CAP])
         {
+#if 1
+            //gst_pad_remove_probe(captureBin[i].queue_src_pad, captureBin[i].probe_id);
             captureBin[i].setFilePath(_TCfiData.data.prefix);
             captureBin[i].startCapture(_TCfiData.data.cap_cnt);
+#else
+            ThreadArgs *args = g_new(ThreadArgs, 1);
+            *args = *thraedArgs;
+            TCfiData *data_copy = g_new(TCfiData, 1);
+            *data_copy = _TCfiData;
+            data_copy->data.channel = i;
+            args->arg5 = data_copy;
+            //__LOG(LOG_NOTICE, "[CFI][%s:%d] ch%d call captrue thread", _FILE_, __LINE__, i);
+            g_print("ch%d call captrue thread\n", i);
+            captureThread[i] = g_thread_new(g_strdup_printf("captureThread%d", i), (GThreadFunc)captureThreadFunc, args);
+#endif
         }
     }
-#endif
 
     return 0;
 }
@@ -1267,6 +1392,12 @@ gint ParserClass::cmd_parser(gchar* buffer, gint len, gpointer data)
             {
 
             }
+            else if (compareBuf(token, "cap", 3))
+            {
+                for (i = 0; i < MAX_CHANNEL; i++)
+                    if (cmdArg.cam_en[i] && cmdArg.stream_en[STREAM_CAP])
+                        captureBin[i].setTimeStampDebug();
+            }
         }
         else
             g_print("wrong cmd!\n");
@@ -1359,7 +1490,7 @@ gint ParserClass::cmd_parser(gchar* buffer, gint len, gpointer data)
                     if (gst_pad_is_linked(videoBin[key / 2].getBinCaptureSrcPad(key)) != TRUE)
                     {
                         //g_print("ch%d capture not linked\n", key);
-                        if (gst_pad_link(videoBin[key / 2].getBinCaptureSrcPad(i), captureBin[key].getBinSinkPad()) != GST_PAD_LINK_OK)
+                        if (gst_pad_link(videoBin[key / 2].getBinCaptureSrcPad(key), captureBin[key].getBinSinkPad()) != GST_PAD_LINK_OK)
                         {
                             g_print("ch%d capture link error!\n", key);
                             // captureBin[i].removeBinToPipe(pipeline);

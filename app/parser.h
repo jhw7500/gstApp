@@ -89,7 +89,8 @@ union TCfiData {
     guint8 sid[6];
     guint16 cmd_id;
     guint16 tx_id;
-    guint16 reserved;
+    guint8 channel;
+    guint8 reserved;
     guint16 cap_cnt;
     guint8 prefix[32];
   } data;
@@ -117,6 +118,7 @@ private :
 public :
 	gboolean m_flagDestroy;
     CmdArg arg;
+    GThread *captureThread[MAX_CHANNEL];
 	
 private :
 

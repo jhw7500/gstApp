@@ -16,6 +16,11 @@
 
 #include "util.h"
 
+typedef struct {
+    void* arg0;
+    void* arg1;
+} CapArgs;
+
 typedef struct _CaptureData
 {
     GstElement *appsrc;
@@ -26,6 +31,7 @@ typedef struct _CaptureData
     gchar *filePath;
     guint8 mode;
     gint fps;
+    gboolean debug;
 } CaptureData;
 
 typedef struct _CaptureElement
@@ -56,10 +62,12 @@ public :
     gint stopCapture();
     gint getCaptureCnt();
     GstPad* getBinSinkPad();
+    void setQueueSize(guint size);
     GstStateChangeReturn setState(GstState state);
     GstState getState();
     gboolean addBinToPipe(GstElement *pipe);
     gboolean removeBinToPipe(GstElement *pipe);
+    void setTimeStampDebug();
     void setAppsrc(GstElement *appsrc);
 
 private :
@@ -68,10 +76,15 @@ public :
 	gboolean m_flagDestroy;
     //GstElement *pipeline[2];
 	CaptureElement be;
+    gboolean add_cap_f = 0;
+    gulong probe_id;
+    GstPad *queue_src_pad;
+    //CaptureData captureData;
 
 private :
     GstPad *sinkPad;
     CaptureData captureData;
+    
 };
 
 #endif

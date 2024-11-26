@@ -646,7 +646,7 @@ gboolean RtspServerBin::audioInit()
     g_object_set(re.sink, "drop", TRUE, NULL);
     //g_object_set(pipe->sink, "max-lateness", 1*GST_SECOND, NULL);
     //g_object_set(pipe->sink, "render-delay", 100*GST_MSECOND, NULL);
-    g_object_set(re.sink, "emit-signals", TRUE, "sync", TRUE, "async", false, NULL);
+    g_object_set(re.sink, "emit-signals", TRUE, "sync", TRUE, "async", FALSE, NULL);
     //g_object_set(re.convert, "videocrop-meta-enable", TRUE, NULL);
 
     g_signal_connect(re.sink, "eos", G_CALLBACK(eos_callback), NULL);

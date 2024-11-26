@@ -27,6 +27,7 @@ static GstFlowReturn new_preroll_handler(GstElement *sink, gpointer data)
     return GST_FLOW_OK;
 }
 
+#include <openssl/md5.h>
 static GstFlowReturn new_sample_handler(GstElement *sink, gpointer userData) 
 {
     GstSample *sample;
@@ -47,16 +48,26 @@ static GstFlowReturn new_sample_handler(GstElement *sink, gpointer userData)
         return GST_FLOW_ERROR;
     }
     buffer = gst_sample_get_buffer(sample);
-    gst_sample_unref(sample);
-
+    //gst_sample_unref(sample);
+#if 0
+    if(info->appsrc == NULL || GST_STATE(GST_ELEMENT(info->appsrc)) != GST_STATE_PLAYING)
+    {
+        //g_print("appsrc null return!\n");
+        gst_sample_unref(sample);
+        return GST_FLOW_OK;
+    }
+#endif
     if (!buffer) {
-        __LOG(LOG_CRIT, "[GST][%s:%d] buffer cannot get from sample", _FILE_, __LINE__);
-        //gst_sample_unref(sample);
+        __LOG(LOG_ERR, "[GST][%s:%d] buffer cannot get from sample", _FILE_, __LINE__);
+        gst_sample_unref(sample);
         return GST_FLOW_ERROR;
     }
 
+    //GstBuffer *copied_buffer = gst_buffer_copy(buffer);
     if (!gst_buffer_map(buffer, &map, GST_MAP_READ)){
-        g_printerr("Failed to map buffer\n");
+        //g_printerr("Failed to map buffer\n");
+        __LOG(LOG_ERR, "[GST][%s:%d] Failed to map buffer", _FILE_, __LINE__);
+        gst_sample_unref(sample);
         return GST_FLOW_ERROR;
     }
 
@@ -70,23 +81,40 @@ static GstFlowReturn new_sample_handler(GstElement *sink, gpointer userData)
     {
         //info->mode = 0;
         gst_buffer_unmap(buffer, &map);
+        gst_sample_unref(sample);
         return GST_FLOW_OK;
     }
-    
+
+    //gst_sample_unref(sample);
+
+    if(info->debug)
+    {
+        //if(info->ch == 0)
+        {
+            //g_message("ch%d Timestamp: %" GST_TIME_FORMAT "\n", info->ch, GST_TIME_ARGS(timestamp));
+            unsigned char md5_result[MD5_DIGEST_LENGTH];
+            MD5(map.data, map.size, md5_result);
+
+            // MD5 해시 값을 로그로 출력
+            char md5_string[MD5_DIGEST_LENGTH * 2 + 1];
+            for (int i = 0; i < MD5_DIGEST_LENGTH; ++i) {
+                sprintf(&md5_string[i * 2], "%02x", md5_result[i]);
+            }
+            GstClockTime timestamp = GST_BUFFER_PTS(buffer);
+            g_message("ch%d Timestamp: %" GST_TIME_FORMAT " MD5 Hash: %s\n", info->ch, GST_TIME_ARGS(timestamp), md5_string);
+        }
+    }
+
     //g_print("captureCnt %d, captureMax %d\n", info->captureCnt, info->captureMaxCnt);
     if(cmdArg.capture_encoder_en) extention = g_strdup_printf("%s", "jpg");
     else extention = g_strdup_printf("%s", "rgb");
 
-    if(info->captureMaxCnt > 1 && info->captureMaxCnt < cmdArg.fps[STREAM_CAP][info->ch]) 
+    //if(info->captureMaxCnt > 1 && info->captureMaxCnt <= cmdArg.fps[STREAM_CAP][info->ch]) 
     {
         path = g_strdup_printf("%s_%d.%s", info->filePath, info->captureCnt, extention);
-        __LOG(LOG_NOTICE, "[GST][%s:%d] path : %s, cnt : %d, max : %d", _FILE_, __LINE__, info->filePath, info->captureCnt, info->captureMaxCnt);
-
+        //__LOG(LOG_DEBUG, "[GST][%s:%d] path : %s, cnt : %d, max : %d", _FILE_, __LINE__, info->filePath, info->captureCnt, info->captureMaxCnt);
     }
-    else path = g_strdup_printf("%s.%s", info->filePath, extention);
-
-    
-    info->captureCnt++;
+    //else path = g_strdup_printf("%s.%s", info->filePath, extention);
 
     file = fopen(path, "ab");
     if (file) {
@@ -96,10 +124,12 @@ static GstFlowReturn new_sample_handler(GstElement *sink, gpointer userData)
         __LOG(LOG_ERR, "[GST][%s:%d] %s file open error", _FILE_, __LINE__, path);
     }
 
-    gst_buffer_unmap(buffer, &map);
-    //gst_sample_unref(sample);
     if(path != NULL) g_free(path);
     if(extention != NULL) g_free(extention);
+    gst_buffer_unmap(buffer, &map);
+    gst_sample_unref(sample);
+
+    info->captureCnt++;
 
     return GST_FLOW_OK;
 }
@@ -148,6 +178,7 @@ CaptureBin::CaptureBin()
     captureData.captureCnt = cmdArg.captureMaxCnt;
     captureData.captureMaxCnt = cmdArg.captureMaxCnt;
     captureData.mode = 0;
+    captureData.debug = FALSE;
 }
 
 CaptureBin::~CaptureBin()
@@ -178,14 +209,30 @@ gint CaptureBin::stopCapture()
     return 1;
 }
 
+void CaptureBin::setTimeStampDebug()
+{
+    captureData.debug = !captureData.debug;
+}
+
 gint CaptureBin::getCaptureCnt()
 {
     return captureData.captureCnt;
 }
 
+void CaptureBin::setQueueSize(guint size)
+{
+    //g_object_get(re.enc, "bitrate", &bps, NULL);
+    //__LOG(LOG_NOTICE, "[GST][%s:%d] ch%d get bitrate : %d", _FILE_, __LINE__, ch, bps);
+
+    g_object_set(be.queue, "max-size-buffers", size, NULL);
+    __LOG(LOG_NOTICE, "[GST][%s:%d] ch%d set gop_size : %d", _FILE_, __LINE__, captureData.ch, size);
+    g_print("rtsp ch%d set gop_size : %d\n", captureData.ch, size);
+}
+
 gboolean CaptureBin::addBinToPipe(GstElement *pipe)
 {
-    __LOG(LOG_NOTICE, "[GST][%s:%d] ch%d %s", _FILE_, __LINE__, captureData.ch, __FUNCTION__);
+    __LOG(LOG_NOTICE, "[GST][%s:%d] ch%d %s, add_cap_f:%d", _FILE_, __LINE__, captureData.ch, __FUNCTION__, add_cap_f);
+    add_cap_f = TRUE;
 
     if(gst_bin_get_by_name(GST_BIN(pipe), g_strdup_printf("captureBin%d", captureData.ch)) != NULL)
     {
@@ -198,7 +245,8 @@ gboolean CaptureBin::addBinToPipe(GstElement *pipe)
 
 gboolean CaptureBin::removeBinToPipe(GstElement *pipe)
 {
-    __LOG(LOG_NOTICE, "[GST][%s:%d] ch%d %s", _FILE_, __LINE__, captureData.ch, __FUNCTION__);
+    __LOG(LOG_NOTICE, "[GST][%s:%d] ch%d %s, add_cap_f:%d", _FILE_, __LINE__, captureData.ch, __FUNCTION__, add_cap_f);
+    add_cap_f = FALSE;
 
     return gst_bin_remove(GST_BIN(pipe), be.bin);
 }
@@ -239,7 +287,7 @@ gboolean CaptureBin::init(guint8 num, gboolean crop_en)
     GstPad *staticPad;
     GstCaps *caps;
     captureData.ch = num;
-    captureData.fps = cmdArg.main_fps[num/2];
+    captureData.fps = cmdArg.fps[STREAM_CAP][captureData.ch];
     //sinkPad = NULL;
     __LOG(LOG_NOTICE, "[GST][%s:%d] %s ch : %d, crop : %s", _FILE_, __LINE__, __FUNCTION__, captureData.ch, crop_en? "enable":"disable");
 
@@ -276,17 +324,17 @@ gboolean CaptureBin::init(guint8 num, gboolean crop_en)
 #ifdef CHANNEL_EACH_CROP
     if(cmdArg.capture_encoder_en)
     {
-        if(crop_en && cmdArg.overlay_en) ret = gst_element_link_many(be.queue, be.crop, be.overlay, be.imx_convert, be.rate, be.capsfilter, be.enc, be.queue2, be.sink, NULL);
-        else if(cmdArg.overlay_en) ret = gst_element_link_many(be.queue, be.overlay, be.imx_convert, be.rate, be.capsfilter, be.enc, be.queue2, be.sink, NULL);
-        else if(crop_en) ret = gst_element_link_many(be.queue, be.crop, be.imx_convert, be.rate, be.capsfilter, be.enc, be.queue2, be.sink, NULL);
-        else ret = gst_element_link_many(be.queue, be.rate, be.capsfilter, be.enc, be.queue2, be.sink, NULL);
+        if(crop_en && cmdArg.overlay_en) ret = gst_element_link_many(be.queue, be.crop, be.overlay, be.imx_convert, be.capsfilter, be.enc, be.queue2, be.sink, NULL);
+        else if(cmdArg.overlay_en) ret = gst_element_link_many(be.queue, be.overlay, be.imx_convert, be.capsfilter, be.enc, be.queue2, be.sink, NULL);
+        else if(crop_en) ret = gst_element_link_many(be.queue, be.crop, be.imx_convert, be.capsfilter, be.enc, be.queue2, be.sink, NULL);
+        else ret = gst_element_link_many(be.queue, be.capsfilter, be.enc, be.queue2, be.sink, NULL);
     }
     else
     {
-        if(crop_en && cmdArg.overlay_en) ret = gst_element_link_many(be.queue, be.crop, be.overlay, be.imx_convert, be.rate, be.capsfilter, be.queue2, be.sink, NULL);
-        else if(cmdArg.overlay_en) ret = gst_element_link_many(be.queue, be.overlay, be.imx_convert, be.rate, be.capsfilter, be.queue2, be.sink, NULL);
-        else if(crop_en) ret = gst_element_link_many(be.queue, be.crop, be.imx_convert, be.rate, be.capsfilter, be.queue2, be.sink, NULL);
-        else ret = gst_element_link_many(be.queue, be.rate, be.capsfilter, be.queue2, be.sink, NULL);
+        if(crop_en && cmdArg.overlay_en) ret = gst_element_link_many(be.queue, be.crop, be.overlay, be.imx_convert, be.capsfilter, be.queue2, be.sink, NULL);
+        else if(cmdArg.overlay_en) ret = gst_element_link_many(be.queue, be.overlay, be.imx_convert, be.capsfilter, be.queue2, be.sink, NULL);
+        else if(crop_en) ret = gst_element_link_many(be.queue, be.crop, be.imx_convert, be.capsfilter, be.queue2, be.sink, NULL);
+        else ret = gst_element_link_many(be.queue, be.capsfilter, be.queue2, be.sink, NULL);
     }
 #else
     ret = gst_element_link_many(be.queue, be.crop, be.convert, be.enc, be.queue2, be.sink, NULL);
@@ -301,7 +349,7 @@ gboolean CaptureBin::init(guint8 num, gboolean crop_en)
                                 //"format", G_TYPE_STRING, "RGB16",
                                 "width", G_TYPE_INT, cmdArg.width,
                                 "height", G_TYPE_INT, cmdArg.height,
-                                "framerate", GST_TYPE_FRACTION, cmdArg.fps[STREAM_CAP][captureData.ch], 1,
+                                "framerate", GST_TYPE_FRACTION, captureData.fps, 1,
                                 NULL);
 
     g_object_set(be.capsfilter, "caps", caps, NULL);
@@ -312,18 +360,21 @@ gboolean CaptureBin::init(guint8 num, gboolean crop_en)
     else
         g_object_set(be.crop, "top", 0, "bottom", 0, "left", 0, "right", cmdArg.width, NULL);
 
-    //if(cmdArg.rtsp_fps >= 25) g_object_set(re.rate, "max-rate", cmdArg.rtsp_fps, "drop-only", TRUE, NULL);
-
+    //if(cmdArg.rtsp_fps >= 25) g_ ject_set(re.rate, "max-rate", cmdArg.rtsp_fps, "drop-only", TRUE, NULL);
+    //queue_src_pad = gst_element_get_static_pad(be.queue, "src");
+    //probe_id = gst_pad_add_probe(queue_src_pad, GST_PAD_PROBE_TYPE_BLOCK_DOWNSTREAM, NULL, NULL, NULL);
     //g_object_set(re.enc, "bitrate", cmdArg.rtsp_bitrate, NULL);
+    
     g_object_set(be.queue, "max-size-time", GST_SECOND, "max-size-buffers", captureData.fps, "leaky", LEAKY_DOWNSTREAM, NULL);
     g_object_set(be.queue2, "max-size-time", GST_SECOND, "max-size-buffers", captureData.fps, "leaky", LEAKY_DOWNSTREAM, NULL);
     //g_object_set(re.capsfilter, "max-size-time", 5*GST_SECOND, "max-size-buffers", 60, "leaky", 1, NULL);
-    g_object_set(be.sink, "max-buffers", captureData.fps, NULL);
-    g_object_set(be.sink, "drop", TRUE, NULL);
+    //g_object_set(be.sink, "max-buffers", captureData.fps, NULL);
     //g_object_set(pipe->sink, "max-lateness", 1*GST_SECOND, NULL);
     //g_object_set(pipe->sink, "render-delay", 100*GST_MSECOND, NULL);
-    g_object_set(be.sink, "emit-signals", TRUE, "sync", FALSE, NULL);
+    //g_object_set(be.sink, "emit-signals", TRUE, "sync", FALSE, NULL);
     //g_object_set(be.sink, "async", TRUE, NULL);
+    g_object_set(be.sink, "drop", TRUE, NULL);
+    g_object_set(be.sink, "emit-signals", TRUE, "sync", TRUE, "async", FALSE, NULL);
     g_signal_connect(be.sink, "eos", G_CALLBACK(eos_callback), NULL);
     g_signal_connect(be.sink, "new-sample", G_CALLBACK(new_sample_handler), &captureData);
     g_signal_connect(be.sink, "new-preroll", G_CALLBACK(new_preroll_handler), NULL );

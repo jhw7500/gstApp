@@ -99,6 +99,7 @@ typedef struct {
     void* arg2;
     void* arg3;
     void* arg4;
+    void* arg5;
 } ThreadArgs;
 
 typedef struct {
