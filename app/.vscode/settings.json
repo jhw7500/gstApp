@@ -24,6 +24,7 @@
         "tuple": "cpp",
         "utility": "cpp",
         "hash_map": "cpp",
-        "initializer_list": "cpp"
+        "initializer_list": "cpp",
+        "algorithm": "cpp"
     }
 }

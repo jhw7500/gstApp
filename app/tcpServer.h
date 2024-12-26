@@ -45,8 +45,7 @@ public :
 	int init(ThreadArgs* args) ;
 	int destroy() ;
 
-	int sendData() ;
-  int sendDataTCP(int fd, char* data, int len);
+	int sendData(int fd, char* data, int len) ;
 
 	int waitingConnect(void* pData) ;
   int waitingSend();

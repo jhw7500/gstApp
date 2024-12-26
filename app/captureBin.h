@@ -16,6 +16,8 @@
 
 #include "util.h"
 
+#define CAP_LOG_KEY "CAP"
+
 typedef struct {
     void* arg0;
     void* arg1;
@@ -48,6 +50,10 @@ typedef struct _CaptureElement
     GstElement *crop;
     GstElement *overlay;
     GstElement *capsfilter;
+    GstElement *capsfilter2;
+    GstElement *queue_sink;
+    GstElement *queue_src;
+    GstElement *queue3;
 } CaptureElement;
 
 class CaptureBin

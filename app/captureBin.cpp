@@ -17,18 +17,88 @@
 
 static void eos_callback(GstAppSink *appsink, gpointer user_data) 
 {
-    __LOG(LOG_NOTICE, "[GST][%s:%d] %s", _FILE_, __LINE__, __FUNCTION__);
+    __LOG(LOG_NOTICE, "[%s][%s:%d] %s", CAP_LOG_KEY, _FILE_, __LINE__, __FUNCTION__);
 }
 
 static GstFlowReturn new_preroll_handler(GstElement *sink, gpointer data) 
 {
-    __LOG(LOG_NOTICE, "[GST][%s:%d] %s", _FILE_, __LINE__, __FUNCTION__);
+    __LOG(LOG_NOTICE, "[%s][%s:%d] %s", CAP_LOG_KEY, _FILE_, __LINE__, __FUNCTION__);
 
     return GST_FLOW_OK;
 }
 
 #include <openssl/md5.h>
-static GstFlowReturn new_sample_handler(GstElement *sink, gpointer userData) 
+static GstPadProbeReturn queue_probe_callback(GstPad *pad, GstPadProbeInfo *info, gpointer userData)
+{
+    CaptureData *arg = (CaptureData *)userData;
+
+#if 0
+    if(arg->appsrc == NULL || GST_STATE(GST_ELEMENT(arg->appsrc)) != GST_STATE_PLAYING)
+    {
+        g_print("appsrc null return!\n");
+        return GST_PAD_PROBE_OK;
+    }
+#endif
+
+    GstBuffer *buffer = GST_PAD_PROBE_INFO_BUFFER(info);
+
+    if(buffer) gst_app_src_push_buffer(GST_APP_SRC(arg->appsrc), gst_buffer_copy(buffer));
+
+    return GST_PAD_PROBE_OK;
+}
+
+static GstFlowReturn on_new_sample_from_sink(GstElement *sink, gpointer userData)
+{
+    GstSample *sample;
+    GstBuffer *buffer;
+    GstMapInfo map;
+    GstFlowReturn ret;
+    CaptureData *info = (CaptureData *)userData;
+
+    /* appsink1에서 샘플 가져오기 */
+    g_signal_emit_by_name(sink, "pull-sample", &sample);
+    if (!sample) {
+        return GST_FLOW_ERROR;
+    }
+
+    //g_print("pull\n");
+#if 1
+    if(info->captureCnt >= info->captureMaxCnt)
+    {
+        gst_sample_unref(sample);
+        return GST_FLOW_OK;
+    }
+#endif
+    
+#if 0
+    if(info->appsrc == NULL || GST_STATE(GST_ELEMENT(info->appsrc)) != GST_STATE_PLAYING)
+    {
+        //g_print("appsrc null return!\n");
+        gst_sample_unref(sample);
+        return GST_FLOW_OK;
+    }
+#endif
+
+    buffer = gst_sample_get_buffer(sample);
+    if (!buffer) {
+        __LOG(LOG_ERR, "[%s][%s:%d] buffer cannot get from sample", CAP_LOG_KEY, _FILE_, __LINE__);
+        gst_sample_unref(sample);
+        return GST_FLOW_ERROR;
+    }
+
+    g_signal_emit_by_name(info->appsrc, "push-buffer", buffer, &ret);
+    if (ret != GST_FLOW_OK)
+    {
+        g_printerr("Error pushing buffer to appsrc: %d\n", ret);
+        return ret;
+    }
+
+    gst_sample_unref(sample);
+
+    return GST_FLOW_OK;
+}
+
+static GstFlowReturn on_new_sample_to_file(GstElement *sink, gpointer userData) 
 {
     GstSample *sample;
     GstBuffer *buffer;
@@ -47,7 +117,14 @@ static GstFlowReturn new_sample_handler(GstElement *sink, gpointer userData)
         //__LOG(LOG_CRIT, "[GST][%s:%d] sample cannot get from sink", _FILE_, __LINE__);
         return GST_FLOW_ERROR;
     }
-    buffer = gst_sample_get_buffer(sample);
+
+#if 1
+    if(info->captureCnt >= info->captureMaxCnt)
+    {
+        gst_sample_unref(sample);
+        return GST_FLOW_OK;
+    }
+#endif
     //gst_sample_unref(sample);
 #if 0
     if(info->appsrc == NULL || GST_STATE(GST_ELEMENT(info->appsrc)) != GST_STATE_PLAYING)
@@ -57,8 +134,10 @@ static GstFlowReturn new_sample_handler(GstElement *sink, gpointer userData)
         return GST_FLOW_OK;
     }
 #endif
+
+    buffer = gst_sample_get_buffer(sample);
     if (!buffer) {
-        __LOG(LOG_ERR, "[GST][%s:%d] buffer cannot get from sample", _FILE_, __LINE__);
+        __LOG(LOG_ERR, "[%s][%s:%d] buffer cannot get from sample", CAP_LOG_KEY, _FILE_, __LINE__);
         gst_sample_unref(sample);
         return GST_FLOW_ERROR;
     }
@@ -66,7 +145,7 @@ static GstFlowReturn new_sample_handler(GstElement *sink, gpointer userData)
     //GstBuffer *copied_buffer = gst_buffer_copy(buffer);
     if (!gst_buffer_map(buffer, &map, GST_MAP_READ)){
         //g_printerr("Failed to map buffer\n");
-        __LOG(LOG_ERR, "[GST][%s:%d] Failed to map buffer", _FILE_, __LINE__);
+        __LOG(LOG_ERR, "[%s][%s:%d] Failed to map buffer", CAP_LOG_KEY, _FILE_, __LINE__);
         gst_sample_unref(sample);
         return GST_FLOW_ERROR;
     }
@@ -76,14 +155,6 @@ static GstFlowReturn new_sample_handler(GstElement *sink, gpointer userData)
     gst_buffer_fill(info->buf, 0, map.data, map.size);
     gst_app_src_push_buffer(GST_APP_SRC(info->appsrc), info->buf);
 #endif
-
-    if(info->captureCnt >= info->captureMaxCnt)
-    {
-        //info->mode = 0;
-        gst_buffer_unmap(buffer, &map);
-        gst_sample_unref(sample);
-        return GST_FLOW_OK;
-    }
 
     //gst_sample_unref(sample);
 
@@ -98,7 +169,7 @@ static GstFlowReturn new_sample_handler(GstElement *sink, gpointer userData)
             // MD5 해시 값을 로그로 출력
             char md5_string[MD5_DIGEST_LENGTH * 2 + 1];
             for (int i = 0; i < MD5_DIGEST_LENGTH; ++i) {
-                sprintf(&md5_string[i * 2], "%02x", md5_result[i]);
+                g_strdup_printf(&md5_string[i * 2], "%02x", md5_result[i]);
             }
             GstClockTime timestamp = GST_BUFFER_PTS(buffer);
             g_message("ch%d Timestamp: %" GST_TIME_FORMAT " MD5 Hash: %s\n", info->ch, GST_TIME_ARGS(timestamp), md5_string);
@@ -106,7 +177,7 @@ static GstFlowReturn new_sample_handler(GstElement *sink, gpointer userData)
     }
 
     //g_print("captureCnt %d, captureMax %d\n", info->captureCnt, info->captureMaxCnt);
-    if(cmdArg.capture_encoder_en) extention = g_strdup_printf("%s", "jpg");
+    if(cmdArg.cap_encoder_en) extention = g_strdup_printf("%s", "jpg");
     else extention = g_strdup_printf("%s", "rgb");
 
     //if(info->captureMaxCnt > 1 && info->captureMaxCnt <= cmdArg.fps[STREAM_CAP][info->ch]) 
@@ -121,7 +192,7 @@ static GstFlowReturn new_sample_handler(GstElement *sink, gpointer userData)
         fwrite(map.data, 1, map.size, file);
         fclose(file);
     } else {
-        __LOG(LOG_ERR, "[GST][%s:%d] %s file open error", _FILE_, __LINE__, path);
+        __LOG(LOG_ERR, "[%s][%s:%d] %s file open error", CAP_LOG_KEY, _FILE_, __LINE__, path);
     }
 
     if(path != NULL) g_free(path);
@@ -136,9 +207,9 @@ static GstFlowReturn new_sample_handler(GstElement *sink, gpointer userData)
 
 void CaptureBin::setAppsrc(GstElement *appsrc)
 {
-    __LOG(LOG_NOTICE, "[GST][%s:%d] %s ch:%d", _FILE_, __LINE__, __FUNCTION__, captureData.ch);
+    __LOG(LOG_NOTICE, "[%s][%s:%d] %s ch:%d", CAP_LOG_KEY, _FILE_, __LINE__, __FUNCTION__, captureData.ch);
 
-    if(appsrc == NULL) __LOG(LOG_ERR, "[GST][%s:%d] %s ch:%d appsrc is NULL!", _FILE_, __LINE__, __FUNCTION__, captureData.ch);
+    if(appsrc == NULL) __LOG(LOG_ERR, "[%s][%s:%d] %s ch:%d appsrc is NULL!", CAP_LOG_KEY, _FILE_, __LINE__, __FUNCTION__, captureData.ch);
 
     captureData.appsrc = appsrc;
 
@@ -172,7 +243,7 @@ CaptureBin* CaptureBin::getInstance()
 
 CaptureBin::CaptureBin()
 {
-    __LOG(LOG_INFO, "[GST][%s:%d] %s", _FILE_, __LINE__, __FUNCTION__);
+    __LOG(LOG_INFO, "[%s][%s:%d] %s", CAP_LOG_KEY, _FILE_, __LINE__, __FUNCTION__);
     sinkPad = NULL;
     be.bin = NULL;
     captureData.captureCnt = cmdArg.captureMaxCnt;
@@ -183,7 +254,7 @@ CaptureBin::CaptureBin()
 
 CaptureBin::~CaptureBin()
 {
-    __LOG(LOG_INFO, "[GST][%s:%d] %s[%d]", _FILE_, __LINE__, __FUNCTION__, captureData.ch);
+    __LOG(LOG_INFO, "[%s][%s:%d] %s[%d]", CAP_LOG_KEY, _FILE_, __LINE__, __FUNCTION__, captureData.ch);
 }
 
 gint CaptureBin::startCapture(gint maxCnt)
@@ -195,14 +266,14 @@ gint CaptureBin::startCapture(gint maxCnt)
     captureData.captureMaxCnt = maxCnt;
 
     captureData.captureCnt = 0;
-    __LOG(LOG_NOTICE, "[GST][%s:%d] cnt:%d, maxCnt:%d", _FILE_, __LINE__, captureData.captureCnt, captureData.captureMaxCnt);
+    __LOG(LOG_NOTICE, "[%s][%s:%d] %s cnt:%d, maxCnt:%d", CAP_LOG_KEY, _FILE_, __LINE__, __FUNCTION__, captureData.captureCnt, captureData.captureMaxCnt);
 
     return 1;
 }
 
 gint CaptureBin::stopCapture()
 {
-    __LOG(LOG_NOTICE, "[GST][%s:%d] %s", _FILE_, __LINE__, __FUNCTION__);
+    __LOG(LOG_NOTICE, "[%s][%s:%d] %s", CAP_LOG_KEY, _FILE_, __LINE__, __FUNCTION__);
     captureData.captureCnt = cmdArg.captureMaxCnt;
     captureData.mode = 0;
 
@@ -225,18 +296,18 @@ void CaptureBin::setQueueSize(guint size)
     //__LOG(LOG_NOTICE, "[GST][%s:%d] ch%d get bitrate : %d", _FILE_, __LINE__, ch, bps);
 
     g_object_set(be.queue, "max-size-buffers", size, NULL);
-    __LOG(LOG_NOTICE, "[GST][%s:%d] ch%d set gop_size : %d", _FILE_, __LINE__, captureData.ch, size);
+    __LOG(LOG_NOTICE, "[%s][%s:%d] ch%d set gop_size : %d", CAP_LOG_KEY, _FILE_, __LINE__, captureData.ch, size);
     g_print("rtsp ch%d set gop_size : %d\n", captureData.ch, size);
 }
 
 gboolean CaptureBin::addBinToPipe(GstElement *pipe)
 {
-    __LOG(LOG_NOTICE, "[GST][%s:%d] ch%d %s, add_cap_f:%d", _FILE_, __LINE__, captureData.ch, __FUNCTION__, add_cap_f);
+    __LOG(LOG_INFO, "[%s][%s:%d] ch%d %s, add_cap_f:%d", CAP_LOG_KEY, _FILE_, __LINE__, captureData.ch, __FUNCTION__, add_cap_f);
     add_cap_f = TRUE;
 
     if(gst_bin_get_by_name(GST_BIN(pipe), g_strdup_printf("captureBin%d", captureData.ch)) != NULL)
     {
-        __LOG(LOG_INFO, "[GST][%s:%d] ch%d capture bin is already added", _FILE_, __LINE__, captureData.ch);
+        __LOG(LOG_INFO, "[%s][%s:%d] ch%d capture bin is already added", CAP_LOG_KEY, _FILE_, __LINE__, captureData.ch);
         return 1;
     }
 
@@ -245,7 +316,7 @@ gboolean CaptureBin::addBinToPipe(GstElement *pipe)
 
 gboolean CaptureBin::removeBinToPipe(GstElement *pipe)
 {
-    __LOG(LOG_NOTICE, "[GST][%s:%d] ch%d %s, add_cap_f:%d", _FILE_, __LINE__, captureData.ch, __FUNCTION__, add_cap_f);
+    __LOG(LOG_INFO, "[%s][%s:%d] ch%d %s, add_cap_f:%d", CAP_LOG_KEY, _FILE_, __LINE__, captureData.ch, __FUNCTION__, add_cap_f);
     add_cap_f = FALSE;
 
     return gst_bin_remove(GST_BIN(pipe), be.bin);
@@ -253,7 +324,7 @@ gboolean CaptureBin::removeBinToPipe(GstElement *pipe)
 
 GstPad* CaptureBin::getBinSinkPad()
 {
-    __LOG(LOG_INFO, "[GST][%s:%d] ch%d %s", _FILE_, __LINE__, captureData.ch, __FUNCTION__);
+    __LOG(LOG_INFO, "[%s][%s:%d] ch%d %s", CAP_LOG_KEY, _FILE_, __LINE__, captureData.ch, __FUNCTION__);
     //return gst_element_get_static_pad(re.bin, g_strdup_printf("recordBin_sink_ch%d", ch));
     return sinkPad;
 }
@@ -267,7 +338,7 @@ gint CaptureBin::setFilePath(guint8 *prefix)
 
         captureData.filePath = g_strdup_printf("%s/%s_%s-ch%d", cmdArg.captureDir, cmdArg.ohtName, date_str, captureData.ch);
 
-        __LOG(LOG_NOTICE, "[GST][%s:%d] filePath : %s", _FILE_, __LINE__, captureData.filePath);
+        __LOG(LOG_NOTICE, "[%s][%s:%d] filePath : %s", CAP_LOG_KEY, _FILE_, __LINE__, captureData.filePath);
 
         g_date_time_unref(datetime);
         g_free(date_str);
@@ -275,7 +346,7 @@ gint CaptureBin::setFilePath(guint8 *prefix)
     else
     {
         captureData.filePath = g_strdup_printf("%s/%s-ch%d", cmdArg.captureDir, prefix, captureData.ch);
-        __LOG(LOG_NOTICE, "[GST][%s:%d] filePath : %s", _FILE_, __LINE__, captureData.filePath);
+        __LOG(LOG_NOTICE, "[%s][%s:%d] filePath : %s", CAP_LOG_KEY, _FILE_, __LINE__, captureData.filePath);
     }
 
     return 1;
@@ -289,7 +360,7 @@ gboolean CaptureBin::init(guint8 num, gboolean crop_en)
     captureData.ch = num;
     captureData.fps = cmdArg.fps[STREAM_CAP][captureData.ch];
     //sinkPad = NULL;
-    __LOG(LOG_NOTICE, "[GST][%s:%d] %s ch : %d, crop : %s", _FILE_, __LINE__, __FUNCTION__, captureData.ch, crop_en? "enable":"disable");
+    __LOG(LOG_NOTICE, "[%s][%s:%d] %s ch : %d, crop : %s", CAP_LOG_KEY, _FILE_, __LINE__, __FUNCTION__, captureData.ch, crop_en? "enable":"disable");
 
     be.bin = gst_bin_new(g_strdup_printf("captureBin%d", captureData.ch));
     be.queue = gst_element_factory_make(QUEUE_TYPE, g_strdup_printf("queue%d", captureData.ch));
@@ -304,14 +375,23 @@ gboolean CaptureBin::init(guint8 num, gboolean crop_en)
     be.crop = gst_element_factory_make("videocrop", g_strdup_printf("crop%d", captureData.ch));
     be.overlay = gst_element_factory_make("textoverlay", g_strdup_printf("overlay%d", captureData.ch));
     be.capsfilter = gst_element_factory_make("capsfilter", g_strdup_printf("capsfilter%d", captureData.ch));
+    be.capsfilter2 = gst_element_factory_make("capsfilter", g_strdup_printf("capsfilter%d_2", captureData.ch));
+    be.queue_sink = gst_element_factory_make("appsink", g_strdup_printf("queue_sink%d", captureData.ch));
+    be.queue_src = gst_element_factory_make("appsrc", g_strdup_printf("queue_src%d", captureData.ch));
+    be.queue3 = gst_element_factory_make(QUEUE_TYPE, g_strdup_printf("queue%d_3", captureData.ch));
 
-    if (!be.bin || !be.queue || !be.enc || !be.rate || !be.sink || !be.imx_convert || !be.queue2 || !be.crop || !be.overlay || !be.capsfilter || !be.convert) {
-        __LOG(LOG_CRIT, "[GST][%s:%d] capture element create error", _FILE_, __LINE__);
+    //GstElement *imx_convert = gst_element_factory_make("imxvideoconvert_g2d", g_strdup_printf("imxconvert%d", captureData.ch));
+
+    if (!be.bin || !be.queue || !be.enc || !be.rate || !be.sink || !be.imx_convert || !be.queue2 || !be.crop || !be.overlay || \
+        !be.capsfilter || !be.convert || !be.queue_src || !be.queue_sink || !be.capsfilter2) {
+        __LOG(LOG_CRIT, "[%s][%s:%d] capture element create error", CAP_LOG_KEY, _FILE_, __LINE__);
         return ret;
     }
 
-    gst_bin_add_many(GST_BIN(be.bin), be.queue, be.rate, be.imx_convert, be.enc, be.queue2, be.sink, be.crop, be.overlay, be.capsfilter, be.convert, NULL);
-    //gst_bin_add_many(GST_BIN(be.bin), be.queue, be.sink, NULL);
+    gst_bin_add_many(GST_BIN(be.bin), be.queue, be.rate, be.imx_convert, be.enc, be.queue2, be.sink, be.crop, be.overlay, \
+                    be.capsfilter, be.convert, be.capsfilter2, be.queue_sink, be.queue_src, NULL);
+    //gst_bin_add_many(GST_BIN(be.bin), be.queue_src, be.queue3, be.queue_sink, NULL);
+    //gst_bin_add_many(GST_BIN(be.bin), imx_convert, , NULL);
 
 #if 0
     ret = gst_bin_add(GST_BIN(pipeline), be.bin);
@@ -321,8 +401,8 @@ gboolean CaptureBin::init(guint8 num, gboolean crop_en)
     }
 #endif
 
-#ifdef CHANNEL_EACH_CROP
-    if(cmdArg.capture_encoder_en)
+#ifdef CHANNEL_EACH_CROPx
+    if(cmdArg.cap_encoder_en)
     {
         if(crop_en && cmdArg.overlay_en) ret = gst_element_link_many(be.queue, be.crop, be.overlay, be.imx_convert, be.capsfilter, be.enc, be.queue2, be.sink, NULL);
         else if(cmdArg.overlay_en) ret = gst_element_link_many(be.queue, be.overlay, be.imx_convert, be.capsfilter, be.enc, be.queue2, be.sink, NULL);
@@ -337,13 +417,45 @@ gboolean CaptureBin::init(guint8 num, gboolean crop_en)
         else ret = gst_element_link_many(be.queue, be.capsfilter, be.queue2, be.sink, NULL);
     }
 #else
-    ret = gst_element_link_many(be.queue, be.crop, be.convert, be.enc, be.queue2, be.sink, NULL);
-    //if (!gst_element_link_many(be.queue, be.rate, be.convert, be.capsfilter, be.enc, be.parse, be.queue2, be.sink, NULL))
-#endif
+    //ret = gst_element_link_many(be.queue, be.crop, be.convert, be.enc, be.queue2, be.sink, NULL);
+    //ret = gst_element_link(be.queue, be.queue_sink);
+    ret = gst_element_link_many(be.queue, be.queue_sink, NULL);
     if (!ret) {
-        __LOG(LOG_CRIT, "[GST][%s:%d] capture link err", _FILE_, __LINE__);
+        __LOG(LOG_CRIT, "[%s][%s:%d] capture queue_sink link err", CAP_LOG_KEY, _FILE_, __LINE__);
         return ret;
     }
+    ret = gst_element_link_many(be.queue_src, be.crop, be.imx_convert, be.capsfilter, be.convert, be.capsfilter2, be.queue2, be.enc, be.sink, NULL);
+#endif
+    if (!ret) {
+        __LOG(LOG_CRIT, "[%s][%s:%d] capture queue_sink link err", CAP_LOG_KEY, _FILE_, __LINE__);
+        return ret;
+    }
+
+    g_object_set(be.queue_src, "is-live", TRUE, NULL);
+    g_object_set(be.queue_src, "format", GST_FORMAT_TIME, NULL);
+    captureData.appsrc = be.queue_src;
+
+#if 1
+    GstCaps *srccaps = gst_caps_new_simple("video/x-raw",
+                                "format", G_TYPE_STRING, "RGBx",
+                                "width", G_TYPE_INT, cmdArg.width*2,
+                                "height", G_TYPE_INT, cmdArg.height,
+                                "framerate", GST_TYPE_FRACTION, captureData.fps, 1,
+                                NULL);
+    g_object_set(be.queue_src, "caps", srccaps, NULL);
+    gst_caps_unref(srccaps);
+#endif
+
+#if 0
+    queue_src_pad = gst_element_get_static_pad(be.queue3, "src");
+    gst_pad_add_probe(queue_src_pad, GST_PAD_PROBE_TYPE_BUFFER, queue_probe_callback, &captureData, NULL);
+    gst_object_unref(queue_src_pad);
+#endif
+    g_object_set(be.queue_sink, "drop", TRUE, NULL);
+    g_object_set(be.queue_sink, "emit-signals", TRUE, "sync", TRUE, "async", FALSE, NULL);
+    //g_signal_connect(be.queue_sink, "eos", G_CALLBACK(eos_callback), NULL);
+    g_signal_connect(be.queue_sink, "new-sample", G_CALLBACK(on_new_sample_from_sink), &captureData);
+    //g_signal_connect(be.queue_sink, "new-preroll", G_CALLBACK(new_preroll_handler), NULL );
 
     caps = gst_caps_new_simple("video/x-raw",
                                 //"format", G_TYPE_STRING, "RGB16",
@@ -353,6 +465,16 @@ gboolean CaptureBin::init(guint8 num, gboolean crop_en)
                                 NULL);
 
     g_object_set(be.capsfilter, "caps", caps, NULL);
+    gst_caps_unref(caps);
+
+    caps = gst_caps_new_simple("video/x-raw",
+                                "format", G_TYPE_STRING, "I420",
+                                "width", G_TYPE_INT, cmdArg.width,
+                                "height", G_TYPE_INT, cmdArg.height,
+                                "framerate", GST_TYPE_FRACTION, captureData.fps, 1,
+                                NULL);
+
+    g_object_set(be.capsfilter2, "caps", caps, NULL);
     gst_caps_unref(caps);
 
     if (captureData.ch % 2 == 0)
@@ -376,7 +498,7 @@ gboolean CaptureBin::init(guint8 num, gboolean crop_en)
     g_object_set(be.sink, "drop", TRUE, NULL);
     g_object_set(be.sink, "emit-signals", TRUE, "sync", TRUE, "async", FALSE, NULL);
     g_signal_connect(be.sink, "eos", G_CALLBACK(eos_callback), NULL);
-    g_signal_connect(be.sink, "new-sample", G_CALLBACK(new_sample_handler), &captureData);
+    g_signal_connect(be.sink, "new-sample", G_CALLBACK(on_new_sample_to_file), &captureData);
     g_signal_connect(be.sink, "new-preroll", G_CALLBACK(new_preroll_handler), NULL );
 
     staticPad = gst_element_get_static_pad(be.queue, "sink");
@@ -384,9 +506,11 @@ gboolean CaptureBin::init(guint8 num, gboolean crop_en)
 
     ret = gst_element_add_pad(be.bin, sinkPad);
     if(!ret) {
-        __LOG(LOG_CRIT, "[GST][%s:%d] capture pad add error in bin", _FILE_, __LINE__);
+        __LOG(LOG_CRIT, "[%s][%s:%d] capture pad add error in bin", CAP_LOG_KEY, _FILE_, __LINE__);
         return ret;
     }
+
+    g_strdup_printf(captureData.filePath, "/mnt/sd_cam/capture/default-ch%d", captureData.ch);
 
     gst_object_unref(staticPad);
 

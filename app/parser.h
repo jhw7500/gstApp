@@ -26,7 +26,9 @@
 #define DEFAULT_ROTATE_PATH_23	"/sys/bus/i2c/devices/i2c-1/1-0048/rotate"
 
 #define DEFAULT_JSON_PATH   "/root/shared_v"
-#define DEFAULT_JSON_HEADER "VHL_CAM"
+#define JSON_CAM_OBJ_NAME   "VHL_CAM"
+#define JSON_CAP_OBJ_NAME   "capture"
+
 #define DEFAULT_RECORD_BITRATE  4096
 #define DEFAULT_RTSP_BITRATE    1024
 #define DEFAULT_MAIN_FPS        15
@@ -78,14 +80,15 @@
 
 #define CFI_DATA_LEN        50
 #define CFI_VERSION         0x300
-#define CFI_CAPTURE_CMD_ID  0x300
+#define CFI_CAP_REQ_CMD_ID  0x300
+#define CFI_CAP_RES_CMD_ID  0x301
 
 #pragma pack(push, 1)
 union TCfiData {
   guint8 byte[CFI_DATA_LEN];
   struct THeader {
     guint16 len;
-	guint16 ver;
+	  guint16 ver;
     guint8 sid[6];
     guint16 cmd_id;
     guint16 tx_id;
@@ -111,6 +114,7 @@ public :
     gint check_arg();
     void init_arg(gchar *argv);
     static gint json_object_get_value(json_object *hobj, const gchar *name, gpointer data);
+    static gint json_sub_object_get_value(const gchar *file, const gchar *header, const gchar *sub_obj, const gchar *name, gpointer data);
     static json_object *json_find_obj (json_object * jobj, char *find_key);
     
 private :

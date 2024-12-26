@@ -138,6 +138,7 @@ typedef struct _CmdArg
     const gchar *dotDir;
     const gchar *mntDir;
     const gchar *ohtName;
+    const gchar *json_file;
     guint8 ch_enable;
     guint16 ch_rotate;
     ResMode resMode;
@@ -145,8 +146,9 @@ typedef struct _CmdArg
     gint play_delay;
     gboolean fault;
     gint duration;
-    gboolean capture_encoder_en;
-    gboolean capture_always;
+    gboolean cap_encoder_en;
+    gboolean cap_always;
+    gboolean cap_res_en;
     gboolean tcp_en;
     gint tcp_port;
     gboolean audio_en;
@@ -165,8 +167,9 @@ typedef struct _CmdArg
     gint width;
     gint height;
     gboolean crop_en[2];
-    gint ipc_en;
+    gboolean ipc_en;
     gint ipc_mid;
+    gint cap_delay;
 } CmdArg;
 
 #pragma pack(pop)
@@ -192,6 +195,7 @@ gboolean print_delay(GstPad *pad, GstObject *parent, GstBuffer *buffer);
 gchar *search_file(const gchar* path, const gchar* prefix, const gchar* suffix);
 void print_tag(const GstTagList * list, const gchar * tag, gpointer unused);
 void makeDir(const char* path);
+void convert_data_to_hex(const char *data, int len, char *buffer, int buffer_size);
 
 #define __LOG(opt, fmt, args...) do { mylog(opt, (char*)fmt, ##args); } while(0)
 #define CHARNEXT(x,y)    (strrchr(x,y)? strrchr(x,y)+1:x)

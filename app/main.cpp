@@ -26,7 +26,7 @@
 #include <unistd.h>
 //#include <signal.h>
 
-#define APP_VERSION "0.6"
+#define APP_VERSION "0.8"
 
 #define SEGFAULT_DEBUG
 #define RECORDBIN_ENABLE
@@ -280,13 +280,16 @@ gboolean bus_message_parse(GstBus *bus, GstMessage *message, gpointer data)
 
         case GST_MESSAGE_NEW_CLOCK:
         {
-            gchar *str = g_strdup_printf("echo '%s' > %s &", g_date_time_format(g_date_time_new_now_local(), "%Y%m%d %H:%M:%S"), DEFAULT_START_VIDEO_TIME_PATH);
-            if(system(str) < 0) 
-                __LOG(LOG_ERR, "[GST][%s:%d] %s error in %s", _FILE_, __LINE__, str, __FUNCTION__);
-            else
-                __LOG(LOG_NOTICE, "[GST][%s:%d] %s in %s", _FILE_, __LINE__, str, __FUNCTION__);
+            if(cmdArg.stream_en[STREAM_REC] || cmdArg.audio_en)
+            {
+                gchar *str = g_strdup_printf("echo '%s' > %s &", g_date_time_format(g_date_time_new_now_local(), "%Y%m%d %H:%M:%S"), DEFAULT_START_VIDEO_TIME_PATH);
+                if(system(str) < 0) 
+                    __LOG(LOG_ERR, "[GST][%s:%d] %s error in %s", _FILE_, __LINE__, str, __FUNCTION__);
+                else
+                    __LOG(LOG_NOTICE, "[GST][%s:%d] %s in %s", _FILE_, __LINE__, str, __FUNCTION__);
 
-            g_free(str);
+                g_free(str);
+            }
 #if 0
             FILE *fp = NULL;
             fp = fopen(DEFAULT_START_VIDEO_TIME_PATH, "wb");
@@ -681,7 +684,7 @@ gint main(gint argc, gchar *argv[])
     cmdArg = parser->arg;
     //getPasswdWithAES(&parser->arg);
 
-    if(parser->json_parser(DEFAULT_JSON_PATH, DEFAULT_JSON_HEADER) < 0)
+    if(parser->json_parser(DEFAULT_JSON_PATH, JSON_CAM_OBJ_NAME) < 0)
         return -1;
 
     if(parser->arg_parser(&argc, &argv) < 0)
@@ -771,7 +774,7 @@ gint main(gint argc, gchar *argv[])
 
             //captureBin[i].setAppsrc(recordBin[chNum].getBinAppsrc());
 
-            if(cmdArg.capture_always)
+            if(cmdArg.cap_always)
             {
                 if(!captureBin[i].init(i, cmdArg.crop_en[csiNum]))
                 {
@@ -1055,6 +1058,10 @@ main_end:
 
     if(cmdArg.tcp_en) {
         tcpServer->destroy();
+    }
+
+    if(cmdArg.ipc_en) {
+         ipcInstance->destroy();
     }
 
     if(loop) g_main_loop_unref(loop);

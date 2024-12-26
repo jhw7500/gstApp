@@ -209,7 +209,7 @@ int CTCPServer::destroy()
 	return 0;
 }
 
-int CTCPServer::sendDataTCP(int fd, char* data, int len)
+int CTCPServer::sendData(int fd, char* data, int len)
 {
 	int ret = 0;
 	//__LOG(LOG_NOTICE, "[TCP][%s:%d] fd(%d) m_clientSocket(%d) m_serverSocket(%d)", _FILE_, __LINE__, fd, m_clientSocket, m_serverSocket);
@@ -246,7 +246,7 @@ int CTCPServer::waitingSend()
 
 		if(cap_step == 2)
 		{
-			sendDataTCP(m_clientSocket, (char *)frameData.data, frameData.size);
+			sendData(m_clientSocket, (char *)frameData.data, frameData.size);
 			cap_step = 0;
 		}
 	}

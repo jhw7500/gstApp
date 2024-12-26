@@ -26,7 +26,7 @@ int CIPCInsance::init(ThreadArgs *args)
 	m_flagDestroy = 0;
 	
 #if 1
-    int msg_id = msgget((key_t)MSG_Q_KEY, IPC_CREAT | 0666);
+    int msg_id = msgget((key_t)MSG_Q_REQ_KEY, IPC_CREAT | 0666);
 
     if(msg_id == -1) {
         perror("msgget fail");
@@ -48,17 +48,19 @@ int CIPCInsance::init(ThreadArgs *args)
     return ret;
 }
 
-int CIPCInsance::destory()
+int CIPCInsance::destroy()
 {
     int ret = 0;
     void* nStatus ;
+    m_flagDestroy = 1;
 
 	__LOG(LOG_EMERG, "[IPC][%s:%d] call server destroy", _FILE_, __LINE__) ;
 	ret = pthread_join(m_threadRecv, &nStatus);
 	if(ret < 0)
 		__LOG(LOG_CRIT, "[IPC][%s:%d] ret:%d", _FILE_, __LINE__, ret);
 
-    int msg_id = msgget((key_t)MSG_Q_KEY, IPC_CREAT | 0666);
+#if 1
+    int msg_id = msgget((key_t)MSG_Q_REQ_KEY, IPC_CREAT | 0666);
 
     if(msg_id == -1) {
         perror("msgget fail");
@@ -71,9 +73,48 @@ int CIPCInsance::destory()
 		perror("msgctl fail");
 		__LOG(LOG_CRIT, "[IPC][%s:%d] ret:%d", _FILE_, __LINE__, ret);
 	}
+#endif
+
 	exit(0);
 
     return ret;
+}
+
+int CIPCInsance::sendData(char* data, int len)
+{
+	int ret = 0;
+	int msg_id = msgget((key_t)MSG_Q_RES_KEY, IPC_CREAT | 0666);
+	
+	if (msg_id == -1) {
+		ret = -1;
+		perror("msgget fail");
+		__LOG(LOG_ERR, "[IPC][%s:%d] ret:%d", _FILE_, __LINE__, ret);
+		return ret;
+	}
+
+	IpcBuffer sendMsg;
+	sendMsg.type = PMSG_TYPE_IPC_CFI;
+
+	memcpy(sendMsg.data, data, len);
+	ret = msgsnd(msg_id, &sendMsg, len, IPC_NOWAIT);
+
+	if (ret < 0) {
+		perror("msgsnd fail");
+		__LOG(LOG_ERR, "[IPC][%s:%d] ret:%d", _FILE_, __LINE__, ret);
+		return ret;
+	} else {
+		__LOG(LOG_NOTICE, "[IPC][%s:%d] send data msg_id(%d) byte  %d", _FILE_, __LINE__, msg_id, len);
+	}
+
+    if(cmdArg.log_level > LOG_INFO)
+    {
+        len = sizeof(sendMsg.data) / sizeof(sendMsg.data[0]);
+        char buffer[256];
+        convert_data_to_hex(sendMsg.data, len, buffer, sizeof(buffer));
+        __LOG(LOG_DEBUG, "[IPC][%s:%d] data : %s", _FILE_, __LINE__, buffer);
+    }
+
+	return 0;
 }
 
 int CIPCInsance::waitingRecv(void* pData)
@@ -81,9 +122,9 @@ int CIPCInsance::waitingRecv(void* pData)
     int ret;
     int i;
     int msg_id;
-	RecvQueue recvMsg;
+	IpcBuffer recvMsg;
 
-	msg_id = msgget((key_t)MSG_Q_KEY, IPC_CREAT | 0666);
+	//msg_id = msgget((key_t)MSG_Q_KEY, IPC_CREAT | 0666);
 
     if(msg_id == -1) {
 		ret = -1;
@@ -92,39 +133,43 @@ int CIPCInsance::waitingRecv(void* pData)
         return -1;
     }
 
-
     while(1) {
-
         g_usleep(10000);
 
         if(m_flagDestroy)
             break;
 
-		//msg_id = msgget((key_t)MSG_Q_KEY, IPC_CREAT | 0666);
+		msg_id = msgget((key_t)MSG_Q_REQ_KEY, IPC_CREAT | 0666);
 
-		ret = msgrcv(msg_id, &recvMsg, sizeof(recvMsg) - sizeof(long), PMSG_TYPE_IPC, 0);
-        if(ret <= 0) {
-            perror("msgrcv fail");
-			__LOG(LOG_ERR, "[IPC][%s:%d] ret:%d", _FILE_, __LINE__, ret);
+        ret = msgrcv(msg_id, &recvMsg, sizeof(recvMsg) - sizeof(long), PMSG_TYPE_IPC_CFI, IPC_NOWAIT);
+        if (ret <= 0) {
+            if (errno == ENOMSG) {
+                g_usleep(10000);
+            } else {
+                perror("msgrcv fail");
+                __LOG(LOG_ERR, "[IPC][%s:%d] errno:%d, ret:%d", __FILE__, __LINE__, errno, ret);
+            }
             continue;
         }
-        __LOG(LOG_NOTICE, "[IPC][%s:%d] recv data msg_id(%d) byte %d", _FILE_, __LINE__, msg_id, ret);
+        else
+        {
+            __LOG(LOG_NOTICE, "[IPC][%s:%d] recv data msg_id(%d) byte %d", _FILE_, __LINE__, msg_id, ret);
+            if(cmdArg.log_level > LOG_INFO)
+            {
+                int len = sizeof(recvMsg.data) / sizeof(recvMsg.data[0]);
+                char buffer[256];
+                convert_data_to_hex(recvMsg.data, len, buffer, sizeof(buffer));
+                __LOG(LOG_DEBUG, "[IPC][%s:%d] data : %s", _FILE_, __LINE__, buffer);
+            }
 
-        ParserClass* parser = ParserClass::getInstance();
-        ret = parser->cfi_parser(recvMsg.data, ret, pData);
-		//ret = parseIpcRecvData(msg_id, recvMsg.data, ret);
-        if(ret < 0) {
-			__LOG(LOG_ERR, "[IPC][%s:%d] ret:%d", _FILE_, __LINE__, ret);
-            continue;
+            ParserClass* parser = ParserClass::getInstance();
+            ret = parser->cfi_parser(recvMsg.data, ret, pData);
+            //ret = parseIpcRecvData(msg_id, recvMsg.data, ret);
+            if(ret < 0) {
+                __LOG(LOG_ERR, "[IPC][%s:%d] ret:%d", _FILE_, __LINE__, ret);
+                continue;
+            }
         }
-
-/*
-        printf("IPC recv data len %d : ", ret);
-        for(i=0;i<ret;i++)
-            printf("%02x", msg.data[i]);
-        printf("\n");
-*/
-        //ret = parseRecvData(msg.data, ret);
     };
 
 	__LOG(LOG_NOTICE, "[TCP][%s:%d] ipc thread end", _FILE_, __LINE__);

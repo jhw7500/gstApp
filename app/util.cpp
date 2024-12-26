@@ -354,7 +354,8 @@ gchar *search_file(const gchar* path, const gchar* prefix, const gchar* suffix)
 	FILE *fp;
 	static gchar str[128];
 
-  sprintf(str, "ls -ptr %s/%s*%s | grep -v '/$' | tail -1 | tr -d '\r\n'", path, prefix, suffix);
+  sprintf(str, "ls -ptr %s/%s*%s | grep -v '/$' | grep '\\%s$' | tail -1 | tr -d '\r\n'", path, prefix, suffix, suffix);
+  //sprintf(str, "find %s/ -maxdepth 1 -type f -name \"%s*%s\" -printf '%%T+ %%p\\n' | sort -r | head -n 1 | cut -d\" \" -f2- | tr -d '\\r\\n'", path, prefix, suffix);
   fp = popen(str, "r");
   if (NULL == fp)
   {
@@ -399,4 +400,15 @@ void makeDir(const char* path)
     __LOG(LOG_NOTICE, "[CFG][%s:%d] %s : %s", _FILE_, __LINE__, __FUNCTION__, path);
     mkdir(path, 0755);
     return;
+}
+
+void convert_data_to_hex(const char *data, int len, char *buffer, int buffer_size)
+{
+    int offset = 0;
+
+    for (int i = 0; i < len; i++) {
+        if (offset + 2 >= buffer_size) break; // 버퍼 초과 방지
+        offset += snprintf(buffer + offset, buffer_size - offset, "%02x", data[i]);
+    }
+    buffer[buffer_size - 1] = '\0'; // Null-terminate
 }
