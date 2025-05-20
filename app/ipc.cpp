@@ -166,7 +166,7 @@ int CIPCInsance::waitingRecv(void* pData)
             ret = parser->cfi_parser(recvMsg.data, ret, pData);
             //ret = parseIpcRecvData(msg_id, recvMsg.data, ret);
             if(ret < 0) {
-                __LOG(LOG_ERR, "[IPC][%s:%d] ret:%d", _FILE_, __LINE__, ret);
+                __LOG(LOG_ERR, "[IPC][%s:%d] capture timeout (ret:%d)", _FILE_, __LINE__, ret);
                 continue;
             }
         }

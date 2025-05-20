@@ -26,7 +26,7 @@
 #include <unistd.h>
 //#include <signal.h>
 
-#define APP_VERSION "0.8"
+#define APP_VERSION "0.9"
 
 #define SEGFAULT_DEBUG
 #define RECORDBIN_ENABLE
@@ -80,13 +80,26 @@ gboolean bus_message_parse(GstBus *bus, GstMessage *message, gpointer data)
         {
             GError *err;
             gchar *debug;
+            gchar *str;
             gst_message_parse_error(message, &err, &debug);
-            __LOG(LOG_ERR, "[GST][%s:%d] error message : %s\n", __FILE__, __LINE__, err->message);
-            __LOG(LOG_ERR, "[GST][%s:%d] error debug : %s\n", __FILE__, __LINE__, (debug)? debug : "none");
-            printf("Error : %s\n", err->message);
-            printf("Debug : %s\n", (debug)? debug : "none");
-            g_error_free(err);
-            g_free(debug);
+            if (err)
+            {
+                // g_printerr("err(%d) %s from element(%s)\n", err->code, err->message, GST_MESSAGE_SRC_NAME(message));
+                __LOG(LOG_ERR, "[GST][%s:%d] err(%d) %s from element(%s)", _FILE_, __LINE__, err->code, err->message, GST_MESSAGE_SRC_NAME(message));
+                str = g_strdup_printf("echo '%s' > /tmp/gst_err", err->message);
+                system(str);
+                g_error_free(err);
+                g_free(str);
+            }
+            if (debug)
+            {
+                // g_printerr("message - %s\n", debug);
+                __LOG(LOG_ERR, "[GST][%s:%d] error debug : %s\n", __FILE__, __LINE__, (debug)? debug : "none");
+                str = g_strdup_printf("echo '%s' > /tmp/gst_err", debug);
+                system(str);
+                g_free(debug);
+                g_free(str);
+            }
             //destroy();
             gst_element_send_event(pipeline, gst_event_new_eos());
             break;
@@ -1019,8 +1032,8 @@ gint main(gint argc, gchar *argv[])
         //if(muxSinkBin[i].getBinVideoSinkPad()) muxSinkBin[i].handle_last_sample();
         if(muxSinkBin[i].getBinVideoSinkPad()) gst_pad_send_event(muxSinkBin[i].getBinVideoSinkPad(), gst_event_new_eos());
         if(muxSinkBin[i].getBinAudioSinkPad()) gst_pad_send_event(muxSinkBin[i].getBinAudioSinkPad(), gst_event_new_eos());
-        //if(rtspServerBin[i].getBinSinkPad()) gst_pad_send_event(rtspServerBin[i].getBinSinkPad(), gst_event_new_eos());
-        //if(captureBin[i].add_cap_f == TRUE) gst_pad_send_event(captureBin[i].getBinSinkPad(), gst_event_new_eos());
+        if(rtspServerBin[i].getBinSinkPad()) gst_pad_send_event(rtspServerBin[i].getBinSinkPad(), gst_event_new_eos());
+        if(captureBin[i].add_cap_f == TRUE) gst_pad_send_event(captureBin[i].getBinSinkPad(), gst_event_new_eos());
     }
 #endif
     //gst_element_send_event(pipeline, gst_event_new_eos());
