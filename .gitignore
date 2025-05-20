@@ -1,5 +1,3 @@
 bin/
-app/rnnoise/
-app/obj/
-app/bin/
-test/bin
+obj/
+rnnoise/
