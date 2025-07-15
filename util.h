@@ -171,6 +171,7 @@ typedef struct _CmdArg
     gint ipc_mid;
     gint cap_delay;
     gint cap_timeout;
+    const gchar *muxer;
 } CmdArg;
 
 #pragma pack(pop)

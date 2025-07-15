@@ -133,6 +133,7 @@ gchararray format_location(GstElement *sink, guint arg0, gpointer data)
     GDateTime *datetime = g_date_time_new_now_local();
     gint sec = g_date_time_get_second(datetime);
     gint usec = g_date_time_get_microsecond(datetime);
+    gchararray file_name;
     gchar *date_str;
 
     //info->split_msec = sec;
@@ -146,8 +147,10 @@ gchararray format_location(GstElement *sink, guint arg0, gpointer data)
 
     date_str = g_date_time_format(datetime, "%Y%m%d_%H%M00");
     //date_str = g_date_time_format(datetime, "%Y%m%d_%H%M%S");
-
-    gchararray file_name = g_strdup_printf("%s/%s_%s-ch%d.mp4", cmdArg.mntDir, cmdArg.ohtName, date_str, info->ch);
+    if(g_strcmp0(cmdArg.muxer, "ts") == 0)
+        file_name = g_strdup_printf("%s/%s_%s-ch%d.ts", cmdArg.mntDir, cmdArg.ohtName, date_str, info->ch);
+    else
+        file_name = g_strdup_printf("%s/%s_%s-ch%d.mp4", cmdArg.mntDir, cmdArg.ohtName, date_str, info->ch);
     
     //__LOG(LOG_NOTICE, "[GST][%s:%d] %s : %s", _FILE_, __LINE__, __FUNCTION__, file_name);
 
@@ -257,6 +260,7 @@ gboolean MuxSinkBin::init(guint8 num)
     //g_object_set(me.sink, "max-size-time", 10*GST_SECOND, NULL);
     be.sink = gst_element_factory_make("splitmuxsink", g_strdup_printf("splitmuxsink%d", muxSinkData.ch));
     be.mp4mux = gst_element_factory_make("mp4mux", g_strdup_printf("mux%d", muxSinkData.ch));
+    be.tsmux = gst_element_factory_make("mpegtsmux", g_strdup_printf("tsmux%d", muxSinkData.ch));
 #if 0
     be.filesink = gst_element_factory_make("filesink", g_strdup_printf("filesink%d", muxSinkData.ch));
     g_object_set(be.mp4mux, "movie-timescale", 3000, NULL);
@@ -351,13 +355,16 @@ gboolean MuxSinkBin::init(guint8 num)
     g_object_set(be.mp4mux, "streamable", 0, NULL);
     g_object_set(be.mp4mux, "trak-timescale", 0, NULL);
 #endif
-    g_object_set(be.sink, "muxer", be.mp4mux, NULL);
-
+    if(g_strcmp0(cmdArg.muxer, "ts") == 0)
+        g_object_set(be.sink, "muxer", be.tsmux, NULL);
+    else
+        g_object_set(be.sink, "muxer", be.mp4mux, NULL);
+    
     g_signal_connect(be.sink, "format-location", G_CALLBACK(format_location), &muxSinkData);
     g_signal_connect(be.sink, "muxer-added", G_CALLBACK(muxer_added), NULL);
     g_signal_connect(be.sink, "sink-added", G_CALLBACK(sink_added), NULL);
 
-    if (!be.bin || !be.sink || !be.mp4mux) {
+    if (!be.bin || !be.sink || !be.mp4mux || !be.tsmux) {
         __LOG(LOG_CRIT, "[GST][%s:%d] element create error", _FILE_, __LINE__);
         return ret;
     }

@@ -54,6 +54,7 @@ void ParserClass::init_arg(gchar *argv)
     arg.split_diff_msec = DEFAULT_SPLIT_DIFF_MSEC;
     arg.split_max_msec = DEFAULT_SPLIT_MAX_MSEC;
     arg.split_audio_min_msec = DEFAULT_SPLIT_AUDIO_MIN_MSEC;
+    arg.muxer = "mp4";
     arg.split_sec = DEFAULT_SPLIT_SEC;
     arg.stream_en[STREAM_REC] = TRUE;
     arg.stream_en[STREAM_RTSP] = TRUE;
@@ -63,6 +64,7 @@ void ParserClass::init_arg(gchar *argv)
     arg.cap_always = FALSE;
     arg.cap_res_en = FALSE;
     arg.cap_delay = 0;
+    arg.cap_timeout = 200;
     arg.tcp_en = FALSE;
     arg.tcp_port = DEFAULT_TCP_PORT;
 
@@ -296,6 +298,7 @@ gint ParserClass::json_parser(const gchar *path, const gchar *header)
         json_object_get_value(hobj, "debug_level", &arg.dbg_level);
         json_object_get_value(hobj, "fps", &arg.main_fps[CSI_1]);
         json_object_get_value(hobj, "fps", &arg.main_fps[CSI_2]);
+        json_object_get_value(hobj, "muxer", &arg.muxer);
 #if 0
         json_object_get_value(hobj, "rec_fps", &arg.fps[STREAM_REC]);
         json_object_get_value(hobj, "rec_bps", &arg.bps[STREAM_REC]);
@@ -579,8 +582,8 @@ gint ParserClass::check_arg()
     __LOG(LOG_NOTICE, "[%s][%s:%d] chEn:0x%x, recEn:%d, rtspEn:%d, capEn:%d, audoEn:%d, inputEn:%d, overlayEn:%d tcpEn:%d, ipc_en:%d", \
                         LOG_KEY, _FILE_, __LINE__, arg.ch_enable, arg.stream_en[STREAM_REC], arg.stream_en[STREAM_RTSP], arg.stream_en[STREAM_CAP], \
                         arg.audio_en, arg.input_en, arg.overlay_en, arg.tcp_en, arg.ipc_en);
-    __LOG(LOG_NOTICE, "[%s][%s:%d] rtspID:%s, rtspPW:%s, rtspPort:%s, splitSec:%d, splitMargin:%d, splitMax:%d", LOG_KEY, _FILE_, __LINE__, \
-                        arg.rtsp_id, arg.rtsp_passwd, arg.rtsp_port, arg.split_sec, arg.split_diff_msec, arg.split_max_msec);
+    __LOG(LOG_NOTICE, "[%s][%s:%d] rtspID:%s, rtspPW:%s, rtspPort:%s, splitSec:%d, splitMargin:%d, splitMax:%d, muxer:%s", LOG_KEY, _FILE_, __LINE__, \
+                        arg.rtsp_id, arg.rtsp_passwd, arg.rtsp_port, arg.split_sec, arg.split_diff_msec, arg.split_max_msec, arg.muxer);
 
     if(arg.stream_en[STREAM_REC]) 
     {
@@ -846,16 +849,16 @@ gint ParserClass::cfi_parser(gchar* buffer, gint len, gpointer data)
             fps = captureBin[i].getFPS();
             if (fps <= 0) {
                 __LOG(LOG_ERR, "[%s][%s:%d] ch%d has invalid FPS=%d", CAP_LOG_KEY, _FILE_, __LINE__, i ,fps);
-                timeout_msec[i] = 5000; // fallback
-            } else {
-                if (cmdArg.cap_timeout <= 0)
-                {
-                    __LOG(LOG_ERR, "[%s][%s:%d] ch%d has invalid timeout=%d", CAP_LOG_KEY, _FILE_, __LINE__, i ,cmdArg.cap_timeout);
-                    cmdArg.cap_timeout = 5; // fallback
-                }
-                timeout_msec[i] = (capMaxCnt * 1000 * cmdArg.cap_timeout) / fps;
+                fps = 1; // fallback
+            } 
+            if (cmdArg.cap_timeout <= 100)
+            {
+                __LOG(LOG_ERR, "[%s][%s:%d] ch%d has invalid timeout=%d", CAP_LOG_KEY, _FILE_, __LINE__, i ,cmdArg.cap_timeout);
+                cmdArg.cap_timeout = 200; // fallback
             }
-            __LOG(LOG_INFO, "[%s][%s:%d] ch%d timeout: %lu ", CAP_LOG_KEY, _FILE_, __LINE__, i, timeout_msec[i]);
+            timeout_msec[i] = (capMaxCnt * 1000) / fps + cmdArg.cap_timeout;
+
+            __LOG(LOG_INFO, "[%s][%s:%d] ch%d timeout: %lu", CAP_LOG_KEY, _FILE_, __LINE__, i, timeout_msec[i]);
         }
         else if (_TCfiData.data.cmd_id == CTS_CAP_START_REQ_CMD_ID)
         {
