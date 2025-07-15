@@ -82,6 +82,8 @@
 #define CFI_VERSION         0x300
 #define CFI_CAP_REQ_CMD_ID  0x300
 #define CFI_CAP_RES_CMD_ID  0x301
+#define CTS_CAP_START_REQ_CMD_ID 0x900
+#define CTS_CAP_STOP_REQ_CMD_ID 0x901
 
 #pragma pack(push, 1)
 union TCfiData {

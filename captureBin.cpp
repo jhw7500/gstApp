@@ -60,13 +60,21 @@ static GstFlowReturn on_new_sample_from_sink(GstElement *sink, gpointer userData
     if (!sample) {
         return GST_FLOW_ERROR;
     }
-
+    
     //g_print("pull\n");
 #if 1
     if(info->captureCnt >= info->captureMaxCnt)
     {
-        gst_sample_unref(sample);
-        return GST_FLOW_OK;
+        if(info->mode == 1)
+        {
+            info->captureCnt = 0;
+            __LOG(LOG_NOTICE, "[%s][%s:%d] capture cnt reset", CAP_LOG_KEY, _FILE_, __LINE__);
+        }
+        else
+        {
+            gst_sample_unref(sample);
+            return GST_FLOW_OK;
+        }
     }
 #endif
     
@@ -118,11 +126,22 @@ static GstFlowReturn on_new_sample_to_file(GstElement *sink, gpointer userData)
         return GST_FLOW_ERROR;
     }
 
-#if 1
-    if(info->captureCnt >= info->captureMaxCnt)
+#if 0
+    if(info->mode == 0)
     {
-        gst_sample_unref(sample);
-        return GST_FLOW_OK;
+        if(info->captureCnt >= info->captureMaxCnt)
+        {
+            gst_sample_unref(sample);
+            return GST_FLOW_OK;
+        }
+    }
+    else if(info->mode == 1)
+    {
+        if(info->captureCnt >= info->captureMaxCnt)
+        {
+            __LOG(LOG_NOTICE, "[%s][%s:%d] capture cnt reset because over %d", CAP_LOG_KEY, _FILE_, __LINE__, info->captureMaxCnt);
+            info->captureCnt = 0;
+        }
     }
 #endif
     //gst_sample_unref(sample);
@@ -262,11 +281,10 @@ gint CaptureBin::startCapture(gint maxCnt)
     //if (getBinSinkPad() == NULL) return 0;
     //setFilePath();
     //captureData.mode = mode;
-
     captureData.captureMaxCnt = maxCnt;
 
     captureData.captureCnt = 0;
-    __LOG(LOG_NOTICE, "[%s][%s:%d] %s cnt:%d, maxCnt:%d", CAP_LOG_KEY, _FILE_, __LINE__, __FUNCTION__, captureData.captureCnt, captureData.captureMaxCnt);
+    __LOG(LOG_INFO, "[%s][%s:%d] %s cnt:%d, maxCnt:%d", CAP_LOG_KEY, _FILE_, __LINE__, __FUNCTION__, captureData.captureCnt, captureData.captureMaxCnt);
 
     return 1;
 }
@@ -278,6 +296,21 @@ gint CaptureBin::stopCapture()
     captureData.mode = 0;
 
     return 1;
+}
+
+void CaptureBin::setMode(guint8 mode)
+{
+    captureData.mode = mode;
+}
+
+guint8 CaptureBin::getMode()
+{
+    return captureData.mode;
+}
+
+guint8 CaptureBin::getFPS()
+{
+    return captureData.fps;
 }
 
 void CaptureBin::setTimeStampDebug()
@@ -499,7 +532,7 @@ gboolean CaptureBin::init(guint8 num, gboolean crop_en)
     g_object_set(be.sink, "emit-signals", TRUE, "sync", TRUE, "async", FALSE, NULL);
     g_signal_connect(be.sink, "eos", G_CALLBACK(eos_callback), NULL);
     g_signal_connect(be.sink, "new-sample", G_CALLBACK(on_new_sample_to_file), &captureData);
-    g_signal_connect(be.sink, "new-preroll", G_CALLBACK(new_preroll_handler), NULL );
+    //g_signal_connect(be.sink, "new-preroll", G_CALLBACK(new_preroll_handler), NULL );
 
     staticPad = gst_element_get_static_pad(be.queue, "sink");
     sinkPad = gst_ghost_pad_new(g_strdup_printf("captureBin_sink_ch%d", captureData.ch), staticPad);

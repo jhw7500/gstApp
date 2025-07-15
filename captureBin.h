@@ -66,6 +66,9 @@ public :
     gint setFilePath(guint8 *prefix);
     gint startCapture(gint maxCnt);
     gint stopCapture();
+    void setMode(guint8 mode);
+    guint8 getMode();
+    guint8 getFPS();
     gint getCaptureCnt();
     GstPad* getBinSinkPad();
     void setQueueSize(guint size);

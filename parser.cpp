@@ -310,6 +310,7 @@ gint ParserClass::json_parser(const gchar *path, const gchar *header)
         sobj = json_object_object_get(hobj, JSON_CAP_OBJ_NAME);
         json_object_get_value(sobj, "enable", &arg.stream_en[STREAM_CAP]);
         json_object_get_value(sobj, "delay", &arg.cap_delay);
+        json_object_get_value(sobj, "timeout", &arg.cap_timeout);
 
         for(guint8 i=0; i<MAX_CHANNEL; i++)
         {
@@ -597,8 +598,8 @@ gint ParserClass::check_arg()
     {
         __LOG(LOG_NOTICE, "[%s][%s:%d] capture ch0 fps:%d, ch1 fps:%d, ch2 fps:%d, ch3 fps:%d", LOG_KEY, _FILE_, __LINE__, \
                             arg.fps[STREAM_CAP][0], arg.fps[STREAM_CAP][1], arg.fps[STREAM_CAP][2], arg.fps[STREAM_CAP][3]);  
-        __LOG(LOG_NOTICE, "[%s][%s:%d] capEncEn:%d captureAlways:%d, captureMaxCnt:%d, cap_res_en:%d, capDir:%s, cap_delay:%d", LOG_KEY, _FILE_, __LINE__, \
-                            arg.cap_encoder_en, arg.cap_always, arg.captureMaxCnt, arg.cap_res_en, arg.captureDir, arg.cap_delay);
+        __LOG(LOG_NOTICE, "[%s][%s:%d] capEncEn:%d captureAlways:%d, captureMaxCnt:%d, cap_res_en:%d, capDir:%s, cap_delay:%d, cap_timeout:%d", \
+                            LOG_KEY, _FILE_, __LINE__, arg.cap_encoder_en, arg.cap_always, arg.captureMaxCnt, arg.cap_res_en, arg.captureDir, arg.cap_delay, arg.cap_timeout);
     }
 
     if(arg.tcp_en) __LOG(LOG_NOTICE, "[%s][%s:%d] tcpPort:%d", LOG_KEY, _FILE_, __LINE__, arg.tcp_port);
@@ -769,6 +770,12 @@ static void captureThreadFunc(gpointer data)
     } while(0);
 }
 
+static void cap_respones(gpointer data)
+{
+    ThreadArgs *thraedArgs = (ThreadArgs *)data;
+    CaptureBin *captureBin = (CaptureBin *)(thraedArgs->arg4);
+}
+
 gint ParserClass::cfi_parser(gchar* buffer, gint len, gpointer data)
 {
     ThreadArgs *thraedArgs = (ThreadArgs *)data;
@@ -780,14 +787,17 @@ gint ParserClass::cfi_parser(gchar* buffer, gint len, gpointer data)
     //CaptureBin *captureBin = (CaptureBin *)(data);
     //ThreadArgs *arg[2];
     CIPCInsance* ipcInstance = CIPCInsance::getInstance();
-
+    
     TCfiData _TCfiData;
     guint i = 0;
-    gint ret = 1;
-    guint chk_cnt = 0;
+    gint ret = 0;
+    guint32 chk_cnt = 0;
     guint8 ch_en = 0;
     guint16 capMaxCnt = 0;
-
+    guint8 mode = 0;
+    guint32 timeout_msec[4];
+    guint8 fps;
+    //GThread *resThread[4];
     //memset(_TCfiData.byte, 0, CFI_DATA_LEN);
     memcpy(_TCfiData.byte, buffer, len);
 
@@ -801,77 +811,109 @@ gint ParserClass::cfi_parser(gchar* buffer, gint len, gpointer data)
 		return -1;
 	}
 
-	if(_TCfiData.data.cmd_id != CFI_CAP_REQ_CMD_ID) {
-		__LOG(LOG_ERR, "[%s][%s:%d] header cmd_id 0x%x != 0x%x", CAP_LOG_KEY, _FILE_, __LINE__, _TCfiData.data.cmd_id, CFI_CAP_REQ_CMD_ID);
+	if(_TCfiData.data.cmd_id != CFI_CAP_REQ_CMD_ID && _TCfiData.data.cmd_id != CTS_CAP_START_REQ_CMD_ID && _TCfiData.data.cmd_id != CTS_CAP_STOP_REQ_CMD_ID) {
+		__LOG(LOG_ERR, "[%s][%s:%d] header cmd_id 0x%x is invalid", CAP_LOG_KEY, _FILE_, __LINE__, _TCfiData.data.cmd_id);
 		return -1;
 	}
-    
+
     //__LOG(LOG_INFO, "[CFI][%s:%d] prefix : %s", _FILE_, __LINE__, _TCfiData.data.prefix);
-    ch_en = _TCfiData.data.channel;
-    __LOG(LOG_NOTICE, "[%s][%s:%d] channel: 0x%x, cap_cnt: %d, prefix: %s", CAP_LOG_KEY, _FILE_, __LINE__, ch_en, _TCfiData.data.cap_cnt, _TCfiData.data.prefix);
-    json_sub_object_get_value(cmdArg.json_file, JSON_CAM_OBJ_NAME, JSON_CAP_OBJ_NAME, "delay", &cmdArg.cap_delay);
-    __LOG(LOG_NOTICE, "[%s][%s:%d] capture delay: %d msec", CAP_LOG_KEY, _FILE_, __LINE__, cmdArg.cap_delay);
     
-    if(cmdArg.cap_delay) g_usleep(1000*cmdArg.cap_delay);
+    ch_en = _TCfiData.data.channel;
+    capMaxCnt = _TCfiData.data.cap_cnt;
+    //json_sub_object_get_value(cmdArg.json_file, JSON_CAM_OBJ_NAME, JSON_CAP_OBJ_NAME, "delay", &cmdArg.cap_delay);
+    __LOG(LOG_NOTICE, "[%s][%s:%d] channel: 0x%x, max_cnt: %d, prefix: %s, delay: %d", CAP_LOG_KEY, _FILE_, __LINE__, ch_en, capMaxCnt, _TCfiData.data.prefix, cmdArg.cap_delay);
+    
+    g_usleep(1000*cmdArg.cap_delay);
 
     for(i=0; i<MAX_CHANNEL; i++)
     {
         if((ch_en>>i & 0x1) != 0x01) continue;
 
-        if (cmdArg.cam_en[i] && cmdArg.stream_en[STREAM_CAP])
+        if (!(cmdArg.cam_en[i] && cmdArg.stream_en[STREAM_CAP]))
         {
-#if 1
-            //gst_pad_remove_probe(captureBin[i].queue_src_pad, captureBin[i].probe_id);
-            captureBin[i].setFilePath(_TCfiData.data.prefix);
-            captureBin[i].startCapture(_TCfiData.data.cap_cnt);
-#else
-            ThreadArgs *args = g_new(ThreadArgs, 1);
-            *args = *thraedArgs;
-            TCfiData *data_copy = g_new(TCfiData, 1);
-            *data_copy = _TCfiData;
-            data_copy->data.channel = i;
-            args->arg5 = data_copy;
-            //__LOG(LOG_NOTICE, "[CFI][%s:%d] ch%d call captrue thread", _FILE_, __LINE__, i);
-            g_print("ch%d call captrue thread\n", i);
-            captureThread[i] = g_thread_new(g_strdup_printf("captureThread%d", i), (GThreadFunc)captureThreadFunc, args);
-#endif
+            __LOG(LOG_ERR, "[%s][%s:%d] cmd ch %d capture but not ch enable", CAP_LOG_KEY, _FILE_, __LINE__, i);
+            ch_en &= ~(1 << i);
+            continue;
         }
-    }
-    
-    capMaxCnt = _TCfiData.data.cap_cnt;
-    if(cmdArg.cap_res_en)
-    {
-        _TCfiData.data.cmd_id = CFI_CAP_RES_CMD_ID;
-        __LOG(LOG_NOTICE, "[%s][%s:%d] capture check for response", CAP_LOG_KEY, _FILE_, __LINE__);
-        for(i=0; i<MAX_CHANNEL; i++)
-        {
-            if((ch_en>>i & 0x1) != 0x01) continue;
 
-            if (cmdArg.cam_en[i] && cmdArg.stream_en[STREAM_CAP])
-            {
-                do
+#if 1
+        if (_TCfiData.data.cmd_id == CFI_CAP_REQ_CMD_ID)
+        {
+            captureBin[i].setFilePath(_TCfiData.data.prefix);
+            captureBin[i].startCapture(capMaxCnt);
+            captureBin[i].setMode(0);
+
+            fps = captureBin[i].getFPS();
+            if (fps <= 0) {
+                __LOG(LOG_ERR, "[%s][%s:%d] ch%d has invalid FPS=%d", CAP_LOG_KEY, _FILE_, __LINE__, i ,fps);
+                timeout_msec[i] = 5000; // fallback
+            } else {
+                if (cmdArg.cap_timeout <= 0)
                 {
-                    _TCfiData.data.channel = 1 << i;
-                    if(captureBin[i].getCaptureCnt() == capMaxCnt)
-                    {
-                        _TCfiData.data.cap_cnt = capMaxCnt;
-                        ipcInstance->sendData((char *)_TCfiData.byte, CFI_DATA_LEN);
-                        ret = 1;
-                        break;
-                    }
-                    else if (chk_cnt > capMaxCnt*2)
-                    {
-                        _TCfiData.data.cap_cnt = capMaxCnt - captureBin[i].getCaptureCnt();
-                        ipcInstance->sendData((char *)_TCfiData.byte, CFI_DATA_LEN);
-                        ret = -1;
-                        break;
-                    }
-                    chk_cnt++;
-                    g_usleep(1000000);
-                } while(1);
-                //g_print("ch%d break\n", i);
+                    __LOG(LOG_ERR, "[%s][%s:%d] ch%d has invalid timeout=%d", CAP_LOG_KEY, _FILE_, __LINE__, i ,cmdArg.cap_timeout);
+                    cmdArg.cap_timeout = 5; // fallback
+                }
+                timeout_msec[i] = (capMaxCnt * 1000 * cmdArg.cap_timeout) / fps;
             }
+            __LOG(LOG_INFO, "[%s][%s:%d] ch%d timeout: %lu ", CAP_LOG_KEY, _FILE_, __LINE__, i, timeout_msec[i]);
         }
+        else if (_TCfiData.data.cmd_id == CTS_CAP_START_REQ_CMD_ID)
+        {
+            captureBin[i].setFilePath(_TCfiData.data.prefix);
+            captureBin[i].startCapture(capMaxCnt);
+            captureBin[i].setMode(1);
+        }
+        else if (_TCfiData.data.cmd_id == CTS_CAP_STOP_REQ_CMD_ID)
+        {
+            captureBin[i].stopCapture();
+            captureBin[i].setMode(0);
+        }
+#else
+        ThreadArgs *args = g_new(ThreadArgs, 1);
+        *args = *thraedArgs;
+        TCfiData *data_copy = g_new(TCfiData, 1);
+        *data_copy = _TCfiData;
+        data_copy->data.channel = i;
+        args->arg5 = data_copy;
+        //__LOG(LOG_NOTICE, "[CFI][%s:%d] ch%d call captrue thread", _FILE_, __LINE__, i);
+        g_print("ch%d call captrue thread\n", i);
+        captureThread[i] = g_thread_new(g_strdup_printf("captureThread%d", i), (GThreadFunc)captureThreadFunc, args);
+#endif
+
+    }
+
+    if(cmdArg.cap_res_en && _TCfiData.data.cmd_id == CFI_CAP_REQ_CMD_ID)
+    {
+        //memset(chk_cnt, 0, sizeof(chk_cnt));
+        _TCfiData.data.cmd_id = CFI_CAP_RES_CMD_ID;
+        do
+        {
+            for(i=0; i<MAX_CHANNEL; i++)
+            {
+                if((ch_en>>i & 0x1) != 0x01) continue;
+                _TCfiData.data.channel = 1 << i;
+
+                if (captureBin[i].getCaptureCnt() == capMaxCnt)
+                {
+                    __LOG(LOG_NOTICE, "[%s][%s:%d] ch%d capture complete(%lu)", CAP_LOG_KEY, _FILE_, __LINE__, i, chk_cnt);
+                    _TCfiData.data.cap_cnt = capMaxCnt;
+                    ipcInstance->sendData((char *)_TCfiData.byte, CFI_DATA_LEN);
+                    ch_en &= ~(1 << i);
+                }
+                else if (chk_cnt > timeout_msec[i])
+                {
+                    __LOG(LOG_NOTICE, "[%s][%s:%d] ch%d capture timeover(%lu > %lu)", CAP_LOG_KEY, _FILE_, __LINE__, i, chk_cnt, timeout_msec[i]);
+                    gint done_cnt = captureBin[i].getCaptureCnt();
+                    _TCfiData.data.cap_cnt = (done_cnt < capMaxCnt) ? (capMaxCnt - done_cnt) : 0;
+                    ipcInstance->sendData((char *)_TCfiData.byte, CFI_DATA_LEN);
+                    captureBin[i].stopCapture();
+                    ch_en &= ~(1 << i);
+                    ret = -2;
+                }
+            }
+            g_usleep(1000);
+            chk_cnt++;
+        } while(ch_en != 0);
     }
 
     return ret;

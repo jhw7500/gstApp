@@ -153,7 +153,7 @@ int CIPCInsance::waitingRecv(void* pData)
         }
         else
         {
-            __LOG(LOG_NOTICE, "[IPC][%s:%d] recv data msg_id(%d) byte %d", _FILE_, __LINE__, msg_id, ret);
+            __LOG(LOG_INFO, "[IPC][%s:%d] recv data msg_id(%d) byte %d", _FILE_, __LINE__, msg_id, ret);
             if(cmdArg.log_level > LOG_INFO)
             {
                 int len = sizeof(recvMsg.data) / sizeof(recvMsg.data[0]);
@@ -166,8 +166,7 @@ int CIPCInsance::waitingRecv(void* pData)
             ret = parser->cfi_parser(recvMsg.data, ret, pData);
             //ret = parseIpcRecvData(msg_id, recvMsg.data, ret);
             if(ret < 0) {
-                __LOG(LOG_ERR, "[IPC][%s:%d] capture timeout (ret:%d)", _FILE_, __LINE__, ret);
-                continue;
+                __LOG(LOG_ERR, "[IPC][%s:%d] capture parser err (ret:%d)", _FILE_, __LINE__, ret);
             }
         }
     };

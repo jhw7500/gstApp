@@ -170,6 +170,7 @@ typedef struct _CmdArg
     gboolean ipc_en;
     gint ipc_mid;
     gint cap_delay;
+    gint cap_timeout;
 } CmdArg;
 
 #pragma pack(pop)
