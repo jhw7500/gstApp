@@ -44,7 +44,7 @@ void ParserClass::init_arg(gchar *argv)
     arg.ioMode = IO_AUTO;
     arg.levelMode = MODE_NORMAL;
     arg.dotDir = DEFAULT_DOT_PATH;
-    arg.captureDir = DEFAULT_CAPTURE_PATH;
+    arg.captureDir = DEFAULT_CAP_DIR;
     arg.play_delay = DEFAULT_PLAY_DELAY;
     arg.fault = FALSE;
     arg.audio_en = FALSE;
@@ -54,7 +54,7 @@ void ParserClass::init_arg(gchar *argv)
     arg.split_diff_msec = DEFAULT_SPLIT_DIFF_MSEC;
     arg.split_max_msec = DEFAULT_SPLIT_MAX_MSEC;
     arg.split_audio_min_msec = DEFAULT_SPLIT_AUDIO_MIN_MSEC;
-    arg.muxer = "mp4";
+    arg.muxer = DEFAULT_MUXER;
     arg.split_sec = DEFAULT_SPLIT_SEC;
     arg.stream_en[STREAM_REC] = TRUE;
     arg.stream_en[STREAM_RTSP] = TRUE;
@@ -291,6 +291,7 @@ gint ParserClass::json_parser(const gchar *path, const gchar *header)
 
         json_object_get_value(hobj, "vhl_name", &arg.ohtName);
         json_object_get_value(hobj, "id", &arg.rtsp_id);
+        json_object_get_value(hobj, "tmp_path", &arg.mntDir);
         json_object_get_value(hobj, "cam_width", &arg.width);
         json_object_get_value(hobj, "cam_height", &arg.height);
         json_object_get_value(hobj, "recording_time", &arg.duration);
@@ -394,6 +395,7 @@ gint ParserClass::arg_parser(int *argc, char **argv[])
         {"capalways", 'y', 0, G_OPTION_ARG_INT, &arg.cap_always, "video capture bin always add, default(FALSE)", "INT"},
         {"capres", 'R', 0, G_OPTION_ARG_INT, &arg.cap_res_en, "video capture response enable, default(FALSE)", "INT"},
         {"capdelay", 'A', 0, G_OPTION_ARG_INT, &arg.cap_delay, "video capture delay(msec), default(0)", "INT"},
+        {"capdir", 'I', 0, G_OPTION_ARG_STRING, &arg.captureDir, "save capture file to directory, default capture", "STRING"},
         {"etcp", 'C', 0, G_OPTION_ARG_INT, &arg.tcp_en, "tcp server enable, default(FALSE)", "INT"},
         {"ein", 'i', 0, G_OPTION_ARG_INT, &arg.input_en, "terminal input enable, default(FALSE)", "INT"},
         {"rport", 'P', 0, G_OPTION_ARG_STRING, &arg.rtsp_port, "rtsp port number, default(8554)", "STRING"},
@@ -599,6 +601,7 @@ gint ParserClass::check_arg()
 
     if(arg.stream_en[STREAM_CAP])
     {
+        system(g_strdup_printf("mkdir -p %s/%s", cmdArg.mntDir, cmdArg.captureDir));
         __LOG(LOG_NOTICE, "[%s][%s:%d] capture ch0 fps:%d, ch1 fps:%d, ch2 fps:%d, ch3 fps:%d", LOG_KEY, _FILE_, __LINE__, \
                             arg.fps[STREAM_CAP][0], arg.fps[STREAM_CAP][1], arg.fps[STREAM_CAP][2], arg.fps[STREAM_CAP][3]);  
         __LOG(LOG_NOTICE, "[%s][%s:%d] capEncEn:%d captureAlways:%d, captureMaxCnt:%d, cap_res_en:%d, capDir:%s, cap_delay:%d, cap_timeout:%d", \
@@ -824,7 +827,7 @@ gint ParserClass::cfi_parser(gchar* buffer, gint len, gpointer data)
     ch_en = _TCfiData.data.channel;
     capMaxCnt = _TCfiData.data.cap_cnt;
     //json_sub_object_get_value(cmdArg.json_file, JSON_CAM_OBJ_NAME, JSON_CAP_OBJ_NAME, "delay", &cmdArg.cap_delay);
-    __LOG(LOG_NOTICE, "[%s][%s:%d] channel: 0x%x, max_cnt: %d, prefix: %s, delay: %d", CAP_LOG_KEY, _FILE_, __LINE__, ch_en, capMaxCnt, _TCfiData.data.prefix, cmdArg.cap_delay);
+    __LOG(LOG_INFO, "[%s][%s:%d] ch:0x%x, tx:%d, cnt:%d, prefix:%s, delay:%d", CAP_LOG_KEY, _FILE_, __LINE__, ch_en, _TCfiData.data.tx_id, capMaxCnt, _TCfiData.data.prefix, cmdArg.cap_delay);
     
     g_usleep(1000*cmdArg.cap_delay);
 
@@ -858,7 +861,7 @@ gint ParserClass::cfi_parser(gchar* buffer, gint len, gpointer data)
             }
             timeout_msec[i] = (capMaxCnt * 1000) / fps + cmdArg.cap_timeout;
 
-            __LOG(LOG_INFO, "[%s][%s:%d] ch%d timeout: %lu", CAP_LOG_KEY, _FILE_, __LINE__, i, timeout_msec[i]);
+            __LOG(LOG_DEBUG, "[%s][%s:%d] ch%d timeout: %lu", CAP_LOG_KEY, _FILE_, __LINE__, i, timeout_msec[i]);
         }
         else if (_TCfiData.data.cmd_id == CTS_CAP_START_REQ_CMD_ID)
         {
@@ -896,17 +899,17 @@ gint ParserClass::cfi_parser(gchar* buffer, gint len, gpointer data)
                 if((ch_en>>i & 0x1) != 0x01) continue;
                 _TCfiData.data.channel = 1 << i;
 
-                if (captureBin[i].getCaptureCnt() == capMaxCnt)
+                if (captureBin[i].getCaptureCnt_() == capMaxCnt)
                 {
-                    __LOG(LOG_NOTICE, "[%s][%s:%d] ch%d capture complete(%lu)", CAP_LOG_KEY, _FILE_, __LINE__, i, chk_cnt);
+                    __LOG(LOG_INFO, "[%s][%s:%d] ch%d(%d) OK(%lu)", CAP_LOG_KEY, _FILE_, __LINE__, i, _TCfiData.data.tx_id, chk_cnt);
                     _TCfiData.data.cap_cnt = capMaxCnt;
                     ipcInstance->sendData((char *)_TCfiData.byte, CFI_DATA_LEN);
                     ch_en &= ~(1 << i);
                 }
                 else if (chk_cnt > timeout_msec[i])
                 {
-                    __LOG(LOG_NOTICE, "[%s][%s:%d] ch%d capture timeover(%lu > %lu)", CAP_LOG_KEY, _FILE_, __LINE__, i, chk_cnt, timeout_msec[i]);
-                    gint done_cnt = captureBin[i].getCaptureCnt();
+                    __LOG(LOG_INFO, "[%s][%s:%d] ch%d(%d) NG(%lu>%lu)", CAP_LOG_KEY, _FILE_, __LINE__, i, _TCfiData.data.tx_id, chk_cnt, timeout_msec[i]);
+                    gint done_cnt = captureBin[i].getCaptureCnt_();
                     _TCfiData.data.cap_cnt = (done_cnt < capMaxCnt) ? (capMaxCnt - done_cnt) : 0;
                     ipcInstance->sendData((char *)_TCfiData.byte, CFI_DATA_LEN);
                     captureBin[i].stopCapture();

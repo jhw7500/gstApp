@@ -63,7 +63,7 @@ static GstFlowReturn on_new_sample_from_sink(GstElement *sink, gpointer userData
     
     //g_print("pull\n");
 #if 1
-    if(info->captureCnt >= info->captureMaxCnt)
+    if(info->captureCnt++ >= info->captureMaxCnt)
     {
         if(info->mode == 1)
         {
@@ -126,24 +126,22 @@ static GstFlowReturn on_new_sample_to_file(GstElement *sink, gpointer userData)
         return GST_FLOW_ERROR;
     }
 
-#if 0
-    if(info->mode == 0)
+#if 1
+    if(info->captureCnt_ >= info->captureMaxCnt)
     {
-        if(info->captureCnt >= info->captureMaxCnt)
+        if(info->mode == 1)
+        {
+            info->captureCnt_ = 0;
+            __LOG(LOG_NOTICE, "[%s][%s:%d] capture cnt reset", CAP_LOG_KEY, _FILE_, __LINE__);
+        }
+        else
         {
             gst_sample_unref(sample);
             return GST_FLOW_OK;
         }
     }
-    else if(info->mode == 1)
-    {
-        if(info->captureCnt >= info->captureMaxCnt)
-        {
-            __LOG(LOG_NOTICE, "[%s][%s:%d] capture cnt reset because over %d", CAP_LOG_KEY, _FILE_, __LINE__, info->captureMaxCnt);
-            info->captureCnt = 0;
-        }
-    }
 #endif
+
     //gst_sample_unref(sample);
 #if 0
     if(info->appsrc == NULL || GST_STATE(GST_ELEMENT(info->appsrc)) != GST_STATE_PLAYING)
@@ -186,9 +184,9 @@ static GstFlowReturn on_new_sample_to_file(GstElement *sink, gpointer userData)
             MD5(map.data, map.size, md5_result);
 
             // MD5 해시 값을 로그로 출력
-            char md5_string[MD5_DIGEST_LENGTH * 2 + 1];
+            char md5_string[MD5_DIGEST_LENGTH * 2 + 1] = {0};
             for (int i = 0; i < MD5_DIGEST_LENGTH; ++i) {
-                g_strdup_printf(&md5_string[i * 2], "%02x", md5_result[i]);
+                sprintf(&md5_string[i * 2], "%02x", md5_result[i]);
             }
             GstClockTime timestamp = GST_BUFFER_PTS(buffer);
             g_message("ch%d Timestamp: %" GST_TIME_FORMAT " MD5 Hash: %s\n", info->ch, GST_TIME_ARGS(timestamp), md5_string);
@@ -201,12 +199,12 @@ static GstFlowReturn on_new_sample_to_file(GstElement *sink, gpointer userData)
 
     //if(info->captureMaxCnt > 1 && info->captureMaxCnt <= cmdArg.fps[STREAM_CAP][info->ch]) 
     {
-        path = g_strdup_printf("%s_%d.%s", info->filePath, info->captureCnt, extention);
+        path = g_strdup_printf("%s_%d.%s", info->filePath, info->captureCnt_++, extention);
         //__LOG(LOG_DEBUG, "[GST][%s:%d] path : %s, cnt : %d, max : %d", _FILE_, __LINE__, info->filePath, info->captureCnt, info->captureMaxCnt);
     }
     //else path = g_strdup_printf("%s.%s", info->filePath, extention);
 
-    file = fopen(path, "ab");
+    file = fopen(path, "wb");   //fopen(path, "ab");
     if (file) {
         fwrite(map.data, 1, map.size, file);
         fclose(file);
@@ -218,8 +216,6 @@ static GstFlowReturn on_new_sample_to_file(GstElement *sink, gpointer userData)
     if(extention != NULL) g_free(extention);
     gst_buffer_unmap(buffer, &map);
     gst_sample_unref(sample);
-
-    info->captureCnt++;
 
     return GST_FLOW_OK;
 }
@@ -266,6 +262,7 @@ CaptureBin::CaptureBin()
     sinkPad = NULL;
     be.bin = NULL;
     captureData.captureCnt = cmdArg.captureMaxCnt;
+    captureData.captureCnt_ = cmdArg.captureMaxCnt;
     captureData.captureMaxCnt = cmdArg.captureMaxCnt;
     captureData.mode = 0;
     captureData.debug = FALSE;
@@ -282,8 +279,8 @@ gint CaptureBin::startCapture(gint maxCnt)
     //setFilePath();
     //captureData.mode = mode;
     captureData.captureMaxCnt = maxCnt;
-
     captureData.captureCnt = 0;
+    captureData.captureCnt_ = 0;
     __LOG(LOG_INFO, "[%s][%s:%d] %s cnt:%d, maxCnt:%d", CAP_LOG_KEY, _FILE_, __LINE__, __FUNCTION__, captureData.captureCnt, captureData.captureMaxCnt);
 
     return 1;
@@ -293,6 +290,7 @@ gint CaptureBin::stopCapture()
 {
     __LOG(LOG_NOTICE, "[%s][%s:%d] %s", CAP_LOG_KEY, _FILE_, __LINE__, __FUNCTION__);
     captureData.captureCnt = cmdArg.captureMaxCnt;
+    captureData.captureCnt_ = cmdArg.captureMaxCnt;
     captureData.mode = 0;
 
     return 1;
@@ -300,6 +298,7 @@ gint CaptureBin::stopCapture()
 
 void CaptureBin::setMode(guint8 mode)
 {
+    __LOG(LOG_INFO, "[%s][%s:%d] ch%d setMode %d", CAP_LOG_KEY, _FILE_, __LINE__, mode);
     captureData.mode = mode;
 }
 
@@ -321,6 +320,16 @@ void CaptureBin::setTimeStampDebug()
 gint CaptureBin::getCaptureCnt()
 {
     return captureData.captureCnt;
+}
+
+gint CaptureBin::getCaptureCnt_()
+{
+    return captureData.captureCnt_;
+}
+
+gchar* CaptureBin::getCaptureFilePath()
+{
+    return captureData.filePath;
 }
 
 void CaptureBin::setQueueSize(guint size)
@@ -369,17 +378,17 @@ gint CaptureBin::setFilePath(guint8 *prefix)
         GDateTime *datetime = g_date_time_new_now_local();
         gchar *date_str = g_date_time_format(datetime, "%Y%m%d_%H%M%S");
 
-        captureData.filePath = g_strdup_printf("%s/%s_%s-ch%d", cmdArg.captureDir, cmdArg.ohtName, date_str, captureData.ch);
+        captureData.filePath = g_strdup_printf("%s/%s/%s_%s-ch%d", cmdArg.mntDir, cmdArg.captureDir, cmdArg.ohtName, date_str, captureData.ch);
 
-        __LOG(LOG_NOTICE, "[%s][%s:%d] filePath : %s", CAP_LOG_KEY, _FILE_, __LINE__, captureData.filePath);
+        __LOG(LOG_INFO, "[%s][%s:%d] filePath : %s", CAP_LOG_KEY, _FILE_, __LINE__, captureData.filePath);
 
         g_date_time_unref(datetime);
         g_free(date_str);
     }
     else
     {
-        captureData.filePath = g_strdup_printf("%s/%s-ch%d", cmdArg.captureDir, prefix, captureData.ch);
-        __LOG(LOG_NOTICE, "[%s][%s:%d] filePath : %s", CAP_LOG_KEY, _FILE_, __LINE__, captureData.filePath);
+        captureData.filePath = g_strdup_printf("%s/%s/%s-ch%d", cmdArg.mntDir, cmdArg.captureDir, prefix, captureData.ch);
+        __LOG(LOG_INFO, "[%s][%s:%d] filePath : %s", CAP_LOG_KEY, _FILE_, __LINE__, captureData.filePath);
     }
 
     return 1;

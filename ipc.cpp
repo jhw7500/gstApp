@@ -103,7 +103,7 @@ int CIPCInsance::sendData(char* data, int len)
 		__LOG(LOG_ERR, "[IPC][%s:%d] ret:%d", _FILE_, __LINE__, ret);
 		return ret;
 	} else {
-		__LOG(LOG_NOTICE, "[IPC][%s:%d] send data msg_id(%d) byte  %d", _FILE_, __LINE__, msg_id, len);
+		__LOG(LOG_INFO, "[IPC][%s:%d] send data msg_id(%d) byte  %d", _FILE_, __LINE__, msg_id, len);
 	}
 
     if(cmdArg.log_level > LOG_INFO)

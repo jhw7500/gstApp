@@ -66,12 +66,14 @@
 
 #define DEFAULT_START_VIDEO_TIME_PATH   "/tmp/start_video_time"
 #define DEFAULT_DOT_PATH    "/tmp"
+#define DEFAULT_MUXER       "mp4"
 #define JHW_TESTx
 #ifdef JHW_TEST
 #define DEFAULT_MOUNT_PATH   "/home/user/jhw"
 #define DEFAULT_CAPTURE_PATH "/home/user/jhw"
 #else
 #define DEFAULT_MOUNT_PATH   "/mnt/sd_cam"
+#define DEFAULT_CAP_DIR       "capture"
 #define DEFAULT_CAPTURE_PATH   "/mnt/sd_cam/capture"
 #endif
 

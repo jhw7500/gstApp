@@ -28,6 +28,7 @@ typedef struct _CaptureData
     GstElement *appsrc;
     guint8 ch;
     gint captureCnt;
+    gint captureCnt_;
     gint captureMaxCnt;
     GstBuffer *buf;
     gchar *filePath;
@@ -70,6 +71,8 @@ public :
     guint8 getMode();
     guint8 getFPS();
     gint getCaptureCnt();
+    gint getCaptureCnt_();
+    gchar* getCaptureFilePath();
     GstPad* getBinSinkPad();
     void setQueueSize(guint size);
     GstStateChangeReturn setState(GstState state);
