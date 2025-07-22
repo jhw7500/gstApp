@@ -123,6 +123,7 @@ int CIPCInsance::waitingRecv(void* pData)
     int i;
     int msg_id;
 	IpcBuffer recvMsg;
+    ParserClass* parser = ParserClass::getInstance();
 
 	//msg_id = msgget((key_t)MSG_Q_KEY, IPC_CREAT | 0666);
 
@@ -162,7 +163,6 @@ int CIPCInsance::waitingRecv(void* pData)
                 __LOG(LOG_DEBUG, "[IPC][%s:%d] data : %s", _FILE_, __LINE__, buffer);
             }
 
-            ParserClass* parser = ParserClass::getInstance();
             ret = parser->cfi_parser(recvMsg.data, ret, pData);
             //ret = parseIpcRecvData(msg_id, recvMsg.data, ret);
             if(ret < 0) {

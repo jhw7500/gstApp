@@ -191,6 +191,7 @@ void addSignalHandler()
 
 void removeSignalHandler()
 {
+  //__LOG(LOG_NOTICE, "[GST][%s:%d] %s", _FILE_, __LINE__, __FUNCTION__);
   if (signal_watch_intr_id > 0) g_source_remove(signal_watch_intr_id);
   if (signal_watch_hup_id > 0) g_source_remove(signal_watch_hup_id);
   //if (signal_watch_term_id > 0) g_source_remove(signal_watch_term_id);

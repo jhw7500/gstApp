@@ -39,6 +39,7 @@
         "rtsp-context.h": "c",
         "rtsp-client.h": "c",
         "gstrtspdefs.h": "c",
-        "fcntl.h": "c"
+        "fcntl.h": "c",
+        "memory_resource": "cpp"
     }
 }

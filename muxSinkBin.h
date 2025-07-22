@@ -52,11 +52,11 @@ private :
     //static gchararray format_location(GstElement *sink, guint arg0, gpointer data);
     
 public :
-
+    MuxSinkElement be;
+    
 private :
 	gboolean m_flagDestroy;
     //GstElement *pipeline[2];
-    MuxSinkElement be;
     MuxSinkData muxSinkData;
     GstPad *sinkAudioPad;
     GstPad *sinkAudioPad_;

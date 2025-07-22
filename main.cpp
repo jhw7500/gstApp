@@ -391,13 +391,7 @@ static void splitCheck(gpointer data, guint8 startSec)
         start_flag = 1;
     }
 
-    if(target_min != min)
-    {
-        g_date_time_unref(datetime);
-        return;
-    }
-
-    if(startSec != sec)
+    if(target_min != min || startSec != sec)
     {
         g_date_time_unref(datetime);
         return;
@@ -719,14 +713,14 @@ gint main(gint argc, gchar *argv[])
     RtspServerBin rtspServerBin[MAX_CHANNEL+1];
     MuxSinkBin muxSinkBin[MAX_CHANNEL];
     CaptureBin captureBin[MAX_CHANNEL];
-    CTCPServer *tcpServer = CTCPServer::getInstance();
-    CIPCInsance *ipcInstance = CIPCInsance::getInstance();
     GThread *splitThread = NULL, *terminalThread = NULL;
     GstStateChangeReturn ret;
     guint8 i = 0;
     guint srtTimer_id = 0;
     ThreadArgs* thraedArgs = g_new(ThreadArgs, 1);
     const gchar *stateChangeReturnStr[4] = {"GST_STATE_CHANGE_FAILURE", "GST_STATE_CHANGE_SUCCESS", "GST_STATE_CHANGE_ASYNC", "GST_STATE_CHANGE_NO_PREROLL"};
+    CTCPServer *tcpServer;
+    CIPCInsance *ipcInstance;
 
     thraedArgs->arg0 = videoBin;
     thraedArgs->arg1 = recordBin;
@@ -743,7 +737,7 @@ gint main(gint argc, gchar *argv[])
     attachInterruptHandlers();
     addSignalHandler();
 
-    if(!cmdArg.fault) fault_setup();
+    if(cmdArg.fault) fault_setup();
 
     g_setenv("GST_DEBUG_DUMP_DOT_DIR", cmdArg.dotDir, 1);
     //g_print("GST_DEBUG_DUMP_DOT_DIR : %s\n", g_getenv("GST_DEBUG_DUMP_DOT_DIR"));
@@ -995,11 +989,13 @@ gint main(gint argc, gchar *argv[])
     }
 
     if(cmdArg.tcp_en) {
+        tcpServer = CTCPServer::getInstance();
         tcpServer->init(thraedArgs);
     }
-
+    
     if(cmdArg.ipc_en) {
         //__LOG(LOG_NOTICE, "[GST][%s:%d] ipc enable", _FILE_, __LINE__);
+        ipcInstance = CIPCInsance::getInstance();
         ipcInstance->init(thraedArgs);
     }
 
@@ -1030,13 +1026,26 @@ gint main(gint argc, gchar *argv[])
     for(i=0; i<MAX_CHANNEL; i++)
     {
         //if(muxSinkBin[i].getBinVideoSinkPad()) muxSinkBin[i].handle_last_sample();
-        if(muxSinkBin[i].getBinVideoSinkPad()) gst_pad_send_event(muxSinkBin[i].getBinVideoSinkPad(), gst_event_new_eos());
         if(muxSinkBin[i].getBinAudioSinkPad()) gst_pad_send_event(muxSinkBin[i].getBinAudioSinkPad(), gst_event_new_eos());
-        if(rtspServerBin[i].getBinSinkPad()) gst_pad_send_event(rtspServerBin[i].getBinSinkPad(), gst_event_new_eos());
-        if(captureBin[i].add_cap_f == TRUE) gst_pad_send_event(captureBin[i].getBinSinkPad(), gst_event_new_eos());
+        if(muxSinkBin[i].getBinVideoSinkPad()) {
+            gst_pad_send_event(muxSinkBin[i].getBinVideoSinkPad(), gst_event_new_eos());
+            if(videoBin[i/2].getBinRtspSrcPad(i)) gst_pad_send_event(videoBin[i/2].getBinRtspSrcPad(i), gst_event_new_eos());
+            gst_element_send_event(muxSinkBin[i].be.bin, gst_event_new_eos());
+        }
+        if(rtspServerBin[i].getBinSinkPad()) {
+            gst_pad_send_event(rtspServerBin[i].getBinSinkPad(), gst_event_new_eos());
+            if(videoBin[i/2].getBinRecordSrcPad(i)) gst_pad_send_event(videoBin[i/2].getBinRecordSrcPad(i), gst_event_new_eos());
+            gst_element_send_event(rtspServerBin[i].re.bin, gst_event_new_eos());
+        }
+        if(captureBin[i].getBinSinkPad()) {
+            gst_pad_send_event(captureBin[i].getBinSinkPad(), gst_event_new_eos());
+            if(videoBin[i/2].getBinCaptureSrcPad(i)) gst_pad_send_event(videoBin[i/2].getBinCaptureSrcPad(i), gst_event_new_eos());
+            gst_element_send_event(captureBin[i].be.bin, gst_event_new_eos());
+        }
+        //if(captureBin[i].add_cap_f == TRUE) gst_pad_send_event(captureBin[i].getBinSinkPad(), gst_event_new_eos());
     }
 #endif
-    //gst_element_send_event(pipeline, gst_event_new_eos());
+    gst_element_send_event(pipeline, gst_event_new_eos());
 
     //sleep(1);
 
@@ -1069,17 +1078,23 @@ main_end:
 
     if(pipeline) gst_object_unref(pipeline);
 
-    if(cmdArg.tcp_en) {
+    if(cmdArg.tcp_en) 
+    {
         tcpServer->destroy();
     }
 
-    if(cmdArg.ipc_en) {
+    if(cmdArg.ipc_en) 
+    {
          ipcInstance->destroy();
     }
 
-    if(loop) g_main_loop_unref(loop);
-
+    if(loop) {
+        //__LOG(LOG_NOTICE, "[GST][%s:%d] g_main_loop_unref", _FILE_, __LINE__);
+        g_main_loop_unref(loop);
+    }
+    
     removeSignalHandler();
 
+    //__LOG(LOG_NOTICE, "[GST][%s:%d] exit", _FILE_, __LINE__);
     exit(0);
 }
