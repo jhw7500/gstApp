@@ -17,6 +17,7 @@
 #include "muxSinkBin.h"
 #include "rtspServerBin.h"
 #include "captureBin.h"
+#include "encoderBin.h"
 #include "parser.h"
 #include "aes.h"
 #include "tcpServer.h"
@@ -26,7 +27,7 @@
 #include <unistd.h>
 //#include <signal.h>
 
-#define APP_VERSION "0.9"
+#define APP_VERSION "1.0"
 
 #define SEGFAULT_DEBUG
 #define RECORDBIN_ENABLE
@@ -87,7 +88,7 @@ gboolean bus_message_parse(GstBus *bus, GstMessage *message, gpointer data)
                 // g_printerr("err(%d) %s from element(%s)\n", err->code, err->message, GST_MESSAGE_SRC_NAME(message));
                 __LOG(LOG_ERR, "[GST][%s:%d] err(%d) %s from element(%s)", _FILE_, __LINE__, err->code, err->message, GST_MESSAGE_SRC_NAME(message));
                 str = g_strdup_printf("echo '%s' > /tmp/gst_err", err->message);
-                system(str);
+                if(system(str) < 0) __LOG(LOG_ERR, "[GST][%s:%d] err %s", _FILE_, __LINE__, str);
                 g_error_free(err);
                 g_free(str);
             }
@@ -96,7 +97,7 @@ gboolean bus_message_parse(GstBus *bus, GstMessage *message, gpointer data)
                 // g_printerr("message - %s\n", debug);
                 __LOG(LOG_ERR, "[GST][%s:%d] error debug : %s\n", __FILE__, __LINE__, (debug)? debug : "none");
                 str = g_strdup_printf("echo '%s' > /tmp/gst_err", debug);
-                system(str);
+                if(system(str) < 0) __LOG(LOG_ERR, "[GST][%s:%d] err %s", _FILE_, __LINE__, str);
                 g_free(debug);
                 g_free(str);
             }
@@ -412,7 +413,7 @@ static void splitCheck(gpointer data, guint8 startSec)
             muxSinkBin[i].setSplitMsec(DEFAULT_SPLIT_MAX_MSEC);
         }
     }
-    __LOG(LOG_NOTICE, "[GST][%s:%d] splitMax : %d, splitMin : %d", _FILE_, __LINE__, splitMax, splitMin);
+    __LOG(LOG_INFO, "[GST][%s:%d] splitMax : %d, splitMin : %d", _FILE_, __LINE__, splitMax, splitMin);
 
     do 
     {
@@ -482,6 +483,7 @@ static gboolean setSRT(gpointer arg)
     ThreadArgs *thraedArgs = (ThreadArgs *)arg;
     RecordBin *recordBin = (RecordBin *)(thraedArgs->arg1);
     RtspServerBin *rtspServerBin = (RtspServerBin *)(thraedArgs->arg2);
+    EncoderBin *encoderBin = (EncoderBin *)(thraedArgs->arg5);
     //CaptureBin *captrueBin = (CaptureBin *)(thraedArgs->arg2);
     static gint index = 0;
     guint8 i;
@@ -498,8 +500,15 @@ static gboolean setSRT(gpointer arg)
     //g_object_set(info->timeoveraly, "text", g_strdup_printf("test srt num(%d)", i++), NULL);
     for(i=0; i<MAX_CHANNEL; i++)
     {
-        if(cmdArg.cam_en[i] && cmdArg.stream_en[STREAM_REC]) recordBin[i].setOverlayText(text);
-        if(cmdArg.cam_en[i] && cmdArg.stream_en[STREAM_RTSP]) rtspServerBin[i].setOverlayText(text);
+        if(cmdArg.dual_enc == TRUE)
+        {
+            if(cmdArg.cam_en[i] && cmdArg.stream_en[STREAM_REC]) recordBin[i].setOverlayText(text);
+            if(cmdArg.cam_en[i] && cmdArg.stream_en[STREAM_RTSP]) rtspServerBin[i].setOverlayText(text);
+        }
+        else
+        {
+            if(cmdArg.cam_en[i]) encoderBin[i].setOverlayText(text);
+        }
     }
 
     index++;
@@ -713,20 +722,22 @@ gint main(gint argc, gchar *argv[])
     RtspServerBin rtspServerBin[MAX_CHANNEL+1];
     MuxSinkBin muxSinkBin[MAX_CHANNEL];
     CaptureBin captureBin[MAX_CHANNEL];
+    EncoderBin encoderBin[MAX_CHANNEL];
     GThread *splitThread = NULL, *terminalThread = NULL;
     GstStateChangeReturn ret;
     guint8 i = 0;
     guint srtTimer_id = 0;
     ThreadArgs* thraedArgs = g_new(ThreadArgs, 1);
     const gchar *stateChangeReturnStr[4] = {"GST_STATE_CHANGE_FAILURE", "GST_STATE_CHANGE_SUCCESS", "GST_STATE_CHANGE_ASYNC", "GST_STATE_CHANGE_NO_PREROLL"};
-    CTCPServer *tcpServer;
-    CIPCInsance *ipcInstance;
+    CTCPServer *tcpServer = CTCPServer::getInstance();
+    CIPCInsance *ipcInstance = CIPCInsance::getInstance();
 
     thraedArgs->arg0 = videoBin;
     thraedArgs->arg1 = recordBin;
     thraedArgs->arg2 = rtspServerBin;
     thraedArgs->arg3 = muxSinkBin;
     thraedArgs->arg4 = captureBin;
+    thraedArgs->arg5 = encoderBin;
 
     //pipeline = gst_pipeline_new("test-pipeline");
     pipeline = gst_pipeline_new(g_strdup_printf("%s_%s", cmdArg.appname, g_date_time_format(g_date_time_new_now_local(), "%Y%m%d_%H%M%S")));
@@ -803,52 +814,88 @@ gint main(gint argc, gchar *argv[])
                 }
             }
         }
-        
-        if(cmdArg.stream_en[STREAM_REC])
+
+        //json_parser(DEFAULT_JSON_PATH);
+        //print_option();
+        if(cmdArg.dual_enc == FALSE && (cmdArg.stream_en[STREAM_REC] || cmdArg.stream_en[STREAM_RTSP]))
         {
-            if(!recordBin[i].init(i, cmdArg.crop_en[csiNum]))
+            if (!encoderBin[i].init(i, cmdArg.crop_en[csiNum]))
             {
-                __LOG(LOG_CRIT, "[GST][%s:%d] ch%d record init err", _FILE_, __LINE__, i, csiNum);
+                __LOG(LOG_CRIT, "[GST][%s:%d] ch%d init err in encoderBin", _FILE_, __LINE__, i, csiNum);
                 goto main_end;
             }
-#if 1
-            if(!videoBin[csiNum].addBinRecordSrcPad(i))
+
+            if (!videoBin[csiNum].addBinRecordSrcPad(i))
             {
                 __LOG(LOG_CRIT, "[GST][%s:%d] ch%d record pad add err in csi%d video bin", _FILE_, __LINE__, i, csiNum);
                 goto main_end;
             }
 
-            if(gst_pad_link(videoBin[csiNum].getBinRecordSrcPad(i), recordBin[i].getBinSinkPad()) != GST_PAD_LINK_OK)
-            {  
+            if (gst_pad_link(videoBin[csiNum].getBinRecordSrcPad(i), encoderBin[i].getBinSinkPad()) != GST_PAD_LINK_OK)
+            {
                 __LOG(LOG_CRIT, "[GST][%s:%d] ch%d record pad link err", _FILE_, __LINE__, i);
                 goto main_end;
             }
-#endif
-            //else __LOG(LOG_NOTICE, "[GST][%s:%d] Record ch[%d] pad link", _FILE_, __LINE__, chNum);
-#if 1
+        }
+
+        if(cmdArg.stream_en[STREAM_REC])
+        {
             if(!muxSinkBin[i].init(i))
             {
                 __LOG(LOG_CRIT, "[GST][%s:%d] ch%d record sink init err", _FILE_, __LINE__, i);
                 goto main_end;
             }
-            
+
             if(!muxSinkBin[i].addBinVideoSinkPad())
             {
                 __LOG(LOG_CRIT, "[GST][%s:%d] ch%d record sink pad add err", _FILE_, __LINE__, i);
                 goto main_end;
             }
-            
-            if(gst_pad_link(recordBin[i].getBinSrcPad(), muxSinkBin[i].getBinVideoSinkPad()) != GST_PAD_LINK_OK)
+
+            if(cmdArg.dual_enc == TRUE)
             {
-                __LOG(LOG_CRIT, "[GST][%s:%d] ch%d record sink pad link err", _FILE_, __LINE__, i);
-                goto main_end;
+                if(!recordBin[i].init(i, cmdArg.crop_en[csiNum]))
+                {
+                    __LOG(LOG_CRIT, "[GST][%s:%d] ch%d record init err", _FILE_, __LINE__, i, csiNum);
+                    goto main_end;
+                }
+
+                if(!videoBin[csiNum].addBinRecordSrcPad(i))
+                {
+                    __LOG(LOG_CRIT, "[GST][%s:%d] ch%d record pad add err in csi%d video bin", _FILE_, __LINE__, i, csiNum);
+                    goto main_end;
+                }
+
+                if(gst_pad_link(videoBin[csiNum].getBinRecordSrcPad(i), recordBin[i].getBinSinkPad()) != GST_PAD_LINK_OK)
+                {  
+                    __LOG(LOG_CRIT, "[GST][%s:%d] ch%d record pad link err", _FILE_, __LINE__, i);
+                    goto main_end;
+                }
+
+                if(gst_pad_link(recordBin[i].getBinSrcPad(), muxSinkBin[i].getBinVideoSinkPad()) != GST_PAD_LINK_OK)
+                {
+                    __LOG(LOG_CRIT, "[GST][%s:%d] ch%d record sink pad link err", _FILE_, __LINE__, i);
+                    goto main_end;
+                }
             }
-#endif
-            //else __LOG(LOG_NOTICE, "[GST][%s:%d] mux video ch[%d] pad link", _FILE_, __LINE__, chNum);
+            else
+            {
+                if (!encoderBin[i].addBinRecSrcPad(i))
+                {
+                    __LOG(LOG_CRIT, "[GST][%s:%d] ch%d record pad add err in encoderBin", _FILE_, __LINE__, i);
+                    goto main_end;
+                }
+
+                if (gst_pad_link(encoderBin[i].getBinRecSrcPad(i), muxSinkBin[i].getBinVideoSinkPad()) != GST_PAD_LINK_OK)
+                {
+                    __LOG(LOG_CRIT, "[GST][%s:%d] ch%d record sink pad link err", _FILE_, __LINE__, i);
+                    goto main_end;
+                }
+            }
             //g_thread_new("split-timer-thread", (GThreadFunc)splitTimerStart, &muxSinkBin[chNum]);
         }
-        //json_parser(DEFAULT_JSON_PATH);
-        //print_option();
+
+
         if(cmdArg.stream_en[STREAM_RTSP])
         {
             if(!rtspServerStart())
@@ -863,16 +910,33 @@ gint main(gint argc, gchar *argv[])
                 goto main_end;
             }
 
-            if(!videoBin[csiNum].addBinRtspSrcPad(i))
+            if(cmdArg.dual_enc == TRUE)
             {
-                __LOG(LOG_CRIT, "[GST][%s:%d] ch%d rtsp pad add err in csi%d video bin", _FILE_, __LINE__, i, csiNum);
-                goto main_end;
+                if(!videoBin[csiNum].addBinRtspSrcPad(i))
+                {
+                    __LOG(LOG_CRIT, "[GST][%s:%d] ch%d rtsp pad add err in csi%d video bin", _FILE_, __LINE__, i, csiNum);
+                    goto main_end;
+                }
+
+                if(gst_pad_link(videoBin[csiNum].getBinRtspSrcPad(i), rtspServerBin[i].getBinSinkPad()) != GST_PAD_LINK_OK)
+                {
+                    __LOG(LOG_CRIT, "[GST][%s:%d] ch%d rtsp pad link err", _FILE_, __LINE__, i);
+                    goto main_end;
+                }
             }
-            
-            if(gst_pad_link(videoBin[csiNum].getBinRtspSrcPad(i), rtspServerBin[i].getBinSinkPad()) != GST_PAD_LINK_OK)
+            else
             {
-                __LOG(LOG_CRIT, "[GST][%s:%d] ch%d rtsp pad link err", _FILE_, __LINE__, i);
-                goto main_end;
+                if(!encoderBin[i].addBinRtspSrcPad(i))
+                {
+                    __LOG(LOG_CRIT, "[GST][%s:%d] ch%d rtsp pad add err in csi%d encoderBin", _FILE_, __LINE__, i, csiNum);
+                    goto main_end;
+                }
+
+                if(gst_pad_link(encoderBin[i].getBinRtspSrcPad(i), rtspServerBin[i].getBinSinkPad()) != GST_PAD_LINK_OK)
+                {
+                    __LOG(LOG_CRIT, "[GST][%s:%d] ch%d rtsp pad link err", _FILE_, __LINE__, i);
+                    goto main_end;
+                }
             }
             //else __LOG(LOG_NOTICE, "[GST][%s:%d] Record ch[%d] pad link", _FILE_, __LINE__, chNum);
         }
@@ -989,13 +1053,12 @@ gint main(gint argc, gchar *argv[])
     }
 
     if(cmdArg.tcp_en) {
-        tcpServer = CTCPServer::getInstance();
         tcpServer->init(thraedArgs);
     }
     
     if(cmdArg.ipc_en) {
         //__LOG(LOG_NOTICE, "[GST][%s:%d] ipc enable", _FILE_, __LINE__);
-        ipcInstance = CIPCInsance::getInstance();
+        
         ipcInstance->init(thraedArgs);
     }
 

@@ -15,8 +15,10 @@
 #define _CAPTUREBIN_H_
 
 #include "util.h"
+#include <turbojpeg.h>
 
 #define CAP_LOG_KEY "CAP"
+#define TURBO_JPEG
 
 typedef struct {
     void* arg0;
@@ -35,6 +37,7 @@ typedef struct _CaptureData
     guint8 mode;
     gint fps;
     gboolean debug;
+    tjhandle tjCompressor;
 } CaptureData;
 
 typedef struct _CaptureElement

@@ -31,6 +31,7 @@ typedef struct _RtspServerData
     gboolean debug;
     guint8 ch;
     GstClockTime last_timestamp;
+    gboolean dual_bps;
 } RtspServerData;
 
 typedef struct _RtspServerElement
@@ -51,6 +52,7 @@ typedef struct _RtspServerElement
     GstElement *overlay;
     GstElement *compositor;
     GstElement *identity;
+    GstElement *tee;
 } RtspServerElement;
 
 class RtspServerBin
@@ -76,10 +78,14 @@ public :
     void getGop();
     void getKeyframe();
     void setkeyframe(guint16 data);
+    void setDualBps(gboolean val);
+    gboolean getDualBps();
     GstStateChangeReturn setState(GstState state);
     GstState getState();
     gboolean addBinToPipe(GstElement *pipe);
     gboolean removeBinToPipe(GstElement *pipe);
+    gboolean addBinTeeRecordPad(guint8 ch);
+    GstPad* getBinTeeRecordPad();
 
 private :
 	
@@ -92,6 +98,7 @@ public :
 private :
     GstPad *sinkPad;
     RtspServerData rtspServerData;
+    GstPad *teeRecordPad;
 };
 
 #endif

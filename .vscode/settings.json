@@ -40,6 +40,9 @@
         "rtsp-client.h": "c",
         "gstrtspdefs.h": "c",
         "fcntl.h": "c",
-        "memory_resource": "cpp"
+        "memory_resource": "cpp",
+        "sstream": "cpp",
+        "cmath": "cpp",
+        "tuple": "cpp"
     }
 }

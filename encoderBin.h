@@ -10,50 +10,40 @@
  * Description:
  */
 
-#ifndef _RECORD_H_
-#define _RECORD_H_
+#ifndef _ENCODER_H_
+#define _ENCODER_H_
 
 #include "util.h"
 
-typedef struct _RecordElement
+typedef struct _EncElement
 {
     GstElement *rate;
     GstElement *enc;
     GstElement *queue;
-    GstElement *queue2;
     GstElement *convert;
     GstElement *parse;
     GstElement *bin;
-    GstElement *bin2;
     GstElement *capsfilter;
     GstElement *crop;
     GstElement *overlay;
-    GstElement *appsink;
-    GstElement *appsrc;
     GstElement *tee;
-} RecordElement;
+} EncElement;
 
-typedef struct _RecordData
+typedef struct _EncData
 {
-    GstElement *appsrc;
-    gchar *appSrcName;
-    guint8 start_f;
-    GstBuffer *buf;
     GstCaps *caps;
     gboolean debug;
     guint8 ch;
-    gboolean dual_bps;
-} RecordData;
+} EncData;
 
-class RecordBin
+class EncoderBin
 {
 public :
-	static RecordBin* getInstance() ;
-    RecordBin();
-    ~RecordBin();
+	static EncoderBin* getInstance() ;
+    EncoderBin();
+    ~EncoderBin();
 	gboolean init(guint8 num, gboolean crop_en) ;
     GstPad* getBinSinkPad();
-    GstPad* getBinSrcPad();
     void setBitrate(guint16 data);
     void getBitrate();
     void setFps(guint16 data);
@@ -68,6 +58,8 @@ public :
     void setDualBps(gboolean val);
     gboolean addBinRtspSrcPad(guint8 ch);
     GstPad* getBinRtspSrcPad(guint8 ch);
+    gboolean addBinRecSrcPad(guint8 ch);
+    GstPad* getBinRecSrcPad(guint8 ch);
     GstStateChangeReturn setState(GstState state);
     GstState getState();
     GstElement* getBinAppsrc();
@@ -75,11 +67,10 @@ public :
     gboolean removeBinToPipe(GstElement *pipe);
 
 private :
-	GstPad *srcRtspPad;
 
 public :
 	gboolean m_flagDestroy;
-    RecordElement re;
+    EncElement re;
     //GstPad *sinkPad;
     //GstElement *pipeline[2];
 	
@@ -87,7 +78,9 @@ private :
     guint8 ch;
     GstPad *sinkPad;
     GstPad *srcPad;
-    RecordData recordData;
+    EncData recordData;
+	GstPad *srcRtspPad;
+    GstPad *srcRecPad;
 };
 
 #endif

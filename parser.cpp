@@ -59,12 +59,14 @@ void ParserClass::init_arg(gchar *argv)
     arg.stream_en[STREAM_REC] = TRUE;
     arg.stream_en[STREAM_RTSP] = TRUE;
     arg.stream_en[STREAM_CAP] = FALSE;
+    arg.dual_enc = TRUE;
 
     arg.cap_encoder_en = FALSE;
     arg.cap_always = FALSE;
     arg.cap_res_en = FALSE;
     arg.cap_delay = 0;
     arg.cap_timeout = 200;
+    arg.turbojpeg = FALSE;
     arg.tcp_en = FALSE;
     arg.tcp_port = DEFAULT_TCP_PORT;
 
@@ -219,7 +221,6 @@ ParserClass* ParserClass::getInstance()
 
 gint ParserClass::json_sub_object_get_value(const gchar *file, const gchar *header, const gchar *sub_obj, const gchar *name, gpointer data)
 {
-    gint ret = -1;
 	json_object *jobj = NULL;
     json_object *hobj = NULL;
     json_object *sobj = NULL;
@@ -315,6 +316,7 @@ gint ParserClass::json_parser(const gchar *path, const gchar *header)
         json_object_get_value(sobj, "enable", &arg.stream_en[STREAM_CAP]);
         json_object_get_value(sobj, "delay", &arg.cap_delay);
         json_object_get_value(sobj, "timeout", &arg.cap_timeout);
+        json_object_get_value(sobj, "turbojpeg", &arg.turbojpeg);
 
         for(guint8 i=0; i<MAX_CHANNEL; i++)
         {
@@ -397,6 +399,7 @@ gint ParserClass::arg_parser(int *argc, char **argv[])
         {"capdelay", 'A', 0, G_OPTION_ARG_INT, &arg.cap_delay, "video capture delay(msec), default(0)", "INT"},
         {"capdir", 'I', 0, G_OPTION_ARG_STRING, &arg.captureDir, "save capture file to directory, default capture", "STRING"},
         {"etcp", 'C', 0, G_OPTION_ARG_INT, &arg.tcp_en, "tcp server enable, default(FALSE)", "INT"},
+        {"etcp", 'j', 0, G_OPTION_ARG_INT, &arg.turbojpeg, "turbojpeg enable, default(FALSE)", "INT"},
         {"ein", 'i', 0, G_OPTION_ARG_INT, &arg.input_en, "terminal input enable, default(FALSE)", "INT"},
         {"rport", 'P', 0, G_OPTION_ARG_STRING, &arg.rtsp_port, "rtsp port number, default(8554)", "STRING"},
         {"id", 'u', 0, G_OPTION_ARG_STRING, &arg.rtsp_id, "rtsp id, default(user)", "STRING"},
@@ -410,6 +413,7 @@ gint ParserClass::arg_parser(int *argc, char **argv[])
         {"ipc_mid", 'F', 0, G_OPTION_ARG_INT, &arg.ipc_mid, "ipc message id, default(0x65)", "INT"},
         {"fault", 0, 0, G_OPTION_ARG_INT, &arg.fault, "fault debug setup, default(FALSE)", "INT"},
         {"tport", 0, 0, G_OPTION_ARG_INT, &arg.tcp_port, "tcp port num, default(8555)", "INT"},
+        {"dual_enc", 'U', 0, G_OPTION_ARG_INT, &arg.dual_enc, "dual encoder, default(TRUE)", "INT"},
         {"fmain0", 0, 0, G_OPTION_ARG_INT, &arg.main_fps[CSI_1], "csi1 main frame per second, default(15)", "INT"},
         {"fmain1", 0, 0, G_OPTION_ARG_INT, &arg.main_fps[CSI_2], "csi2 main frame per second, default(15)", "INT"},
         {"frec0", 0, 0, G_OPTION_ARG_INT, &arg.fps[STREAM_REC][0], "ch0 record frame per second, default(15)", "INT"},
@@ -527,89 +531,17 @@ gint ParserClass::check_arg()
 {
     const gchar *ioModeStr[6] = {"auto", "rw", "mmap", "useptr", "dmabuf", "dmabuf-import"};
     gint i = 0;
-
-    //g_print("%s\n", __FUNCTION__);
-#if 0
-    g_print("oht name : %s\n", arg.ohtName);
-    g_print("io mode : %s\n", ioModeStr[arg.ioMode]);
-    g_print("level mode : %d\n", arg.levelMode);
-    g_print("log_level : %d\n", arg.log_level);
-    g_print("debug_level : %d\n", arg.dbg_level);
-    g_print("mount directory : %s\n", arg.mntDir);
-    g_print("save dot directory : %s\n", arg.dotDir);
-    g_print("save capture directory : %s\n", arg.captureDir);
-    //g_print("ch_enable : 0x%02x\n", arg.ch_enable);
-    g_print("record stream enable : %s\n", arg.stream_en[STREAM_REC]? "TURE":"FALSE");
-    g_print("rtsp stream enable : %s\n", arg.stream_en[STREAM_RTSP]? "TURE":"FALSE");
-    g_print("captrue enable : %s\n", arg.stream_en[STREAM_CAP]? "TURE":"FALSE");
-    g_print("audio record enable : %s\n", arg.audio_en? "TURE":"FALSE");
-    g_print("captrue max count : %d\n", arg.captureMaxCnt);
-    g_print("terminal input enable : %s\n", arg.input_en? "TURE":"FALSE");
-    //g_print("res mode : %s\n", arg.resMode? "HD":"FHD");
-    //g_print("width : %d\n", arg.res[arg.resMode].width);
-    //g_print("height : %d\n", arg.res[arg.resMode].height);
-    g_print("width : %d\n", arg.width);
-    g_print("height : %d\n", arg.height);
-    g_print("main fps : %d\n", arg.main_fps);
-    g_print("rec fps : %d\n", arg.fps[STREAM_REC]);
-    g_print("rtsp fps : %d\n", arg.fps[STREAM_RTSP]);
-    g_print("rec bitrate : %d\n", arg.bps[STREAM_REC]);
-    g_print("rtsp bitrate : %d\n", arg.bps[STREAM_RTSP]);
-    g_print("rec gop size : %d\n", arg.gop[STREAM_REC]);
-    g_print("rtsp gop size : %d\n", arg.gop[STREAM_RTSP]);
-    g_print("play delay : %d\n", arg.play_delay);
-    g_print("no fault : %s\n", arg.fault? "TURE":"FALSE");
-    g_print("duration : %d\n", arg.duration);
-    g_print("rtsp port : %s\n", arg.rtsp_port);
-    g_print("rtsp id : %s\n", arg.rtsp_id);
-    g_print("rtsp passwd : %s\n", arg.rtsp_passwd);
-    g_print("overlay enable : %s\n", arg.overlay_en? "TURE":"FALSE");
-    g_print("split diff msec : %d\n", arg.split_diff_msec);
-    g_print("split max msec : %d\n", arg.split_max_msec);
-    for(guint8 i=0; i<MAX_CHANNEL; i++){
-        //g_print("rec ch %d rotation : %d\n", i, arg.recRotationMode[i]);
-        //g_print("rtsp ch %d rotation : %d\n", i, arg.rtspRotationMode[i]);
-        g_print("cam_en ch %d : %s\n", i, arg.cam_en[i]? "TRUE":"FALSE");
-        g_print("cam_rotate ch %d : %s\n", i, arg.cam_rotate[i]? "TRUE":"FALSE");
-    }
-#endif
     //__LOG(LOG_NOTICE, "[RTSP][%s:%d] 0 : %s, 1 : %s, 2 : %s", _FILE_, __LINE__, test0, test1, test2);
-    __LOG(LOG_NOTICE, "[%s][%s:%d] io:%s, test:%d, noFault:%d, delay:%d, logLevel:%d, dbgLevel:%d, mntDir:%s, dotDir:%s, ", \
+    __LOG(LOG_NOTICE, "[%s][%s:%d] iomode:%s, test:%d, noFault:%d, delay:%d, logLevel:%d, dbgLevel:%d, mntDir:%s, dotDir:%s, ", \
                         LOG_KEY, _FILE_, __LINE__, ioModeStr[arg.ioMode], arg.levelMode, arg.fault, arg.play_delay, arg.log_level, \
                         arg.dbg_level, arg.mntDir, arg.dotDir);
 
     __LOG(LOG_NOTICE, "[%s][%s:%d] oht_name:%s, duration:%d, width:%d, height:%d, csi1_fps:%d, csi2_fps:%d", LOG_KEY, _FILE_, __LINE__, \
                         arg.ohtName, arg.duration, arg.width, arg.height, arg.main_fps[CSI_1], arg.main_fps[CSI_2]);
                     
-    __LOG(LOG_NOTICE, "[%s][%s:%d] chEn:0x%x, recEn:%d, rtspEn:%d, capEn:%d, audoEn:%d, inputEn:%d, overlayEn:%d tcpEn:%d, ipc_en:%d", \
+    __LOG(LOG_NOTICE, "[%s][%s:%d] chEn:0x%x, recEn:%d, rtspEn:%d, capEn:%d, audoEn:%d, dualEn:%d, inputEn:%d, overlayEn:%d tcpEn:%d, tcpPort:%d, ipc_en:%d, ipc_mid:%d", \
                         LOG_KEY, _FILE_, __LINE__, arg.ch_enable, arg.stream_en[STREAM_REC], arg.stream_en[STREAM_RTSP], arg.stream_en[STREAM_CAP], \
-                        arg.audio_en, arg.input_en, arg.overlay_en, arg.tcp_en, arg.ipc_en);
-    __LOG(LOG_NOTICE, "[%s][%s:%d] rtspID:%s, rtspPW:%s, rtspPort:%s, splitSec:%d, splitMargin:%d, splitMax:%d, muxer:%s", LOG_KEY, _FILE_, __LINE__, \
-                        arg.rtsp_id, arg.rtsp_passwd, arg.rtsp_port, arg.split_sec, arg.split_diff_msec, arg.split_max_msec, arg.muxer);
-
-    if(arg.stream_en[STREAM_REC]) 
-    {
-        __LOG(LOG_NOTICE, "[%s][%s:%d] rec ch0 fps:%d, ch1 fps:%d, ch2 fps:%d, ch3 fps:%d", LOG_KEY, _FILE_, __LINE__, \
-                            arg.fps[STREAM_REC][0], arg.fps[STREAM_REC][1], arg.fps[STREAM_REC][2], arg.fps[STREAM_REC][3]);  
-    }
-
-    if(arg.stream_en[STREAM_RTSP])
-    {
-        __LOG(LOG_NOTICE, "[%s][%s:%d] rtsp ch0 fps:%d, ch1 fps:%d, ch2 fps:%d, ch3 fps:%d", LOG_KEY, _FILE_, __LINE__, \
-                            arg.fps[STREAM_RTSP][0], arg.fps[STREAM_RTSP][1], arg.fps[STREAM_RTSP][2], arg.fps[STREAM_RTSP][3]);  
-    }
-
-    if(arg.stream_en[STREAM_CAP])
-    {
-        system(g_strdup_printf("mkdir -p %s/%s", cmdArg.mntDir, cmdArg.captureDir));
-        __LOG(LOG_NOTICE, "[%s][%s:%d] capture ch0 fps:%d, ch1 fps:%d, ch2 fps:%d, ch3 fps:%d", LOG_KEY, _FILE_, __LINE__, \
-                            arg.fps[STREAM_CAP][0], arg.fps[STREAM_CAP][1], arg.fps[STREAM_CAP][2], arg.fps[STREAM_CAP][3]);  
-        __LOG(LOG_NOTICE, "[%s][%s:%d] capEncEn:%d captureAlways:%d, captureMaxCnt:%d, cap_res_en:%d, capDir:%s, cap_delay:%d, cap_timeout:%d", \
-                            LOG_KEY, _FILE_, __LINE__, arg.cap_encoder_en, arg.cap_always, arg.captureMaxCnt, arg.cap_res_en, arg.captureDir, arg.cap_delay, arg.cap_timeout);
-    }
-
-    if(arg.tcp_en) __LOG(LOG_NOTICE, "[%s][%s:%d] tcpPort:%d", LOG_KEY, _FILE_, __LINE__, arg.tcp_port);
-    if(arg.ipc_en) __LOG(LOG_NOTICE, "[%s][%s:%d] ipc_mid:%d", LOG_KEY, _FILE_, __LINE__, arg.ipc_mid);
+                        arg.audio_en, arg.dual_enc, arg.input_en, arg.overlay_en, arg.tcp_en, arg.tcp_port, arg.ipc_en, arg.ipc_mid);
 
     for(i=0; i<MAX_CHANNEL; i++) {
         __LOG(LOG_NOTICE, "[%s][%s:%d] ch%d en:%s, vflip:%s, hflip:%s, bps:%d,%d, ae_on:%d, ae_gain:%d, exp_time:%d", \
@@ -623,6 +555,30 @@ gint ParserClass::check_arg()
             return -1;
         }
     }
+
+    if(arg.stream_en[STREAM_REC]) 
+    {
+        __LOG(LOG_NOTICE, "[%s][%s:%d] splitSec:%d, splitMargin:%d, splitMax:%d, muxer:%s ch0 fps:%d, ch1 fps:%d, ch2 fps:%d, ch3 fps:%d", LOG_KEY, _FILE_, __LINE__, \
+                            arg.split_sec, arg.split_diff_msec, arg.split_max_msec, arg.muxer, arg.fps[STREAM_REC][0], arg.fps[STREAM_REC][1], arg.fps[STREAM_REC][2], arg.fps[STREAM_REC][3]);  
+    }
+
+    if(arg.stream_en[STREAM_RTSP])
+    {
+        __LOG(LOG_NOTICE, "[%s][%s:%d] rtspID:%s, rtspPW:%s, rtspPort:%s ch0 fps:%d, ch1 fps:%d, ch2 fps:%d, ch3 fps:%d", LOG_KEY, _FILE_, __LINE__, \
+                            arg.rtsp_id, arg.rtsp_passwd, arg.rtsp_port, arg.fps[STREAM_RTSP][0], arg.fps[STREAM_RTSP][1], arg.fps[STREAM_RTSP][2], arg.fps[STREAM_RTSP][3]);  
+    }
+
+    if(arg.stream_en[STREAM_CAP])
+    {
+        if(system(g_strdup_printf("mkdir -p %s/%s", cmdArg.mntDir, cmdArg.captureDir)) < 0)
+            __LOG(LOG_ERR, "[CFG][%s:%d] err mkdir", __FILE__, __LINE__);
+
+        __LOG(LOG_NOTICE, "[%s][%s:%d] capture ch0 fps:%d, ch1 fps:%d, ch2 fps:%d, ch3 fps:%d", LOG_KEY, _FILE_, __LINE__, \
+                            arg.fps[STREAM_CAP][0], arg.fps[STREAM_CAP][1], arg.fps[STREAM_CAP][2], arg.fps[STREAM_CAP][3]);  
+        __LOG(LOG_NOTICE, "[%s][%s:%d] capEncEn:%d capAlways:%d, MaxCnt:%d, res_en:%d, capDir:%s, delay:%d, timeout:%d, turbo:%d", \
+                            LOG_KEY, _FILE_, __LINE__, arg.cap_encoder_en, arg.cap_always, arg.captureMaxCnt, arg.cap_res_en, arg.captureDir, arg.cap_delay, arg.cap_timeout, arg.turbojpeg);
+    }
+
     gint total_fps = 0;
     //total_fps += arg.stream_en[STREAM_REC]*arg.fps[STREAM_REC]*(arg.cam_en[0]+arg.cam_en[1]+arg.cam_en[2]+arg.cam_en[3]);
     //total_fps += arg.stream_en[STREAM_RTSP]*arg.fps[STREAM_RTSP]*(arg.cam_en[0]+arg.cam_en[1]+arg.cam_en[2]+arg.cam_en[3]);
@@ -665,127 +621,10 @@ gint ParserClass::check_arg()
     return 0;
 }
 
-static void captureThreadFunc(gpointer data)
-{
-    ThreadArgs *thraedArgs = (ThreadArgs *)data;
-    VideoBin *videoBin = (VideoBin *)(thraedArgs->arg0);
-    //RecordBin *recordBin = (RecordBin *)(thraedArgs->arg1);
-    //RtspServerBin *rtspServerBin = (RtspServerBin *)(thraedArgs->arg2);
-    //MuxSinkBin *muxSinkBin = (MuxSinkBin *)(thraedArgs->arg3);
-    CaptureBin *captureBin = (CaptureBin *)(thraedArgs->arg4);
-    GstState state;
-    TCfiData *_TCfiData = (TCfiData *)(thraedArgs->arg5);
-    //guint i = (guint)thraedArgs->arg5;
-    guint k;
-
-    guint i = _TCfiData->data.channel;
-    //guint i = (guint)(thraedArgs->arg6);
-    g_print("ch%d %s\n", i, __FUNCTION__);
-
-    do  //if (cmdArg.cam_en[i] && cmdArg.stream_en[STREAM_CAP])
-    {
-        if (!captureBin[i].init(i, cmdArg.crop_en[i / 2]))
-            g_print("ch%d captrueBin init failed\n", i);
-
-        if (captureBin[i].addBinToPipe(pipeline))
-            g_print("ch%d capture bin add\n", i);
-        else
-            g_print("ch%d capture bin add error\n", i);
-        // g_usleep(10000);
-
-        if (gst_pad_is_linked(videoBin[i / 2].getBinCaptureSrcPad(i)) != TRUE)
-        {
-            // g_print("ch%d capture not linked\n", key);
-            if (gst_pad_link(videoBin[i / 2].getBinCaptureSrcPad(i), captureBin[i].getBinSinkPad()) != GST_PAD_LINK_OK)
-            {
-                g_print("ch%d capture link error!\n", i);
-                // captureBin[i].removeBinToPipe(pipeline);
-                break;
-            }
-            else
-            {
-                g_print("ch%d capture link ok!\n", i);
-                // gst_element_sync_state_with_parent(captureBin[i].be.bin);
-                // gst_element_set_state(pipeline, GST_STATE_PLAYING);
-            }
-        }
-        else
-        {
-            g_print("ch%d capture already linked!\n", i);
-            // gst_element_sync_state_with_parent(captureBin[i].be.bin);
-            // gst_element_set_state(pipeline, GST_STATE_PLAYING);
-        }
-
-        for (guint k = 0; k < 500; k++)
-        {
-            g_print("pipeline playing\n");
-            gst_element_set_state(pipeline, GST_STATE_PLAYING);
-            // g_print("ch%d captrue state sync\n", key);
-            // gst_element_sync_state_with_parent(captureBin[key].be.bin);
-            // g_usleep(1000);
-            state = captureBin[i].getState();
-            if (state == GST_STATE_PLAYING)
-                break;
-            else
-                g_print("state : %d\n", state);
-
-            g_usleep(1000);
-        }
-
-        captureBin[i].setFilePath(_TCfiData->data.prefix);
-        captureBin[i].startCapture(_TCfiData->data.cap_cnt);
-        // g_print("ch:%d, fps:%d, mode : %d, max_cnt : %d\n", key, cmdArg.fps[STREAM_CAP][key], key1, key2);
-        // captureBin[key].startCapture(key2);
-
-        for (k = 0; k < 500; k++)
-        {
-            if (captureBin[i].getCaptureCnt() >= _TCfiData->data.cap_cnt)
-                break;
-
-            g_usleep(10000);
-        }
-
-        __LOG(LOG_NOTICE, "[GST][%s:%d] capture end", _FILE_, __LINE__);
-
-        if (gst_pad_unlink(videoBin[i / 2].getBinCaptureSrcPad(i), captureBin[i].getBinSinkPad()))
-        {
-            g_print("ch%d capture unlink ok!\n", i);
-            state = captureBin[i].getState();
-            g_print("state : %d\n", state);
-            for (k = 0; k < 500; k++)
-            {
-                captureBin[i].setState(GST_STATE_NULL);
-                state = captureBin[i].getState();
-                g_print("state : %d\n", i);
-                if (state == GST_STATE_NULL)
-                {
-                    if (captureBin[i].removeBinToPipe(pipeline))
-                        g_print("ch%d capture bin remove\n", i);
-                    else
-                        g_print("ch%d capture bin remove error\n", i);
-
-                    break;
-                }
-                g_usleep(10000);
-            }
-        }
-        else
-            g_print("ch%d capture unlink err!\n", i);
-
-        // captureBin[i].removeBinToPipe(pipeline);
-    } while(0);
-}
-
-static void cap_respones(gpointer data)
-{
-    ThreadArgs *thraedArgs = (ThreadArgs *)data;
-    CaptureBin *captureBin = (CaptureBin *)(thraedArgs->arg4);
-}
-
 gint ParserClass::cfi_parser(gchar* buffer, gint len, gpointer data)
 {
     ThreadArgs *thraedArgs = (ThreadArgs *)data;
-    VideoBin *videoBin = (VideoBin *)(thraedArgs->arg0);
+    //VideoBin *videoBin = (VideoBin *)(thraedArgs->arg0);
     //RecordBin *recordBin = (RecordBin *)(thraedArgs->arg1);
     //RtspServerBin *rtspServerBin = (RtspServerBin *)(thraedArgs->arg2);
     //MuxSinkBin *muxSinkBin = (MuxSinkBin *)(thraedArgs->arg3);
@@ -800,7 +639,6 @@ gint ParserClass::cfi_parser(gchar* buffer, gint len, gpointer data)
     guint32 chk_cnt = 0;
     guint8 ch_en = 0;
     guint16 capMaxCnt = 0;
-    guint8 mode = 0;
     guint32 timeout_msec[4];
     guint8 fps;
     //GThread *resThread[4];
@@ -842,7 +680,6 @@ gint ParserClass::cfi_parser(gchar* buffer, gint len, gpointer data)
             continue;
         }
 
-#if 1
         if (_TCfiData.data.cmd_id == CFI_CAP_REQ_CMD_ID)
         {
             captureBin[i].setFilePath(_TCfiData.data.prefix);
@@ -861,7 +698,7 @@ gint ParserClass::cfi_parser(gchar* buffer, gint len, gpointer data)
             }
             timeout_msec[i] = (capMaxCnt * 1000) / fps + cmdArg.cap_timeout;
 
-            __LOG(LOG_DEBUG, "[%s][%s:%d] ch%d timeout: %lu", CAP_LOG_KEY, _FILE_, __LINE__, i, timeout_msec[i]);
+            __LOG(LOG_INFO, "[%s][%s:%d] ch%d timeout: %lu", CAP_LOG_KEY, _FILE_, __LINE__, i, timeout_msec[i]);
         }
         else if (_TCfiData.data.cmd_id == CTS_CAP_START_REQ_CMD_ID)
         {
@@ -874,18 +711,6 @@ gint ParserClass::cfi_parser(gchar* buffer, gint len, gpointer data)
             captureBin[i].stopCapture();
             captureBin[i].setMode(0);
         }
-#else
-        ThreadArgs *args = g_new(ThreadArgs, 1);
-        *args = *thraedArgs;
-        TCfiData *data_copy = g_new(TCfiData, 1);
-        *data_copy = _TCfiData;
-        data_copy->data.channel = i;
-        args->arg5 = data_copy;
-        //__LOG(LOG_NOTICE, "[CFI][%s:%d] ch%d call captrue thread", _FILE_, __LINE__, i);
-        g_print("ch%d call captrue thread\n", i);
-        captureThread[i] = g_thread_new(g_strdup_printf("captureThread%d", i), (GThreadFunc)captureThreadFunc, args);
-#endif
-
     }
 
     if(cmdArg.cap_res_en && _TCfiData.data.cmd_id == CFI_CAP_REQ_CMD_ID)
@@ -908,8 +733,8 @@ gint ParserClass::cfi_parser(gchar* buffer, gint len, gpointer data)
                 }
                 else if (chk_cnt > timeout_msec[i])
                 {
-                    __LOG(LOG_INFO, "[%s][%s:%d] ch%d(%d) NG(%lu>%lu)", CAP_LOG_KEY, _FILE_, __LINE__, i, _TCfiData.data.tx_id, chk_cnt, timeout_msec[i]);
                     gint done_cnt = captureBin[i].getCaptureCnt_();
+                    __LOG(LOG_ERR, "[%s][%s:%d] ch%d(%d) NG(%lu>%lu) cnt(%d>%d)", CAP_LOG_KEY, _FILE_, __LINE__, i, _TCfiData.data.tx_id, chk_cnt, timeout_msec[i], capMaxCnt, done_cnt);
                     _TCfiData.data.cap_cnt = (done_cnt < capMaxCnt) ? (capMaxCnt - done_cnt) : 0;
                     ipcInstance->sendData((char *)_TCfiData.byte, CFI_DATA_LEN);
                     captureBin[i].stopCapture();

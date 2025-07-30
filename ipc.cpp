@@ -13,6 +13,19 @@ void* thread_waitingRecv(void* pData)
 	return NULL ;
 }
 
+CIPCInsance::CIPCInsance()
+{
+    __LOG(LOG_INFO, "[GST][%s:%d] %s", _FILE_, __LINE__, __FUNCTION__);
+
+	m_flagDestroy = 1;
+    m_threadRecv = 0;
+}
+
+CIPCInsance::~CIPCInsance()
+{
+    __LOG(LOG_INFO, "[GST][%s:%d] %s", _FILE_, __LINE__, __FUNCTION__);
+}
+
 CIPCInsance* CIPCInsance::getInstance()
 {
 	static CIPCInsance instance ;
@@ -24,6 +37,7 @@ int CIPCInsance::init(ThreadArgs *args)
 {
     int ret = 0;
 	m_flagDestroy = 0;
+    m_threadRecv = 0;
 	
 #if 1
     int msg_id = msgget((key_t)MSG_Q_REQ_KEY, IPC_CREAT | 0666);
@@ -55,9 +69,12 @@ int CIPCInsance::destroy()
     m_flagDestroy = 1;
 
 	__LOG(LOG_EMERG, "[IPC][%s:%d] call server destroy", _FILE_, __LINE__) ;
-	ret = pthread_join(m_threadRecv, &nStatus);
-	if(ret < 0)
-		__LOG(LOG_CRIT, "[IPC][%s:%d] ret:%d", _FILE_, __LINE__, ret);
+    if(m_threadRecv > 0)
+    {
+        ret = pthread_join(m_threadRecv, &nStatus);
+        if(ret < 0)
+            __LOG(LOG_CRIT, "[IPC][%s:%d] ret:%d", _FILE_, __LINE__, ret);
+    }
 
 #if 1
     int msg_id = msgget((key_t)MSG_Q_REQ_KEY, IPC_CREAT | 0666);
@@ -119,20 +136,12 @@ int CIPCInsance::sendData(char* data, int len)
 
 int CIPCInsance::waitingRecv(void* pData)
 {
-    int ret;
-    int i;
+    int ret = 0;
     int msg_id;
 	IpcBuffer recvMsg;
     ParserClass* parser = ParserClass::getInstance();
 
 	//msg_id = msgget((key_t)MSG_Q_KEY, IPC_CREAT | 0666);
-
-    if(msg_id == -1) {
-		ret = -1;
-        perror("msgget fail");
-		__LOG(LOG_CRIT, "[IPC][%s:%d] ret:%d", _FILE_, __LINE__, ret);
-        return -1;
-    }
 
     while(1) {
         g_usleep(10000);
@@ -141,6 +150,12 @@ int CIPCInsance::waitingRecv(void* pData)
             break;
 
 		msg_id = msgget((key_t)MSG_Q_REQ_KEY, IPC_CREAT | 0666);
+        if(msg_id == -1) {
+            perror("msgget fail");
+            __LOG(LOG_CRIT, "[IPC][%s:%d] msg_id:%d", _FILE_, __LINE__, ret);
+            g_usleep(990000);
+            continue;
+        }
 
         ret = msgrcv(msg_id, &recvMsg, sizeof(recvMsg) - sizeof(long), PMSG_TYPE_IPC_CFI, IPC_NOWAIT);
         if (ret <= 0) {
@@ -149,6 +164,7 @@ int CIPCInsance::waitingRecv(void* pData)
             } else {
                 perror("msgrcv fail");
                 __LOG(LOG_ERR, "[IPC][%s:%d] errno:%d, ret:%d", __FILE__, __LINE__, errno, ret);
+                g_usleep(990000);
             }
             continue;
         }

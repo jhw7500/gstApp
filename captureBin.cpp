@@ -15,19 +15,98 @@
 #include <gst/app/gstappsink.h>
 #include <gst/app/gstappsrc.h>
 
+#include <gst/app/gstappsink.h>
+#include <gst/video/video.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <openssl/md5.h>
+
+static gboolean init_compressor(CaptureData *info) {
+    if (!info->tjCompressor) {
+        __LOG(LOG_NOTICE, "[%s][%s:%d] %s", CAP_LOG_KEY, _FILE_, __LINE__, __FUNCTION__);
+        info->tjCompressor = tjInitCompress();
+        if (!info->tjCompressor) {
+            __LOG(LOG_ERR, "[%s][%s:%d] Failed to initialize TurboJPEG: %s", CAP_LOG_KEY, _FILE_, __LINE__, tjGetErrorStr());
+            return FALSE;
+        }
+    }
+    return TRUE;
+}
+
+static void destroy_compressor(CaptureData *info) {
+    if (info->tjCompressor) {
+        __LOG(LOG_NOTICE, "[%s][%s:%d] %s", CAP_LOG_KEY, _FILE_, __LINE__, __FUNCTION__);
+        tjDestroy(info->tjCompressor);
+        info->tjCompressor = NULL;
+    }
+}
+
+unsigned char *compress_frame_to_jpeg(GstSample *sample, long *jpeg_size, CaptureData *info) {
+    GstBuffer *buffer = gst_sample_get_buffer(sample);
+    GstCaps *caps = gst_sample_get_caps(sample);
+    GstStructure *s = gst_caps_get_structure(caps, 0);
+
+    int width, height;
+    const gchar *format;
+
+    gst_structure_get_int(s, "width", &width);
+    gst_structure_get_int(s, "height", &height);
+    format = gst_structure_get_string(s, "format");
+    //__LOG(LOG_NOTICE, "[%s][%s:%d] format: %s, width: %d, height: %d", CAP_LOG_KEY, _FILE_, __LINE__, format, width, height);
+    if (g_strcmp0(format, "RGBx") != 0) {
+        __LOG(LOG_ERR, "[%s][%s:%d] Only RGB format supported here. Current format: %s", CAP_LOG_KEY, _FILE_, __LINE__, format);
+        return NULL;
+    }
+
+    GstMapInfo map;
+    if (!gst_buffer_map(buffer, &map, GST_MAP_READ)) {
+        __LOG(LOG_ERR, "[%s][%s:%d] Failed to map buffer", CAP_LOG_KEY, _FILE_, __LINE__);
+        return NULL;
+    }
+
+    if (!init_compressor(info)) {
+        gst_buffer_unmap(buffer, &map);
+        return NULL;
+    }
+
+    unsigned char *jpeg_buf = NULL;
+    int pixel_format = TJPF_RGBX;
+    int jpeg_quality = 85; // 1~100
+    int subsamp = TJSAMP_444; // No chroma subsampling
+
+    //__LOG(LOG_NOTICE, "[%s][%s:%d] tjCompress2", CAP_LOG_KEY, _FILE_, __LINE__);
+    int ret = tjCompress2(
+        info->tjCompressor,
+        map.data, width, width*4, height, pixel_format,
+        &jpeg_buf, (unsigned long *)jpeg_size,
+        subsamp, jpeg_quality,
+        TJFLAG_FASTDCT
+    );
+    //__LOG(LOG_NOTICE, "[%s][%s:%d] gst_buffer_unmap", CAP_LOG_KEY, _FILE_, __LINE__);
+    gst_buffer_unmap(buffer, &map);
+
+    if (ret != 0) {
+        __LOG(LOG_ERR, "[%s][%s:%d] JPEG compression failed: %s", CAP_LOG_KEY, _FILE_, __LINE__, tjGetErrorStr());
+        if (jpeg_buf) tjFree(jpeg_buf);
+        return NULL;
+    }
+
+    return jpeg_buf;
+}
+
 static void eos_callback(GstAppSink *appsink, gpointer user_data) 
 {
     __LOG(LOG_NOTICE, "[%s][%s:%d] %s", CAP_LOG_KEY, _FILE_, __LINE__, __FUNCTION__);
 }
 
+#if 0
 static GstFlowReturn new_preroll_handler(GstElement *sink, gpointer data) 
 {
-    __LOG(LOG_NOTICE, "[%s][%s:%d] %s", CAP_LOG_KEY, _FILE_, __LINE__, __FUNCTION__);
+    __LOG(LOG_INFO, "[%s][%s:%d] %s", CAP_LOG_KEY, _FILE_, __LINE__, __FUNCTION__);
 
     return GST_FLOW_OK;
 }
 
-#include <openssl/md5.h>
 static GstPadProbeReturn queue_probe_callback(GstPad *pad, GstPadProbeInfo *info, gpointer userData)
 {
     CaptureData *arg = (CaptureData *)userData;
@@ -46,12 +125,12 @@ static GstPadProbeReturn queue_probe_callback(GstPad *pad, GstPadProbeInfo *info
 
     return GST_PAD_PROBE_OK;
 }
+#endif
 
 static GstFlowReturn on_new_sample_from_sink(GstElement *sink, gpointer userData)
 {
     GstSample *sample;
     GstBuffer *buffer;
-    GstMapInfo map;
     GstFlowReturn ret;
     CaptureData *info = (CaptureData *)userData;
 
@@ -220,6 +299,64 @@ static GstFlowReturn on_new_sample_to_file(GstElement *sink, gpointer userData)
     return GST_FLOW_OK;
 }
 
+static GstFlowReturn on_new_sample_jpeg_to_file(GstElement *sink, gpointer userData) 
+{
+    GstSample *sample;
+    CaptureData *info = (CaptureData *)userData;
+    gchar *path = NULL;
+    gchar *extention = NULL;
+
+    //g_print("%s\n", __FUNCTION__);
+    //__LOG(LOG_NOTICE, "[GST][%s:%d] %s", _FILE_, __LINE__, __FUNCTION__);
+
+    sample = gst_app_sink_pull_sample(GST_APP_SINK(sink));
+    if (!sample) {
+        //__LOG(LOG_CRIT, "[GST][%s:%d] sample cannot get from sink", _FILE_, __LINE__);
+        return GST_FLOW_ERROR;
+    }
+
+#if 1
+    if(info->captureCnt_ >= info->captureMaxCnt)
+    {
+        if(info->mode == 1)
+        {
+            info->captureCnt_ = 0;
+            __LOG(LOG_NOTICE, "[%s][%s:%d] capture cnt reset", CAP_LOG_KEY, _FILE_, __LINE__);
+        }
+        else
+        {
+            gst_sample_unref(sample);
+            return GST_FLOW_OK;
+        }
+    }
+#endif
+
+    long jpeg_size = 0;
+    unsigned char *jpeg_buf = compress_frame_to_jpeg(sample, &jpeg_size, info);
+    if (jpeg_buf && jpeg_size > 0) {
+        extention = g_strdup(cmdArg.cap_encoder_en ? "jpg" : "rgb");
+
+        path = g_strdup_printf("%s_%d.%s", info->filePath, info->captureCnt_++, extention);
+
+        FILE *fp = fopen(path, "wb");
+        if (fp) {
+            fwrite(jpeg_buf, 1, jpeg_size, fp);
+            fclose(fp);
+            __LOG(LOG_INFO, "[%s][%s:%d] Saved JPEG to %s (%ld bytes)", CAP_LOG_KEY, _FILE_, __LINE__, path, jpeg_size);
+        }
+        else {
+            __LOG(LOG_ERR, "[%s][%s:%d] Failed to open file %s for writing", CAP_LOG_KEY, _FILE_, __LINE__, path);
+        }
+        tjFree(jpeg_buf);
+        g_free(path);
+    }
+    else __LOG(LOG_ERR, "[%s][%s:%d] Failed jpeg_size : %ld", CAP_LOG_KEY, _FILE_, __LINE__, jpeg_size);
+
+    gst_sample_unref(sample);
+
+    return GST_FLOW_OK;
+}
+
 void CaptureBin::setAppsrc(GstElement *appsrc)
 {
     __LOG(LOG_NOTICE, "[%s][%s:%d] %s ch:%d", CAP_LOG_KEY, _FILE_, __LINE__, __FUNCTION__, captureData.ch);
@@ -266,11 +403,13 @@ CaptureBin::CaptureBin()
     captureData.captureMaxCnt = cmdArg.captureMaxCnt;
     captureData.mode = 0;
     captureData.debug = FALSE;
+    captureData.tjCompressor = NULL;
 }
 
 CaptureBin::~CaptureBin()
 {
     __LOG(LOG_INFO, "[%s][%s:%d] %s[%d]", CAP_LOG_KEY, _FILE_, __LINE__, __FUNCTION__, captureData.ch);
+    destroy_compressor(&captureData);
 }
 
 gint CaptureBin::startCapture(gint maxCnt)
@@ -380,7 +519,7 @@ gint CaptureBin::setFilePath(guint8 *prefix)
 
         captureData.filePath = g_strdup_printf("%s/%s/%s_%s-ch%d", cmdArg.mntDir, cmdArg.captureDir, cmdArg.ohtName, date_str, captureData.ch);
 
-        __LOG(LOG_INFO, "[%s][%s:%d] filePath : %s", CAP_LOG_KEY, _FILE_, __LINE__, captureData.filePath);
+        __LOG(LOG_DEBUG, "[%s][%s:%d] filePath : %s", CAP_LOG_KEY, _FILE_, __LINE__, captureData.filePath);
 
         g_date_time_unref(datetime);
         g_free(date_str);
@@ -388,7 +527,7 @@ gint CaptureBin::setFilePath(guint8 *prefix)
     else
     {
         captureData.filePath = g_strdup_printf("%s/%s/%s-ch%d", cmdArg.mntDir, cmdArg.captureDir, prefix, captureData.ch);
-        __LOG(LOG_INFO, "[%s][%s:%d] filePath : %s", CAP_LOG_KEY, _FILE_, __LINE__, captureData.filePath);
+        __LOG(LOG_DEBUG, "[%s][%s:%d] filePath : %s", CAP_LOG_KEY, _FILE_, __LINE__, captureData.filePath);
     }
 
     return 1;
@@ -460,13 +599,17 @@ gboolean CaptureBin::init(guint8 num, gboolean crop_en)
     }
 #else
     //ret = gst_element_link_many(be.queue, be.crop, be.convert, be.enc, be.queue2, be.sink, NULL);
-    //ret = gst_element_link(be.queue, be.queue_sink);
-    ret = gst_element_link_many(be.queue, be.queue_sink, NULL);
+    ret = gst_element_link(be.queue, be.queue_sink);
     if (!ret) {
         __LOG(LOG_CRIT, "[%s][%s:%d] capture queue_sink link err", CAP_LOG_KEY, _FILE_, __LINE__);
         return ret;
     }
-    ret = gst_element_link_many(be.queue_src, be.crop, be.imx_convert, be.capsfilter, be.convert, be.capsfilter2, be.queue2, be.enc, be.sink, NULL);
+
+    if(cmdArg.turbojpeg)
+        ret = gst_element_link_many(be.queue_src, be.crop, be.imx_convert, be.capsfilter, be.queue2, be.sink, NULL);
+    else
+        ret = gst_element_link_many(be.queue_src, be.crop, be.imx_convert, be.capsfilter, be.convert, be.capsfilter2, be.queue2, be.enc, be.sink, NULL);
+
 #endif
     if (!ret) {
         __LOG(LOG_CRIT, "[%s][%s:%d] capture queue_sink link err", CAP_LOG_KEY, _FILE_, __LINE__);
@@ -482,7 +625,7 @@ gboolean CaptureBin::init(guint8 num, gboolean crop_en)
                                 "format", G_TYPE_STRING, "RGBx",
                                 "width", G_TYPE_INT, cmdArg.width*2,
                                 "height", G_TYPE_INT, cmdArg.height,
-                                "framerate", GST_TYPE_FRACTION, captureData.fps, 1,
+                                //"framerate", GST_TYPE_FRACTION, captureData.fps, 1,
                                 NULL);
     g_object_set(be.queue_src, "caps", srccaps, NULL);
     gst_caps_unref(srccaps);
@@ -500,10 +643,10 @@ gboolean CaptureBin::init(guint8 num, gboolean crop_en)
     //g_signal_connect(be.queue_sink, "new-preroll", G_CALLBACK(new_preroll_handler), NULL );
 
     caps = gst_caps_new_simple("video/x-raw",
-                                //"format", G_TYPE_STRING, "RGB16",
+                                "format", G_TYPE_STRING, "RGBx",
                                 "width", G_TYPE_INT, cmdArg.width,
                                 "height", G_TYPE_INT, cmdArg.height,
-                                "framerate", GST_TYPE_FRACTION, captureData.fps, 1,
+                                //"framerate", GST_TYPE_FRACTION, captureData.fps, 1,
                                 NULL);
 
     g_object_set(be.capsfilter, "caps", caps, NULL);
@@ -513,11 +656,25 @@ gboolean CaptureBin::init(guint8 num, gboolean crop_en)
                                 "format", G_TYPE_STRING, "I420",
                                 "width", G_TYPE_INT, cmdArg.width,
                                 "height", G_TYPE_INT, cmdArg.height,
-                                "framerate", GST_TYPE_FRACTION, captureData.fps, 1,
+                                //"framerate", GST_TYPE_FRACTION, captureData.fps, 1,
                                 NULL);
 
     g_object_set(be.capsfilter2, "caps", caps, NULL);
     gst_caps_unref(caps);
+
+#if 0
+    GstCaps *templ = gst_pad_get_pad_template_caps(gst_element_get_static_pad(be.convert, "sink"));
+    caps = gst_caps_copy(templ);
+    gst_caps_set_simple(caps, "format", G_TYPE_STRING, "RGBx", NULL);
+    gst_caps_fixate(caps);
+    gst_caps_unref(caps);
+
+    GstCaps *temp2 = gst_pad_get_pad_template_caps(gst_element_get_static_pad(be.convert, "src"));
+    caps = gst_caps_copy(temp2);
+    gst_caps_set_simple(caps, "format", G_TYPE_STRING, "I420", NULL);
+    gst_caps_fixate(caps);
+    gst_caps_unref(caps);
+#endif
 
     if (captureData.ch % 2 == 0)
         g_object_set(be.crop, "top", 0, "bottom", 0, "left", cmdArg.width, "right", 0, NULL);
@@ -540,7 +697,14 @@ gboolean CaptureBin::init(guint8 num, gboolean crop_en)
     g_object_set(be.sink, "drop", TRUE, NULL);
     g_object_set(be.sink, "emit-signals", TRUE, "sync", TRUE, "async", FALSE, NULL);
     g_signal_connect(be.sink, "eos", G_CALLBACK(eos_callback), NULL);
-    g_signal_connect(be.sink, "new-sample", G_CALLBACK(on_new_sample_to_file), &captureData);
+    if(cmdArg.turbojpeg)
+    {
+        captureData.tjCompressor = tjInitCompress();
+        g_signal_connect(be.sink, "new-sample", G_CALLBACK(on_new_sample_jpeg_to_file), &captureData);
+    }
+    else
+        g_signal_connect(be.sink, "new-sample", G_CALLBACK(on_new_sample_to_file), &captureData);
+
     //g_signal_connect(be.sink, "new-preroll", G_CALLBACK(new_preroll_handler), NULL );
 
     staticPad = gst_element_get_static_pad(be.queue, "sink");
@@ -552,7 +716,7 @@ gboolean CaptureBin::init(guint8 num, gboolean crop_en)
         return ret;
     }
 
-    g_strdup_printf(captureData.filePath, "/mnt/sd_cam/capture/default-ch%d", captureData.ch);
+    //g_strdup_printf(captureData.filePath, "/mnt/sd_cam/capture/default-ch%d", captureData.ch);
 
     gst_object_unref(staticPad);
 

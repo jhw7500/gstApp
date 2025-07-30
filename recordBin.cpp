@@ -123,17 +123,30 @@ GstElement* RecordBin::getBinAppsrc()
 
 GstPad* RecordBin::getBinSrcPad()
 {
-    __LOG(LOG_INFO, "[GST][%s:%d] %s ch:%d", _FILE_, __LINE__, __FUNCTION__, ch);
+    if(srcPad == NULL)
+        __LOG(LOG_ERR, "[GST][%s:%d] %s ch:%d pad is null", _FILE_, __LINE__, __FUNCTION__, ch);
+    else
+        __LOG(LOG_INFO, "[GST][%s:%d] %s ch:%d", _FILE_, __LINE__, __FUNCTION__, ch);
     //return gst_element_get_static_pad(re.bin, g_strdup_printf("recordBin_src_ch%d", ch));
     return srcPad;
 }
 
 GstPad* RecordBin::getBinSinkPad()
 {
-    __LOG(LOG_INFO, "[GST][%s:%d] %s ch:%d", _FILE_, __LINE__, __FUNCTION__, ch);
+    if(sinkPad == NULL)
+        __LOG(LOG_ERR, "[GST][%s:%d] %s ch:%d pad is null", _FILE_, __LINE__, __FUNCTION__, ch);
+    else
+        __LOG(LOG_INFO, "[GST][%s:%d] %s ch:%d", _FILE_, __LINE__, __FUNCTION__, ch);
     //return gst_element_get_static_pad(re.bin, g_strdup_printf("recordBin_sink_ch%d", ch));
     return sinkPad;
 }
+
+void RecordBin::setDualBps(gboolean val)
+{
+    //__LOG(LOG_NOTICE, "[GST][%s:%d] %s ch:%d val:%d", _FILE_, __LINE__, __FUNCTION__, ch, val);
+    recordData.dual_bps = val;
+}
+
 
 void RecordBin::setOverlayText(gchar *text)
 {
@@ -303,6 +316,24 @@ gboolean RecordBin::removeBinToPipe(GstElement *pipe)
     return gst_bin_remove(GST_BIN(pipe), re.bin);
 }
 
+gboolean RecordBin::addBinRtspSrcPad(guint8 ch)
+{
+    __LOG(LOG_NOTICE, "[GST][%s:%d] %s[%d]", _FILE_, __LINE__, __FUNCTION__, ch);
+    srcRtspPad = gst_ghost_pad_new(g_strdup_printf("rtsp_pad_ch%d", ch), gst_element_get_request_pad(re.tee, "src_%u"));
+
+    return gst_element_add_pad(re.bin, srcRtspPad);
+}
+
+GstPad* RecordBin::getBinRtspSrcPad(guint8 ch)
+{
+    if(srcRtspPad == NULL)
+        __LOG(LOG_ERR, "[GST][%s:%d] %s ch:%d pad is null", _FILE_, __LINE__, __FUNCTION__, ch);
+    else
+        __LOG(LOG_INFO, "[GST][%s:%d] %s ch:%d", _FILE_, __LINE__, __FUNCTION__, ch);
+
+    return srcRtspPad;
+}
+
 RecordBin::RecordBin()
 {
     // 생성자 코드 추가
@@ -312,6 +343,7 @@ RecordBin::RecordBin()
     re.bin = NULL;
     recordData.appsrc = NULL;
     recordData.debug = FALSE;
+    recordData.dual_bps = TRUE;
 }
 
 // RecordBin 클래스의 소멸자 정의
@@ -341,12 +373,13 @@ gboolean RecordBin::init(guint8 num, gboolean crop_en)
     re.crop = gst_element_factory_make("videocrop", "crop");
     //re.overlay = gst_element_factory_make("textoverlay", "overlay");
     re.overlay = gst_element_factory_make("timeoverlay", "overlay");
+    re.tee = gst_element_factory_make("tee", "tee");
     re.appsink = gst_element_factory_make("appsink", "appsink");
     recordData.appSrcName = g_strdup_printf("record_appsrc%d", ch);
     re.appsrc = gst_element_factory_make("appsrc", recordData.appSrcName);
     recordData.appsrc = re.appsrc;
 
-    if (!re.bin || !re.queue || !re.queue2 || !re.parse || !re.enc || !re.rate || !re.convert || !re.capsfilter || !re.crop || !re.overlay || !re.appsink || !re.appsrc) {
+    if (!re.bin || !re.queue || !re.queue2 || !re.parse || !re.enc || !re.rate || !re.convert || !re.capsfilter || !re.crop || !re.overlay || !re.appsink || !re.appsrc || !re.tee) {
         __LOG(LOG_CRIT, "[GST][%s:%d] record element create error", _FILE_, __LINE__);
         return ret;
     }
@@ -387,7 +420,7 @@ gboolean RecordBin::init(guint8 num, gboolean crop_en)
 
 #if 1
     //gst_bin_add_many(GST_BIN(re.bin), re.appsrc, re.sink, NULL);
-    gst_bin_add_many(GST_BIN(re.bin), re.queue, re.rate, re.convert, re.capsfilter, re.enc, re.parse, re.queue2, re.crop, re.overlay, NULL);
+    gst_bin_add_many(GST_BIN(re.bin), re.queue, re.rate, re.convert, re.capsfilter, re.enc, re.parse, re.queue2, re.crop, re.overlay, re.tee, NULL);
     ret = gst_bin_add(GST_BIN(pipeline), re.bin);
     if(!ret) {
         __LOG(LOG_CRIT, "[GST][%s:%d] record bin add err", _FILE_, __LINE__);
@@ -397,7 +430,16 @@ gboolean RecordBin::init(guint8 num, gboolean crop_en)
 #ifdef CHANNEL_EACH_CROP
     if(crop_en && cmdArg.overlay_en) ret = gst_element_link_many(re.queue, re.crop, re.overlay, re.convert, re.rate, re.capsfilter, re.enc, re.parse, re.queue2, NULL);
     else if(cmdArg.overlay_en) ret = gst_element_link_many(re.queue, re.overlay, re.convert, re.rate, re.capsfilter, re.enc, re.parse, re.queue2, NULL);
-    else if(crop_en) ret = gst_element_link_many(re.queue, re.crop, re.convert, re.rate, re.capsfilter, re.enc, re.parse, re.queue2, NULL);
+    else if(crop_en) {
+        //ret = gst_element_link_many(re.queue, re.crop, re.convert, re.rate, re.capsfilter, re.enc, re.parse, re.tee, NULL);
+        ret = gst_element_link_many(re.queue, re.crop, re.convert, re.rate, re.capsfilter, re.enc, re.parse, re.queue2, NULL);
+#if 0
+        if(recordData.dual_bps == TRUE)
+            ret = gst_element_link_many(re.queue, re.crop, re.convert, re.rate, re.capsfilter, re.enc, re.parse, re.queue2, NULL);
+        else
+            ret = gst_element_link_many(re.queue, re.crop, re.convert, re.rate, re.capsfilter, re.enc, re.parse, re.tee, NULL);
+#endif
+    }
     //else if(crop_en) ret = gst_element_link_many(re.queue, re.convert, re.rate, re.capsfilter, re.enc, re.parse, re.queue2, NULL);
     else ret = gst_element_link_many(re.queue, re.rate, re.capsfilter, re.enc, re.parse, re.queue2, NULL);
     //if(cmdArg.mode) ret = gst_element_link_many(re.queue, re.crop, re.convert, re.enc, re.parse, re.queue2, NULL);
@@ -478,12 +520,26 @@ gboolean RecordBin::init(guint8 num, gboolean crop_en)
 #endif
 
 #if 1
-    srcPad = gst_ghost_pad_new(g_strdup_printf("recordBin_src_ch%d", ch), gst_element_get_static_pad(re.queue2, "src"));
+
+#if 1
+    //if(gst_pad_link(gst_element_get_request_pad(re.tee, "src_record%u"), gst_element_get_static_pad(re.queue2, "sink")) != GST_PAD_LINK_OK)    //if(!gst_element_link(re.parse, re.sink))
+    //{
+    //    __LOG(LOG_CRIT, "[GST][%s:%d] record link error in pipeline", _FILE_, __LINE__);
+    //    return -1;
+    //}
+#endif
+    srcPad = gst_ghost_pad_new(g_strdup_printf("queue_pad_ch%d", ch), gst_element_get_static_pad(re.queue2, "src"));
     ret = gst_element_add_pad(re.bin, srcPad);
     if(!ret) {
         __LOG(LOG_CRIT, "[GST][%s:%d] record bin add err", _FILE_, __LINE__);
         return ret;
     }
+    //srcPad = gst_ghost_pad_new(g_strdup_printf("record_pad_ch%d", ch), gst_element_get_request_pad(re.tee, "src_%u"));
+    //ret = gst_element_add_pad(re.bin, srcPad);
+    //if(!ret) {
+    //    __LOG(LOG_CRIT, "[GST][%s:%d] record bin add err", _FILE_, __LINE__);
+    //    return ret;
+    //}
 #else
     re.sink = gst_element_factory_make("splitmuxsink", "splitmuxsink");
     g_object_set(re.sink, "max-size-time", 60*GST_SECOND, NULL);

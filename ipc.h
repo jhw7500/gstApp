@@ -28,6 +28,8 @@ class CIPCInsance
 {
 public :
 	static CIPCInsance* getInstance() ;
+    CIPCInsance();
+    ~CIPCInsance();
 
 	int init(ThreadArgs *args) ;
 	int destroy() ;

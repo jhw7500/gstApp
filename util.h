@@ -130,7 +130,6 @@ typedef struct _CmdArg
     gboolean vflip[MAX_CHANNEL];
     gboolean cam_en[MAX_CHANNEL];
     gint fps[MAX_MODE][MAX_CHANNEL];
-    gint bps[MAX_MODE][MAX_CHANNEL];
     gboolean stream_en[MAX_MODE];
     gint gop[MAX_MODE][MAX_CHANNEL];
     gint log_level;
@@ -172,6 +171,8 @@ typedef struct _CmdArg
     gint cap_delay;
     gint cap_timeout;
     const gchar *muxer;
+    gboolean turbojpeg;
+    gboolean dual_enc;
 } CmdArg;
 
 #pragma pack(pop)

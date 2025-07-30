@@ -34,9 +34,9 @@ CFLAGS+=$(shell pkg-config --cflags $(LIBS))
 CFLAGS+=-I/opt/desktop/gitlab/gst-jhw/gstapp/gstapp/app/rnnoise/include
 ALL_CFLAGS=-I$(IDIR) $(CFLAGS)
 
-ALLFLAGS=$(ALL_CFLAGS) $(ALL_LDFLAGS)
+ALLFLAGS=$(ALL_CFLAGS) $(ALL_LDFLAGS) -lturbojpeg
 #OBJS = videoBin.o recordBin.o muxSinkBin.o rtspServerBin.o audioBin.o muxBin.o
-OBJS = videoBin.o recordBin.o muxSinkBin.o rtspServerBin.o testBin.o captureBin.o util.o parser.o aes.o tcpServer.o audioBin.o ipc.o
+OBJS = videoBin.o recordBin.o muxSinkBin.o rtspServerBin.o testBin.o captureBin.o util.o parser.o aes.o tcpServer.o audioBin.o ipc.o encoderBin.o
 
 gstApp : $(OBJS) main.cpp
 	$(CXX) -o $@ $^ $(ALLFLAGS)
@@ -81,6 +81,9 @@ audioBin.o : audioBin.cpp audioBin.h
 
 ipc.o : ipc.cpp ipc.h
 	$(CXX) $(ALLFLAGS) -c ipc.cpp
+
+encoderBin.o : encoderBin.cpp encoderBin.h
+	$(CXX) $(ALLFLAGS) -c encoderBin.cpp
 
 #json_c.o : json_c.cpp json_c.h
 #	$(CXX) $(ALLFLAGS) -c json_c.cpp
