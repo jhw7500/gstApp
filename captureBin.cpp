@@ -14,7 +14,6 @@
 #include "tcpServer.h"
 #include <gst/app/gstappsink.h>
 #include <gst/app/gstappsrc.h>
-
 #include <gst/app/gstappsink.h>
 #include <gst/video/video.h>
 #include <stdio.h>

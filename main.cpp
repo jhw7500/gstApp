@@ -444,7 +444,13 @@ static void splitCheck(gpointer data, guint8 startSec)
     //target_min += cmdArg.duration;
     //if(target_min >= 60) target_min -= 60;
     __LOG(LOG_NOTICE, "[GST][%s:%d] next split time : %02dm %02ds", _FILE_, __LINE__, target_min, startSec);
-
+#if 0
+    if ((access("/tmp/sd_mount_flag", F_OK) != 0) && g_strcmp0(cmdArg.mntDir, FALLBACKDIR) != 0)
+    {
+        cmdArg.mntDir = FALLBACKDIR;
+        __LOG(LOG_ERR, "[GST][%s:%d] sd card no mount...file dir fallback : %s", _FILE_, __LINE__, FALLBACKDIR);
+    }
+#endif
     if(datetime) g_date_time_unref(datetime);
 
     return;
@@ -1022,6 +1028,12 @@ gint main(gint argc, gchar *argv[])
 
     __LOG(LOG_NOTICE, "[GST][%s:%d] delay %d sec for play", __FILE__, __LINE__, cmdArg.play_delay);
     sleep(cmdArg.play_delay);
+
+    if (access("/tmp/sd_mount_flag", F_OK) != 0)
+    {
+        cmdArg.mntDir = FALLBACKDIR;
+        __LOG(LOG_NOTICE, "[GST][%s:%d] sd card no mount...file dir fallback : %s", _FILE_, __LINE__, FALLBACKDIR);
+    }
 
 	for(i = 0; i < MAX_VIDEO_SRC; ++i)
 	{

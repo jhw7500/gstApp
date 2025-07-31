@@ -33,6 +33,8 @@
 #define LEAKY_UPSTREAM      1
 #define LEAKY_DOWNSTREAM    2
 
+#define FALLBACKDIR     "/dev/shm"
+
 typedef enum
 {
     CSI_1 = 0,
