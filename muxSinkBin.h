@@ -22,6 +22,7 @@ typedef struct _MuxSinkElement
     GstElement *mp4mux;
     GstElement *tsmux;
     GstElement *queue;
+    GstElement *parse;
 } MuxSinkElement;
 
 typedef struct _MuxSinkData

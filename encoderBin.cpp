@@ -258,7 +258,6 @@ gboolean EncoderBin::init(guint8 num, gboolean crop_en)
 
     re.bin = gst_bin_new(g_strdup_printf("encoderBin%d", ch));
     re.queue = gst_element_factory_make(QUEUE_TYPE, "queue");
-    re.parse = gst_element_factory_make("h264parse", "h264parse");
     re.capsfilter = gst_element_factory_make("capsfilter", "capsfilter");
     re.enc = gst_element_factory_make("vpuenc_h264", "vpuenc_h264");
     re.rate = gst_element_factory_make("videorate", "videorate");
@@ -268,14 +267,14 @@ gboolean EncoderBin::init(guint8 num, gboolean crop_en)
     re.overlay = gst_element_factory_make("timeoverlay", "overlay");
     re.tee = gst_element_factory_make("tee", "tee");
 
-    if (!re.bin || !re.queue || !re.parse || !re.enc || !re.rate || !re.convert || !re.capsfilter || !re.crop || !re.overlay || !re.tee) {
+    if (!re.bin || !re.queue || !re.enc || !re.rate || !re.convert || !re.capsfilter || !re.crop || !re.overlay || !re.tee) {
         __LOG(LOG_CRIT, "[GST][%s:%d] record element create error", _FILE_, __LINE__);
         return ret;
     }
 
 #if 1
     //gst_bin_add_many(GST_BIN(re.bin), re.appsrc, re.sink, NULL);
-    gst_bin_add_many(GST_BIN(re.bin), re.queue, re.rate, re.convert, re.capsfilter, re.enc, re.parse, re.crop, re.overlay, re.tee, NULL);
+    gst_bin_add_many(GST_BIN(re.bin), re.queue, re.rate, re.convert, re.capsfilter, re.enc, re.crop, re.overlay, re.tee, NULL);
     ret = gst_bin_add(GST_BIN(pipeline), re.bin);
     if(!ret) {
         __LOG(LOG_CRIT, "[GST][%s:%d] record bin add err", _FILE_, __LINE__);
@@ -283,14 +282,14 @@ gboolean EncoderBin::init(guint8 num, gboolean crop_en)
     }
 
 #ifdef CHANNEL_EACH_CROP
-    if(crop_en && cmdArg.overlay_en) ret = gst_element_link_many(re.queue, re.crop, re.overlay, re.convert, re.rate, re.capsfilter, re.enc, re.parse, re.tee, NULL);
-    else if(cmdArg.overlay_en) ret = gst_element_link_many(re.queue, re.overlay, re.convert, re.rate, re.capsfilter, re.enc, re.parse, re.tee, NULL);
+    if(crop_en && cmdArg.overlay_en) ret = gst_element_link_many(re.queue, re.crop, re.overlay, re.convert, re.rate, re.capsfilter, re.enc, re.tee, NULL);
+    else if(cmdArg.overlay_en) ret = gst_element_link_many(re.queue, re.overlay, re.convert, re.rate, re.capsfilter, re.enc, re.tee, NULL);
     else if(crop_en) {
         //ret = gst_element_link_many(re.queue, re.crop, re.convert, re.rate, re.capsfilter, re.enc, re.parse, re.tee, NULL);
-        ret = gst_element_link_many(re.queue, re.crop, re.convert, re.rate, re.capsfilter, re.enc, re.parse, re.tee, NULL);
+        ret = gst_element_link_many(re.queue, re.crop, re.convert, re.rate, re.capsfilter, re.enc, re.tee, NULL);
     }
     //else if(crop_en) ret = gst_element_link_many(re.queue, re.convert, re.rate, re.capsfilter, re.enc, re.parse, re.queue2, NULL);
-    else ret = gst_element_link_many(re.queue, re.rate, re.capsfilter, re.enc, re.parse, re.tee, NULL);
+    else ret = gst_element_link_many(re.queue, re.rate, re.capsfilter, re.enc, re.tee, NULL);
     //if(cmdArg.mode) ret = gst_element_link_many(re.queue, re.crop, re.convert, re.enc, re.parse, re.queue2, NULL);
 #else
     ret = gst_element_link_many(re.queue, re.rate, re.capsfilter, re.enc, re.parse, re.queue2, NULL);

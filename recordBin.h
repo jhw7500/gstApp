@@ -22,7 +22,6 @@ typedef struct _RecordElement
     GstElement *queue;
     GstElement *queue2;
     GstElement *convert;
-    GstElement *parse;
     GstElement *bin;
     GstElement *bin2;
     GstElement *capsfilter;

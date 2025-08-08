@@ -21,7 +21,6 @@ typedef struct _EncElement
     GstElement *enc;
     GstElement *queue;
     GstElement *convert;
-    GstElement *parse;
     GstElement *bin;
     GstElement *capsfilter;
     GstElement *crop;

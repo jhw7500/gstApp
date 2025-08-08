@@ -377,8 +377,7 @@ static void splitCheck(gpointer data, guint8 startSec)
     {
         for(i=0; i<MAX_CHANNEL; i++)
         {
-            //if(!(cmdArg.ch_enable & (0x1 << i))) continue;
-            if(!muxSinkBin[i].getBinVideoSinkPad()) continue;
+            if(!cmdArg.cam_en[i]) continue;
             if(muxSinkBin[i].getStartFlag() == 0) { g_date_time_unref(datetime); return; }
         }
 
@@ -403,15 +402,16 @@ static void splitCheck(gpointer data, guint8 startSec)
 
     for (i = 0; i < MAX_CHANNEL; i++)
     {
-        if (muxSinkBin[i].getBinVideoSinkPad())
-        {
-            gint splitMsec = muxSinkBin[i].getSplitMsec();
-            __LOG(LOG_INFO, "[GST][%s:%d] splitMsec[%d] : %d", _FILE_, __LINE__, i, splitMsec);
-            if (splitMsec > splitMax) splitMax = splitMsec;
-            if (splitMsec < splitMin) splitMin = splitMsec;
+        if(!cmdArg.cam_en[i]) continue;
 
-            muxSinkBin[i].setSplitMsec(DEFAULT_SPLIT_MAX_MSEC);
-        }
+        gint splitMsec = muxSinkBin[i].getSplitMsec();
+        __LOG(LOG_INFO, "[GST][%s:%d] splitMsec[%d] : %d", _FILE_, __LINE__, i, splitMsec);
+        if (splitMsec > splitMax)
+            splitMax = splitMsec;
+        if (splitMsec < splitMin)
+            splitMin = splitMsec;
+
+        muxSinkBin[i].setSplitMsec(DEFAULT_SPLIT_MAX_MSEC);
     }
     __LOG(LOG_INFO, "[GST][%s:%d] splitMax : %d, splitMin : %d", _FILE_, __LINE__, splitMax, splitMin);
 
@@ -434,7 +434,7 @@ static void splitCheck(gpointer data, guint8 startSec)
 
             __LOG(LOG_NOTICE, "[GST][%s:%d] split now", _FILE_, __LINE__);
             for (i = 0; i < MAX_CHANNEL; i++)
-                if (muxSinkBin[i].getBinVideoSinkPad())
+                if (cmdArg.cam_en[i])
                     muxSinkBin[i].splitNow(NULL, FALSE);
         }
     } while(0);
@@ -852,7 +852,7 @@ gint main(gint argc, gchar *argv[])
                 goto main_end;
             }
 
-            if(!muxSinkBin[i].addBinVideoSinkPad())
+            if(!muxSinkBin[i].addBinQueuePad())
             {
                 __LOG(LOG_CRIT, "[GST][%s:%d] ch%d record sink pad add err", _FILE_, __LINE__, i);
                 goto main_end;
@@ -878,7 +878,7 @@ gint main(gint argc, gchar *argv[])
                     goto main_end;
                 }
 
-                if(gst_pad_link(recordBin[i].getBinSrcPad(), muxSinkBin[i].getBinVideoSinkPad()) != GST_PAD_LINK_OK)
+                if(gst_pad_link(recordBin[i].getBinSrcPad(), muxSinkBin[i].getBinQueuePad()) != GST_PAD_LINK_OK)
                 {
                     __LOG(LOG_CRIT, "[GST][%s:%d] ch%d record sink pad link err", _FILE_, __LINE__, i);
                     goto main_end;
@@ -892,7 +892,7 @@ gint main(gint argc, gchar *argv[])
                     goto main_end;
                 }
 
-                if (gst_pad_link(encoderBin[i].getBinRecSrcPad(i), muxSinkBin[i].getBinVideoSinkPad()) != GST_PAD_LINK_OK)
+                if (gst_pad_link(encoderBin[i].getBinRecSrcPad(i), muxSinkBin[i].getBinQueuePad()) != GST_PAD_LINK_OK)
                 {
                     __LOG(LOG_CRIT, "[GST][%s:%d] ch%d record sink pad link err", _FILE_, __LINE__, i);
                     goto main_end;
