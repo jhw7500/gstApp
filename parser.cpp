@@ -67,6 +67,7 @@ void ParserClass::init_arg(gchar *argv)
     arg.cap_delay = 0;
     arg.cap_timeout = 200;
     arg.turbojpeg = FALSE;
+    arg.padding = TRUE;
     arg.tcp_en = FALSE;
     arg.tcp_port = DEFAULT_TCP_PORT;
 
@@ -317,6 +318,7 @@ gint ParserClass::json_parser(const gchar *path, const gchar *header)
         json_object_get_value(sobj, "delay", &arg.cap_delay);
         json_object_get_value(sobj, "timeout", &arg.cap_timeout);
         json_object_get_value(sobj, "turbojpeg", &arg.turbojpeg);
+        json_object_get_value(sobj, "padding", &arg.padding);
 
         for(guint8 i=0; i<MAX_CHANNEL; i++)
         {
@@ -393,13 +395,14 @@ gint ParserClass::arg_parser(int *argc, char **argv[])
         {"rtsp", 'E', 0, G_OPTION_ARG_INT, &arg.stream_en[STREAM_RTSP], "rtsp streaming enable, default(1)", "INT"},
         {"cap", 'a', 0, G_OPTION_ARG_INT, &arg.stream_en[STREAM_CAP], "video capturing enable, default(0)", "INT"},
         {"audio", 's', 0, G_OPTION_ARG_INT, &arg.audio_en, "audio recording enable, default(FALSE)", "INT"},
+        {"turbo", 'j', 0, G_OPTION_ARG_INT, &arg.turbojpeg, "turbojpeg enable, default(FALSE)", "INT"},
+        {"padding", 'J', 0, G_OPTION_ARG_INT, &arg.padding, "padding enable, default(TRUE)", "INT"},
         {"capenc", 'N', 0, G_OPTION_ARG_INT, &arg.cap_encoder_en, "video capture encoder(jpeg) enable, default(FALSE)", "INT"},
         {"capalways", 'y', 0, G_OPTION_ARG_INT, &arg.cap_always, "video capture bin always add, default(FALSE)", "INT"},
         {"capres", 'R', 0, G_OPTION_ARG_INT, &arg.cap_res_en, "video capture response enable, default(FALSE)", "INT"},
         {"capdelay", 'A', 0, G_OPTION_ARG_INT, &arg.cap_delay, "video capture delay(msec), default(0)", "INT"},
         {"capdir", 'I', 0, G_OPTION_ARG_STRING, &arg.captureDir, "save capture file to directory, default capture", "STRING"},
         {"etcp", 'C', 0, G_OPTION_ARG_INT, &arg.tcp_en, "tcp server enable, default(FALSE)", "INT"},
-        {"etcp", 'j', 0, G_OPTION_ARG_INT, &arg.turbojpeg, "turbojpeg enable, default(FALSE)", "INT"},
         {"ein", 'i', 0, G_OPTION_ARG_INT, &arg.input_en, "terminal input enable, default(FALSE)", "INT"},
         {"rport", 'P', 0, G_OPTION_ARG_STRING, &arg.rtsp_port, "rtsp port number, default(8554)", "STRING"},
         {"id", 'u', 0, G_OPTION_ARG_STRING, &arg.rtsp_id, "rtsp id, default(user)", "STRING"},
@@ -575,8 +578,8 @@ gint ParserClass::check_arg()
 
         __LOG(LOG_NOTICE, "[%s][%s:%d] capture ch0 fps:%d, ch1 fps:%d, ch2 fps:%d, ch3 fps:%d", LOG_KEY, _FILE_, __LINE__, \
                             arg.fps[STREAM_CAP][0], arg.fps[STREAM_CAP][1], arg.fps[STREAM_CAP][2], arg.fps[STREAM_CAP][3]);  
-        __LOG(LOG_NOTICE, "[%s][%s:%d] capEncEn:%d capAlways:%d, MaxCnt:%d, res_en:%d, capDir:%s, delay:%d, timeout:%d, turbo:%d", \
-                            LOG_KEY, _FILE_, __LINE__, arg.cap_encoder_en, arg.cap_always, arg.captureMaxCnt, arg.cap_res_en, arg.captureDir, arg.cap_delay, arg.cap_timeout, arg.turbojpeg);
+        __LOG(LOG_NOTICE, "[%s][%s:%d] capEncEn:%d capAlways:%d, MaxCnt:%d, res_en:%d, capDir:%s, delay:%d, timeout:%d, turbo:%d, padding:%d", \
+                            LOG_KEY, _FILE_, __LINE__, arg.cap_encoder_en, arg.cap_always, arg.captureMaxCnt, arg.cap_res_en, arg.captureDir, arg.cap_delay, arg.cap_timeout, arg.turbojpeg, arg.padding);
     }
 
     gint total_fps = 0;

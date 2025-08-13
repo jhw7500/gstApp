@@ -175,6 +175,7 @@ typedef struct _CmdArg
     const gchar *muxer;
     gboolean turbojpeg;
     gboolean dual_enc;
+    gboolean padding;
 } CmdArg;
 
 #pragma pack(pop)
