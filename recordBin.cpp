@@ -478,8 +478,8 @@ gboolean RecordBin::init(guint8 num, gboolean crop_en)
     //g_object_set(re.enc, "quant", 35, NULL);
     //g_object_set(re.parse, "config-interval", -1, NULL);
     //g_object_set(re.rate, "max-rate", MAIN_FPS, "drop-only", FALSE, NULL);
-    g_object_set(re.queue, "max-size-time", GST_SECOND, "max-size-buffers", cmdArg.fps[STREAM_REC][ch], "leaky", LEAKY_DOWNSTREAM, NULL);
-    g_object_set(re.queue2, "max-size-time", GST_SECOND, "max-size-buffers", cmdArg.fps[STREAM_REC][ch], "leaky", LEAKY_DOWNSTREAM, NULL);
+    g_object_set(re.queue, "max-size-time", GST_SECOND, "leaky", LEAKY_DOWNSTREAM, NULL);
+    g_object_set(re.queue2, "max-size-time", GST_SECOND, "leaky", LEAKY_DOWNSTREAM, NULL);
     //g_object_set(re.convert, "videocrop-meta-enable", TRUE, NULL);
     //g_object_set(re.enc, "bitrate", cmdArg.rtsp_bitrate, NULL);
 

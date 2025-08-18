@@ -905,18 +905,6 @@ gboolean RtspServerBin::init(guint8 ch, gboolean crop_en)
     //if(ch==1) g_object_set(re.convert, "rotation", 1, NULL);
     //if(ch==3) g_object_set(re.compositor, "rotate", 1, NULL);
     //if(ch==3) g_object_set(re.videoflip, "video-direction", 1, NULL);
-#if 0
-    if(ch==1)
-    {
-        
-        caps = gst_caps_new_simple("video/x-raw",
-                                    "width", G_TYPE_INT, cmdArg.height,
-                                    "height", G_TYPE_INT, cmdArg.width,
-                                    NULL);
-        g_object_set(re.capsfilter2, "caps", caps, NULL);
-        gst_caps_unref(caps);
-    }
-#endif
 
     if (rtspServerData.ch % 2 == 0)
         g_object_set(re.crop, "top", 0, "bottom", 0, "left", cmdArg.width, "right", 0, NULL);
@@ -932,8 +920,8 @@ gboolean RtspServerBin::init(guint8 ch, gboolean crop_en)
 
     g_object_set(re.enc, "bitrate", cmdArg.camConfig[ch].bps[STREAM_RTSP], NULL);
     g_object_set(re.enc, "gop-size", cmdArg.camConfig[ch].gop[STREAM_RTSP], NULL);
-    //g_object_set(re.queue, "max-size-time", GST_SECOND, "max-size-buffers", cmdArg.fps[STREAM_RTSP][ch], "leaky", LEAKY_DOWNSTREAM, NULL);
-    g_object_set(re.queue2, "max-size-time", GST_SECOND, "max-size-buffers", cmdArg.fps[STREAM_RTSP][ch], "leaky", LEAKY_DOWNSTREAM, NULL);
+    g_object_set(re.queue, "max-size-time", GST_SECOND/2, "leaky", LEAKY_DOWNSTREAM, NULL);
+    g_object_set(re.queue2, "max-size-time", GST_SECOND/2, "leaky", LEAKY_DOWNSTREAM, NULL);
     //g_object_set(re.capsfilter, "max-size-time", 5*GST_SECOND, "max-size-buffers", 60, "leaky", 1, NULL);
     g_object_set(re.sink, "max-buffers", cmdArg.fps[STREAM_RTSP][ch], NULL);
     g_object_set(re.sink, "drop", TRUE, NULL);
@@ -960,7 +948,7 @@ gboolean RtspServerBin::init(guint8 ch, gboolean crop_en)
     rtspServerData.appSrcName = g_strdup_printf("%s%d", "rtsp_appsrc", ch);
 
     //gchar *launch_str = g_strdup_printf("( appsrc name=%s ! queue max-size-buffers=60 leaky=2 ! vpuenc_h264 bitrate=1024 ! h264parse config-interval=-1 ! rtph264pay name=pay0 config-interval=-1 )", rtspServerData.appSrcName);
-    gchar *launch_str = g_strdup_printf("( appsrc name=%s do-timestamp=1 is-live=1 format=3 ! queue max-size-buffers=%d leaky=2 ! h264parse ! rtph264pay name=pay0 config-interval=-1 )", rtspServerData.appSrcName, cmdArg.fps[STREAM_RTSP][ch]);
+    gchar *launch_str = g_strdup_printf("( appsrc name=%s do-timestamp=1 is-live=1 format=3 ! queue max-size-buffers=%d leaky=2 ! h264parse ! rtph264pay name=pay0 config-interval=-1 )", rtspServerData.appSrcName, cmdArg.fps[STREAM_RTSP][ch]/2);
     //gchar *launch_str = g_strdup_printf("( appsrc name=%s do-timestamp=1 is-live=1 block=true ! queue max-size-buffers=5 leaky=2 min-threshold-time=500000000 ! h264parse ! rtph264pay name=pay0 config-interval=0 )", rtspServerData.appSrcName);
 
     gst_rtsp_media_factory_set_launch(factory, launch_str);

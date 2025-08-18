@@ -79,8 +79,8 @@ gboolean AudioBin::init()
     //g_object_set(be.enc, "bitrate", 128, NULL);
     //g_object_set(be.jitter, "sleep-time", 1000, NULL);
     //g_object_set(be.jitter, "print-latency", TRUE, NULL);
-    g_object_set(be.queue, "max-size-time", GST_SECOND, "max-size-buffers", 0, "leaky", LEAKY_DOWNSTREAM, NULL);
-    g_object_set(be.queue2, "max-size-time", GST_SECOND, "max-size-buffers", 0, "leaky", LEAKY_DOWNSTREAM, NULL);
+    g_object_set(be.queue, "max-size-time", GST_SECOND/2, "leaky", LEAKY_DOWNSTREAM, NULL);
+    g_object_set(be.queue2, "max-size-time", GST_SECOND/2, "leaky", LEAKY_DOWNSTREAM, NULL);
 
     audio_caps = gst_caps_new_simple("audio/x-raw",
                                 "format", G_TYPE_STRING, "S24LE",

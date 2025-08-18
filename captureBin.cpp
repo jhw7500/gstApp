@@ -19,6 +19,8 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <openssl/md5.h>
+#include <unistd.h>
+#include <fcntl.h>
 
 static gboolean init_compressor(CaptureData *info) {
     if (!info->tjCompressor) {
@@ -91,6 +93,34 @@ unsigned char *compress_frame_to_jpeg(GstSample *sample, long *jpeg_size, Captur
     }
 
     return jpeg_buf;
+}
+
+static inline void tiny_sleep_ns(long ns) {
+    struct timespec ts; ts.tv_sec = ns / 1000000000L; ts.tv_nsec = ns % 1000000000L;
+    nanosleep(&ts, NULL);
+}
+
+static ssize_t write_all_with_retry(int fd, const void *buf, size_t len,
+                                    int max_retries /* e.g., 4 */) {
+    const unsigned char *p = (const unsigned char *)buf;
+    size_t left = len;
+    int attempt = 0;
+    while (left > 0) {
+        ssize_t wr = write(fd, p, left);
+        if (wr > 0) { p += wr; left -= (size_t)wr; continue; }
+
+        // wr <= 0
+        if (wr < 0 && errno == EINTR) continue; // 즉시 재시도
+
+        // 일시적 오류(네트워크/파이프 등) → 짧은 백오프 후 재시도
+        if (wr < 0 && (errno == EAGAIN || errno == EWOULDBLOCK ||
+                       errno == ETIMEDOUT /* 가능성 */)) {
+            if (attempt++ < max_retries) { tiny_sleep_ns( (1L<<attempt) * 1000000L ); continue; } // 1/2/4/8 ms
+        }
+        // 재시도 무의미한 에러
+        return -1;
+    }
+    return (ssize_t)len;
 }
 
 static void eos_callback(GstAppSink *appsink, gpointer user_data) 
@@ -303,18 +333,21 @@ static GstFlowReturn on_new_sample_to_file(GstElement *sink, gpointer userData)
 
 static GstFlowReturn on_new_sample_to_file(GstElement *sink, gpointer userData) 
 {
-    GstSample *sample;
+    GstSample *sample = NULL;
     CaptureData *info = (CaptureData *)userData;
     gchar *path = NULL;
     gchar *extention = NULL;
+    GstBuffer *buffer = NULL;
+    FILE *fp = NULL;
+    GstMapInfo map;
 
     //g_print("%s\n", __FUNCTION__);
     //__LOG(LOG_NOTICE, "[GST][%s:%d] %s", _FILE_, __LINE__, __FUNCTION__);
 
     sample = gst_app_sink_pull_sample(GST_APP_SINK(sink));
-    if (!sample) {
+    if(!sample) {
         //__LOG(LOG_CRIT, "[GST][%s:%d] sample cannot get from sink", _FILE_, __LINE__);
-        return GST_FLOW_ERROR;
+        goto flow_err;
     }
 
 #if 1
@@ -326,10 +359,7 @@ static GstFlowReturn on_new_sample_to_file(GstElement *sink, gpointer userData)
             __LOG(LOG_NOTICE, "[%s][%s:%d] ch%d capture cnt reset(tofile)", CAP_LOG_KEY, _FILE_, __LINE__, info->ch);
         }
         else
-        {
-            gst_sample_unref(sample);
-            return GST_FLOW_OK;
-        }
+            goto flow_ok;
     }
 #endif
     
@@ -339,95 +369,88 @@ static GstFlowReturn on_new_sample_to_file(GstElement *sink, gpointer userData)
         {
             long jpeg_size = 0;
             unsigned char *jpeg_buf = compress_frame_to_jpeg(sample, &jpeg_size, info);
-            if (jpeg_buf && jpeg_size > 0) {
-                path = g_strdup_printf("%s_%d.%s", info->filePath, info->captureCnt_++, "jpg");
-                FILE *fp = fopen(path, "wb");
-                if (fp) {
+            if(jpeg_buf && jpeg_size > 0) {
+                path = g_strdup_printf("%s_%d.%s", info->filePath, info->captureCnt_, "jpg");
+                fp = fopen(path, "wb");
+                if(fp) {
                     fwrite(jpeg_buf, 1, jpeg_size, fp);
                     fclose(fp);
                     //__LOG(LOG_INFO, "[%s][%s:%d] ch%d Saved JPEG to %s (%ld bytes)", CAP_LOG_KEY, _FILE_, __LINE__, info->ch, path, jpeg_size);
                 }
-                else {
+                else{
                     __LOG(LOG_ERR, "[%s][%s:%d] ch%d Failed to open file %s for writing", CAP_LOG_KEY, _FILE_, __LINE__, info->ch, path);
                 }
                 tjFree(jpeg_buf);
             }
-            else 
+            else{
                 __LOG(LOG_ERR, "[%s][%s:%d] ch%d Failed jpeg_size : %ld", CAP_LOG_KEY, _FILE_, __LINE__, info->ch, jpeg_size);
+                goto flow_err;
+            }
         }
         else
         {
-            GstMapInfo map;
-            GstBuffer *buffer = gst_sample_get_buffer(sample);
+            extention = g_strdup(cmdArg.cap_encoder_en ? "jpg" : "rgb");
+            path = g_strdup_printf("%s_%d.%s", info->filePath, info->captureCnt_, extention);
 
-            if (!buffer) {
-                __LOG(LOG_ERR, "[%s][%s:%d] ch%d buffer cannot get from sample", CAP_LOG_KEY, _FILE_, __LINE__, info->ch);
-                gst_sample_unref(sample);
-                return GST_FLOW_ERROR;
-            }
-
-            if (!gst_buffer_map(buffer, &map, GST_MAP_READ)) {
-                //g_printerr("Failed to map buffer\n");
-                __LOG(LOG_ERR, "[%s][%s:%d] ch%d Failed to map buffer", CAP_LOG_KEY, _FILE_, __LINE__, info->ch);
-                gst_sample_unref(sample);
-                return GST_FLOW_ERROR;
-            }
-
-            if(cmdArg.cap_encoder_en) extention = g_strdup_printf("%s", "jpg");
-            else extention = g_strdup_printf("%s", "rgb");
-
-            path = g_strdup_printf("%s_%d.%s", info->filePath, info->captureCnt_++, extention);
-
-            FILE *fp = fopen(path, "wb");
-            if (fp)
+            buffer = gst_sample_get_buffer(sample);
+            if(!buffer)
             {
-                if(cmdArg.cap_encoder_en || cmdArg.padding)
-                    fwrite(map.data, 1, map.size, fp);
-                else
-                {
-                    GstVideoInfo vInfo;
-                    GstVideoFrame frame;
-                    GstCaps *caps = gst_sample_get_caps(sample);
-                    if(!caps) {
-                        __LOG(LOG_ERR, "[%s][%s:%d] ch%d fail caps", CAP_LOG_KEY, _FILE_, __LINE__);
-                    } 
-                    gchar *capstr = gst_caps_to_string(caps);
-                    //__LOG(LOG_NOTICE, "[%s][%s:%d] ch%d appsink sample caps %s", CAP_LOG_KEY, _FILE_, __LINE__, info->ch, capstr);
-                    g_free(capstr);
-                    g_return_val_if_fail(gst_video_info_from_caps(&vInfo, caps), GST_FLOW_ERROR);
-                    g_return_val_if_fail(gst_video_frame_map(&frame, &vInfo, buffer, GST_MAP_READ), GST_FLOW_ERROR);
+                __LOG(LOG_ERR, "[%s][%s:%d] ch%d buffer cannot get from sample", CAP_LOG_KEY, _FILE_, __LINE__, info->ch);
+                goto flow_err;
+            }
 
-                    const int w   = GST_VIDEO_INFO_WIDTH(&vInfo);
-                    const int h   = GST_VIDEO_INFO_HEIGHT(&vInfo);
-                    //const int bpp = GST_VIDEO_INFO_COMP_PSTRIDE(&vInfo, 0);   // RGBx=4, RGB=3, RGB16=2 ...
-                    const int src_stride = GST_VIDEO_FRAME_PLANE_STRIDE(&frame, 0);
-                    const guint8* src = static_cast<const guint8*>(GST_VIDEO_FRAME_PLANE_DATA(&frame, 0));
-                    //__LOG(LOG_NOTICE, "[CAP] w=%d h=%d bpp=%d src_stride=%d expected_line=%d total=%d", w, h, bpp, src_stride, w*bpp, w*bpp*h);
-                    for (int y = 0; y < h; ++y) {
-                        const guint8* line = src + y * src_stride;
-                        for (int x = 0; x < w; ++x) {
-                            const guint8* px = line + 4*x;           // RGBx
-                            fwrite(px, 1, 3, fp);                     // R,G,B만
-                        }
-                    }
-
-                    gst_video_frame_unmap(&frame);
-                }
-
+            if(!gst_buffer_map(buffer, &map, GST_MAP_READ))
+            {
+                __LOG(LOG_ERR, "[%s][%s:%d] ch%d Failed to map buffer", CAP_LOG_KEY, _FILE_, __LINE__, info->ch);
+                goto flow_err;
+            }
+#if 0
+            fp = fopen(path, "wb");
+            if(fp)
+            {
+                fwrite(map.data, 1, map.size, fp);
                 fclose(fp);
             }
+#else
+            int fd = ::open(path, O_WRONLY | O_CREAT | O_TRUNC
+#ifdef O_CLOEXEC
+                            | O_CLOEXEC
+#endif
+                            , 0644);
+            if(fd >= 0)
+            {
+                if (write_all_with_retry(fd, map.data, map.size, /*max_retries=*/4) < 0) {
+                    __LOG(LOG_ERR, "[%s] write fail: %s", CAP_LOG_KEY, strerror(errno));
+                    ::close(fd);
+                    gst_buffer_unmap(buffer, &map);
+                    goto flow_err;
+                }
+            }
+#endif
             else
+            {
                 __LOG(LOG_ERR, "[%s][%s:%d] ch%d Failed to open file %s for writing", CAP_LOG_KEY, _FILE_, __LINE__, info->ch, path);
-
+                gst_buffer_unmap(buffer, &map);
+                goto flow_err;
+            }
             gst_buffer_unmap(buffer, &map);
         }
     } while(0);
 
-    if(path != NULL) g_free(path);
-    if(extention != NULL) g_free(extention);
-    gst_sample_unref(sample);
+flow_ok:
+    info->captureCnt_++;
+    if(path) g_free(path);
+    if(extention) g_free(extention);
+    if(sample) gst_sample_unref(sample);
 
     return GST_FLOW_OK;
+
+flow_err:
+    if(path) g_free(path);
+    if(extention) g_free(extention);
+    if(sample) gst_sample_unref(sample);
+
+    return GST_FLOW_ERROR;
 }
 
 void CaptureBin::setAppsrc(GstElement *appsrc)
@@ -609,10 +632,11 @@ gint CaptureBin::setFilePath(guint8 *prefix)
 gboolean CaptureBin::init(guint8 num, gboolean crop_en)
 {
     gboolean ret = 0;
-    GstPad *staticPad;
-    GstCaps *caps;
+    GstPad *staticPad = NULL;
+    GstCaps *caps = NULL;
     captureData.ch = num;
     captureData.fps = cmdArg.fps[STREAM_CAP][captureData.ch];
+    gchar *format = NULL;
     //sinkPad = NULL;
     __LOG(LOG_NOTICE, "[%s][%s:%d] %s ch : %d, crop : %s", CAP_LOG_KEY, _FILE_, __LINE__, __FUNCTION__, captureData.ch, crop_en? "enable":"disable");
 
@@ -678,10 +702,29 @@ gboolean CaptureBin::init(guint8 num, gboolean crop_en)
         return ret;
     }
 
-    if(cmdArg.turbojpeg || !cmdArg.cap_encoder_en)
+    if(cmdArg.turbojpeg)
         ret = gst_element_link_many(be.queue_src, be.crop, be.imx_convert, be.capsfilter, be.queue2, be.sink, NULL);
-    else
-        ret = gst_element_link_many(be.queue_src, be.crop, be.imx_convert, be.capsfilter, be.convert, be.capsfilter2, be.queue2, be.enc, be.sink, NULL);
+    else {
+        if(cmdArg.cap_encoder_en) {
+            ret = gst_element_link_many(be.queue_src, be.crop, be.imx_convert, be.capsfilter, be.convert, be.capsfilter2, be.queue2, be.enc, be.sink, NULL);
+            format = g_strdup_printf("%s", "I420");
+            caps = gst_caps_new_simple("video/x-raw", "format", G_TYPE_STRING, format, NULL);
+            g_object_set(be.capsfilter2, "caps", caps, NULL);
+            gst_caps_unref(caps);
+            g_free(format);
+        }
+        else {
+            if(cmdArg.padding) ret = gst_element_link_many(be.queue_src, be.crop, be.imx_convert, be.capsfilter, be.queue2, be.sink, NULL);
+            else {
+                ret = gst_element_link_many(be.queue_src, be.crop, be.imx_convert, be.capsfilter, be.convert, be.capsfilter2, be.queue2, be.sink, NULL);
+                format = g_strdup_printf("%s", "RGB");
+                caps = gst_caps_new_simple("video/x-raw", "format", G_TYPE_STRING, format, NULL);
+                g_object_set(be.capsfilter2, "caps", caps, NULL);
+                gst_caps_unref(caps);
+                g_free(format);
+            }
+        }
+    }
 
 #endif
     if (!ret) {
@@ -725,16 +768,6 @@ gboolean CaptureBin::init(guint8 num, gboolean crop_en)
     g_object_set(be.capsfilter, "caps", caps, NULL);
     gst_caps_unref(caps);
 
-    caps = gst_caps_new_simple("video/x-raw",
-                                "format", G_TYPE_STRING, "I420",
-                                "width", G_TYPE_INT, cmdArg.width,
-                                "height", G_TYPE_INT, cmdArg.height,
-                                //"framerate", GST_TYPE_FRACTION, captureData.fps, 1,
-                                NULL);
-
-    g_object_set(be.capsfilter2, "caps", caps, NULL);
-    gst_caps_unref(caps);
-
 #if 0
     GstCaps *templ = gst_pad_get_pad_template_caps(gst_element_get_static_pad(be.convert, "sink"));
     caps = gst_caps_copy(templ);
@@ -759,8 +792,8 @@ gboolean CaptureBin::init(guint8 num, gboolean crop_en)
     //probe_id = gst_pad_add_probe(queue_src_pad, GST_PAD_PROBE_TYPE_BLOCK_DOWNSTREAM, NULL, NULL, NULL);
     //g_object_set(re.enc, "bitrate", cmdArg.rtsp_bitrate, NULL);
     
-    g_object_set(be.queue, "max-size-time", GST_SECOND, "max-size-buffers", captureData.fps, "leaky", LEAKY_DOWNSTREAM, NULL);
-    g_object_set(be.queue2, "max-size-time", GST_SECOND, "max-size-buffers", captureData.fps, "leaky", LEAKY_DOWNSTREAM, NULL);
+    g_object_set(be.queue, "max-size-time", GST_SECOND/2, "leaky", LEAKY_DOWNSTREAM, NULL);
+    g_object_set(be.queue2, "max-size-time", GST_SECOND/2, "leaky", LEAKY_DOWNSTREAM, NULL);
     //g_object_set(re.capsfilter, "max-size-time", 5*GST_SECOND, "max-size-buffers", 60, "leaky", 1, NULL);
     //g_object_set(be.sink, "max-buffers", captureData.fps, NULL);
     //g_object_set(pipe->sink, "max-lateness", 1*GST_SECOND, NULL);

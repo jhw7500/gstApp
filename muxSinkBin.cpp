@@ -352,6 +352,7 @@ gboolean MuxSinkBin::init(guint8 num)
     //g_object_set(be.sink, "reserved-max-duration", 3000000000000000000, NULL);
     //g_object_set(be.sink, "reserved-moov-update-period", 1000000000, NULL);
     //g_object_set(be.sink, "use-robust-muxing", TRUE, NULL);
+    g_object_set(be.queue, "max-size-time", GST_SECOND/2, "max-size-buffers", cmdArg.fps[STREAM_REC][muxSinkData.ch]/2, "leaky", LEAKY_DOWNSTREAM, NULL);
 
 #if 0
     GstStructure *muxer_properties = gst_structure_new("application/x-gst-mp4mux",

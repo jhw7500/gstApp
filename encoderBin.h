@@ -23,6 +23,7 @@ typedef struct _EncElement
     GstElement *convert;
     GstElement *bin;
     GstElement *capsfilter;
+    GstElement *capsfilter2;
     GstElement *crop;
     GstElement *overlay;
     GstElement *tee;

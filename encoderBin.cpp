@@ -259,6 +259,7 @@ gboolean EncoderBin::init(guint8 num, gboolean crop_en)
     re.bin = gst_bin_new(g_strdup_printf("encoderBin%d", ch));
     re.queue = gst_element_factory_make(QUEUE_TYPE, "queue");
     re.capsfilter = gst_element_factory_make("capsfilter", "capsfilter");
+    //re.capsfilter2 = gst_element_factory_make("capsfilter2", "capsfilter");
     re.enc = gst_element_factory_make("vpuenc_h264", "vpuenc_h264");
     re.rate = gst_element_factory_make("videorate", "videorate");
     re.convert = gst_element_factory_make("imxvideoconvert_g2d", "convert");
@@ -286,7 +287,7 @@ gboolean EncoderBin::init(guint8 num, gboolean crop_en)
     else if(cmdArg.overlay_en) ret = gst_element_link_many(re.queue, re.overlay, re.convert, re.rate, re.capsfilter, re.enc, re.tee, NULL);
     else if(crop_en) {
         //ret = gst_element_link_many(re.queue, re.crop, re.convert, re.rate, re.capsfilter, re.enc, re.parse, re.tee, NULL);
-        ret = gst_element_link_many(re.queue, re.crop, re.convert, re.rate, re.capsfilter, re.enc, re.tee, NULL);
+        ret = gst_element_link_many(re.queue, re.crop, re.convert, re.rate, re.enc, re.tee, NULL);
     }
     //else if(crop_en) ret = gst_element_link_many(re.queue, re.convert, re.rate, re.capsfilter, re.enc, re.parse, re.queue2, NULL);
     else ret = gst_element_link_many(re.queue, re.rate, re.capsfilter, re.enc, re.tee, NULL);
@@ -301,7 +302,7 @@ gboolean EncoderBin::init(guint8 num, gboolean crop_en)
 #endif
 
     GstCaps *caps = gst_caps_new_simple("video/x-raw", 
-                                        //"format", G_TYPE_STRING, "NV12",
+                                        //"format", G_TYPE_STRING, "RGBx",
                                         //"width", G_TYPE_INT, cmdArg.width,
                                         //"height", G_TYPE_INT, cmdArg.height,
                                         "framerate", GST_TYPE_FRACTION, cmdArg.fps[STREAM_RTSP][ch], 1,
@@ -329,7 +330,7 @@ gboolean EncoderBin::init(guint8 num, gboolean crop_en)
     //g_object_set(re.rate, "max-rate", MAIN_FPS, "drop-only", FALSE, NULL);
     //g_object_set(re.queue, "max-size-time", GST_SECOND, "max-size-buffers", cmdArg.fps[STREAM_REC][ch], "leaky", LEAKY_DOWNSTREAM, NULL);
     //g_object_set(re.queue, "max-size-time", GST_SECOND, "max-size-buffers", cmdArg.fps[STREAM_RTSP][ch], "leaky", LEAKY_DOWNSTREAM, NULL);
-
+    g_object_set(re.queue, "max-size-time", GST_SECOND, "leaky", LEAKY_DOWNSTREAM, NULL);
     if(cmdArg.levelMode == MODE_TEST)
     {
         gst_pad_add_probe(gst_element_get_static_pad(re.enc, "src"), GST_PAD_PROBE_TYPE_BUFFER, (GstPadProbeCallback)probe_function, re.enc, NULL);

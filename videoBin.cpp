@@ -243,6 +243,7 @@ gboolean VideoBin::init(guint8 num, gboolean crop_en)
     if(crop_en)
     {
         caps = gst_caps_new_simple("video/x-raw", 
+                                    //"format", G_TYPE_STRING, "RGBx",
                                     //"format", G_TYPE_STRING, "NV12",
                                     "width", G_TYPE_INT, cmdArg.width*2,
                                     "height", G_TYPE_INT, cmdArg.height,
@@ -253,6 +254,7 @@ gboolean VideoBin::init(guint8 num, gboolean crop_en)
                                     NULL);
                                     
         ret = gst_element_link_many(be.src, be.convert, be.capsfilter, be.teeCrop, NULL);
+        //ret = gst_element_link_filtered(be.src, be.teeCrop, caps);
         if (!ret)
         {
             __LOG(LOG_CRIT, "[GST][%s:%d] video main link err", _FILE_, __LINE__);
