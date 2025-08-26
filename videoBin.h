@@ -19,6 +19,7 @@
 typedef struct _VideoData
 {
     guint8 csi;
+    guint8 ch;
 } VideoData;
 
 typedef struct _VideoElement
@@ -44,7 +45,7 @@ public :
 	static VideoBin* getInstance();
     VideoBin();
     ~VideoBin();
-	gboolean init(guint8 num, gboolean crop_en) ;
+	gboolean init(guint8 csiNum) ;
     gboolean addCrop(CropDir dir);
     gboolean addBinRtspSrcPad(guint8 ch);
     gboolean addBinRecordSrcPad(guint8 ch);
@@ -63,7 +64,7 @@ public :
     //GstElement *pipeline[2];
 	
 private :
-    guint8 csi;
+    VideoData videoData;
     GstPad *srcRtspPad;
     GstPad *srcRecordPad;
     GstPad *srcCapturePad;

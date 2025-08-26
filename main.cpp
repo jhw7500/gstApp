@@ -377,7 +377,7 @@ static void splitCheck(gpointer data, guint8 startSec)
     {
         for(i=0; i<MAX_CHANNEL; i++)
         {
-            if(!cmdArg.cam_en[i]) continue;
+            if(!cmdArg.cam[i].enable) continue;
             if(muxSinkBin[i].getStartFlag() == 0) { g_date_time_unref(datetime); return; }
         }
 
@@ -402,7 +402,7 @@ static void splitCheck(gpointer data, guint8 startSec)
 
     for (i = 0; i < MAX_CHANNEL; i++)
     {
-        if(!cmdArg.cam_en[i]) continue;
+        if(!cmdArg.cam[i].enable) continue;
 
         gint splitMsec = muxSinkBin[i].getSplitMsec();
         __LOG(LOG_INFO, "[GST][%s:%d] splitMsec[%d] : %d", _FILE_, __LINE__, i, splitMsec);
@@ -434,7 +434,7 @@ static void splitCheck(gpointer data, guint8 startSec)
 
             __LOG(LOG_NOTICE, "[GST][%s:%d] split now", _FILE_, __LINE__);
             for (i = 0; i < MAX_CHANNEL; i++)
-                if (cmdArg.cam_en[i])
+                if (cmdArg.cam[i].enable)
                     muxSinkBin[i].splitNow(NULL, FALSE);
         }
     } while(0);
@@ -508,12 +508,12 @@ static gboolean setSRT(gpointer arg)
     {
         if(cmdArg.dual_enc == TRUE)
         {
-            if(cmdArg.cam_en[i] && cmdArg.stream_en[STREAM_REC]) recordBin[i].setOverlayText(text);
-            if(cmdArg.cam_en[i] && cmdArg.stream_en[STREAM_RTSP]) rtspServerBin[i].setOverlayText(text);
+            if(cmdArg.cam[i].enable && cmdArg.stream_en[STREAM_REC]) recordBin[i].setOverlayText(text);
+            if(cmdArg.cam[i].enable && cmdArg.stream_en[STREAM_RTSP]) rtspServerBin[i].setOverlayText(text);
         }
         else
         {
-            if(cmdArg.cam_en[i]) encoderBin[i].setOverlayText(text);
+            if(cmdArg.cam[i].enable) encoderBin[i].setOverlayText(text);
         }
     }
 
@@ -555,50 +555,49 @@ gint config_camera(guint8 i)
     guint16 ch_num0 = i*2;
     guint16 ch_num1 = i*2+1;
 
-    if (cmdArg.cam_en[ch_num0] && cmdArg.cam_en[ch_num1])
+    if (cmdArg.cam[ch_num0].enable && cmdArg.cam[ch_num1].enable)
     {
         __LOG(LOG_NOTICE, "[CFG][%s:%d] ch%d enable, ch%d enable", _FILE_, __LINE__, ch_num0, ch_num1);
+
+        cmd = g_strdup_printf("i2cwrite %d 0x11 0x100c 0x%04x", i ? 1 : 2, (cmdArg.ch_rotate >> (i * 4)) & 0x03);
+        __LOG(LOG_NOTICE, "[CFG][%s:%d] ch%d cmd : %s", _FILE_, __LINE__, ch_num0, cmd);
+        if (system(cmd) < 0)
+            __LOG(LOG_ERR, "[CFG][%s:%d] ch%d rotation fail", __FILE__, __LINE__, ch_num0);
+
+        cmd = g_strdup_printf("i2cwrite %d 0x11 0x5002 %s", i ? 1 : 2, cmdArg.cam[ch_num0].ae_on? "0x0299":"0x0290");
+        __LOG(LOG_NOTICE, "[CFG][%s:%d] ch%d cmd : %s", _FILE_, __LINE__, ch_num0, cmd);
+        if (system(cmd) < 0)
+            __LOG(LOG_ERR, "[CFG][%s:%d] ch%d ae_on fail", __FILE__, __LINE__, ch_num0);
+
+        cmd = g_strdup_printf("i2cwrite %d 0x11 0x5006 0x%04x", i ? 1 : 2, cmdArg.cam[ch_num0].ae_gain);
+        __LOG(LOG_NOTICE, "[CFG][%s:%d] ch%d cmd : %s", _FILE_, __LINE__, ch_num0, cmd);
+        if (system(cmd) < 0)
+            __LOG(LOG_ERR, "[CFG][%s:%d] ch%d ae_gain fail", __FILE__, __LINE__, ch_num0);
+
+        cmd = g_strdup_printf("i2cwrite %d 0x11 0x500c 0x%08x", i ? 1 : 2, cmdArg.cam[ch_num0].exp_time);
+        __LOG(LOG_NOTICE, "[CFG][%s:%d] ch%d cmd : %s", _FILE_, __LINE__, ch_num0, cmd);
+        if (system(cmd) < 0)
+            __LOG(LOG_ERR, "[CFG][%s:%d] ch%d exp_time fail", __FILE__, __LINE__, ch_num0);
 
         cmd = g_strdup_printf("i2cwrite %d 0x12 0x100c 0x%04x", i ? 1 : 2, (cmdArg.ch_rotate >> (i * 4 + 2)) & 0x03);
         __LOG(LOG_NOTICE, "[CFG][%s:%d] ch%d cmd : %s", _FILE_, __LINE__, ch_num1, cmd);
         if (system(cmd) < 0)
             __LOG(LOG_ERR, "[CFG][%s:%d] ch%d rotation fail", __FILE__, __LINE__, ch_num1);
 
-        cmd = g_strdup_printf("i2cwrite %d 0x12 0x5002 %s", i ? 1 : 2, cmdArg.camConfig[ch_num1].ae_on? "0x0299":"0x0290");
+        cmd = g_strdup_printf("i2cwrite %d 0x12 0x5002 %s", i ? 1 : 2, cmdArg.cam[ch_num1].ae_on? "0x0299":"0x0290");
         __LOG(LOG_NOTICE, "[CFG][%s:%d] ch%d cmd : %s", _FILE_, __LINE__, ch_num1, cmd);
         if (system(cmd) < 0)
             __LOG(LOG_ERR, "[CFG][%s:%d] ch%d ae_on fail", __FILE__, __LINE__, ch_num1);
 
-        cmd = g_strdup_printf("i2cwrite %d 0x12 0x5006 0x%04x", i ? 1 : 2, cmdArg.camConfig[ch_num1].ae_gain);
+        cmd = g_strdup_printf("i2cwrite %d 0x12 0x5006 0x%04x", i ? 1 : 2, cmdArg.cam[ch_num1].ae_gain);
         __LOG(LOG_NOTICE, "[CFG][%s:%d] ch%d cmd : %s", _FILE_, __LINE__, ch_num1, cmd);
         if (system(cmd) < 0)
             __LOG(LOG_ERR, "[CFG][%s:%d] ch%d ae_gain fail", __FILE__, __LINE__, ch_num1);
-#if 1
-        cmd = g_strdup_printf("i2cwrite %d 0x12 0x500c 0x%08x", i ? 1 : 2, cmdArg.camConfig[ch_num1].exp_time);
+
+        cmd = g_strdup_printf("i2cwrite %d 0x12 0x500c 0x%08x", i ? 1 : 2, cmdArg.cam[ch_num1].exp_time);
         __LOG(LOG_NOTICE, "[CFG][%s:%d] ch%d cmd : %s", _FILE_, __LINE__, ch_num1, cmd);
         if (system(cmd) < 0)
             __LOG(LOG_ERR, "[CFG][%s:%d] ch%d exp_time fail", __FILE__, __LINE__, ch_num1);
-#endif
-        cmd = g_strdup_printf("i2cwrite %d 0x11 0x100c 0x%04x", i ? 1 : 2, (cmdArg.ch_rotate >> (i * 4)) & 0x03);
-        __LOG(LOG_NOTICE, "[CFG][%s:%d] ch%d cmd : %s", _FILE_, __LINE__, ch_num0, cmd);
-        if (system(cmd) < 0)
-            __LOG(LOG_ERR, "[CFG][%s:%d] ch%d rotation fail", __FILE__, __LINE__, ch_num0);
-
-        cmd = g_strdup_printf("i2cwrite %d 0x11 0x5002 %s", i ? 1 : 2, cmdArg.camConfig[ch_num0].ae_on? "0x0299":"0x0290");
-        __LOG(LOG_NOTICE, "[CFG][%s:%d] ch%d cmd : %s", _FILE_, __LINE__, ch_num0, cmd);
-        if (system(cmd) < 0)
-            __LOG(LOG_ERR, "[CFG][%s:%d] ch%d ae_on fail", __FILE__, __LINE__, ch_num0);
-
-        cmd = g_strdup_printf("i2cwrite %d 0x11 0x5006 0x%04x", i ? 1 : 2, cmdArg.camConfig[ch_num0].ae_gain);
-        __LOG(LOG_NOTICE, "[CFG][%s:%d] ch%d cmd : %s", _FILE_, __LINE__, ch_num0, cmd);
-        if (system(cmd) < 0)
-            __LOG(LOG_ERR, "[CFG][%s:%d] ch%d ae_gain fail", __FILE__, __LINE__, ch_num0);
-#if 1
-        cmd = g_strdup_printf("i2cwrite %d 0x11 0x500c 0x%08x", i ? 1 : 2, cmdArg.camConfig[ch_num0].exp_time);
-        __LOG(LOG_NOTICE, "[CFG][%s:%d] ch%d cmd : %s", _FILE_, __LINE__, ch_num0, cmd);
-        if (system(cmd) < 0)
-            __LOG(LOG_ERR, "[CFG][%s:%d] ch%d exp_time fail", __FILE__, __LINE__, ch_num0);
-#endif
     }
     else
     {
@@ -626,7 +625,7 @@ gint config_camera(guint8 i)
         else
             __LOG(LOG_CRIT, "[CFG][%s:%d] csi[%d] not display", _FILE_, __LINE__, i);
 
-        if (cmdArg.cam_en[ch_num0] & 0x01)
+        if (cmdArg.cam[ch_num0].enable & 0x01)
         {
             __LOG(LOG_NOTICE, "[CFG][%s:%d] ch%d enable, ch%d disable", _FILE_, __LINE__, ch_num0, ch_num1);
             cmd = g_strdup_printf("i2cwrite %d 0x3c 0x100c 0x%04x", i ? 1 : 2, (cmdArg.ch_rotate >> (i * 4)) & 0x03);
@@ -636,22 +635,22 @@ gint config_camera(guint8 i)
             if (val[ch_num0] == 0)
                 __LOG(LOG_ERR, "[CFG][%s:%d] swap : ch%d enable but ch%d display", _FILE_, __LINE__, ch_num0, ch_num1);
 
-            cmd = g_strdup_printf("i2cwrite %d 0x3c 0x5002 %s", i ? 1 : 2, cmdArg.camConfig[ch_num0].ae_on? "0x0299":"0x0290");
+            cmd = g_strdup_printf("i2cwrite %d 0x3c 0x5002 %s", i ? 1 : 2, cmdArg.cam[ch_num0].ae_on? "0x0299":"0x0290");
             __LOG(LOG_NOTICE, "[CFG][%s:%d] ch%d cmd : %s", _FILE_, __LINE__, ch_num0, cmd);
             if (system(cmd) < 0)
                 __LOG(LOG_ERR, "[CFG][%s:%d] ch%d ae_on fail", __FILE__, __LINE__, ch_num0);
 
-            cmd = g_strdup_printf("i2cwrite %d 0x3c 0x5006 0x%04x", i ? 1 : 2, cmdArg.camConfig[ch_num0].ae_gain);
+            cmd = g_strdup_printf("i2cwrite %d 0x3c 0x5006 0x%04x", i ? 1 : 2, cmdArg.cam[ch_num0].ae_gain);
             __LOG(LOG_NOTICE, "[CFG][%s:%d] ch%d cmd : %s", _FILE_, __LINE__, ch_num0, cmd);
             if (system(cmd) < 0)
                 __LOG(LOG_ERR, "[CFG][%s:%d] ch%d ae_gain fail", __FILE__, __LINE__, ch_num0);
 
-            cmd = g_strdup_printf("i2cwrite %d 0x3c 0x500c 0x%08x", i ? 1 : 2, cmdArg.camConfig[ch_num0].exp_time);
+            cmd = g_strdup_printf("i2cwrite %d 0x3c 0x500c 0x%08x", i ? 1 : 2, cmdArg.cam[ch_num0].exp_time);
             __LOG(LOG_NOTICE, "[CFG][%s:%d] ch%d cmd : %s", _FILE_, __LINE__, ch_num0, cmd);
             if (system(cmd) < 0)
                 __LOG(LOG_ERR, "[CFG][%s:%d] ch%d ae_gain fail", __FILE__, __LINE__, ch_num0);
         }
-        else if (cmdArg.cam_en[ch_num1] & 0x01)
+        else if (cmdArg.cam[ch_num1].enable & 0x01)
         {
             __LOG(LOG_NOTICE, "[CFG][%s:%d] ch%d disable, ch%d enable", _FILE_, __LINE__, ch_num0, ch_num1);
             cmd = g_strdup_printf("i2cwrite %d 0x3c 0x100c 0x%04x", i ? 1 : 2, (cmdArg.ch_rotate >> (i * 4 + 2)) & 0x03);
@@ -661,17 +660,17 @@ gint config_camera(guint8 i)
             if (val[ch_num1] == 0)
                 __LOG(LOG_ERR, "[CFG][%s:%d] swap : ch%d enable but ch%d display", _FILE_, __LINE__, ch_num1, ch_num0);
 
-            cmd = g_strdup_printf("i2cwrite %d 0x3c 0x5002 %s", i ? 1 : 2, cmdArg.camConfig[ch_num1].ae_on? "0x0299":"0x0290");
+            cmd = g_strdup_printf("i2cwrite %d 0x3c 0x5002 %s", i ? 1 : 2, cmdArg.cam[ch_num1].ae_on? "0x0299":"0x0290");
             __LOG(LOG_NOTICE, "[CFG][%s:%d] ch%d cmd : %s", _FILE_, __LINE__, ch_num1, cmd);
             if (system(cmd) < 0)
                 __LOG(LOG_ERR, "[CFG][%s:%d] ch%d ae_on fail", __FILE__, __LINE__, ch_num1);
 
-            cmd = g_strdup_printf("i2cwrite %d 0x3c 0x5006 0x%04x", i ? 1 : 2, cmdArg.camConfig[ch_num1].ae_gain);
+            cmd = g_strdup_printf("i2cwrite %d 0x3c 0x5006 0x%04x", i ? 1 : 2, cmdArg.cam[ch_num1].ae_gain);
             __LOG(LOG_NOTICE, "[CFG][%s:%d] ch%d cmd : %s", _FILE_, __LINE__, ch_num1, cmd);
             if (system(cmd) < 0)
                 __LOG(LOG_ERR, "[CFG][%s:%d] ch%d ae_gain fail", __FILE__, __LINE__, ch_num1);
 
-            cmd = g_strdup_printf("i2cwrite %d 0x3c 0x500c 0x%08x", i ? 1 : 2, cmdArg.camConfig[ch_num1].exp_time);
+            cmd = g_strdup_printf("i2cwrite %d 0x3c 0x500c 0x%08x", i ? 1 : 2, cmdArg.cam[ch_num1].exp_time);
             __LOG(LOG_NOTICE, "[CFG][%s:%d] ch%d cmd : %s", _FILE_, __LINE__, ch_num1, cmd);
             if (system(cmd) < 0)
                 __LOG(LOG_ERR, "[CFG][%s:%d] ch%d ae_gain fail", __FILE__, __LINE__, ch_num1);
@@ -761,25 +760,20 @@ gint main(gint argc, gchar *argv[])
 
     //gboolean crop_en[2] = {FALSE, FALSE};
     guint8 csiNum;
-    cmdArg.crop_en[0] = cmdArg.cam_en[0]&&cmdArg.cam_en[1];
-    cmdArg.crop_en[1] = cmdArg.cam_en[2]&&cmdArg.cam_en[3];
+    cmdArg.crop_en[0] = cmdArg.cam[0].enable && cmdArg.cam[1].enable;
+    cmdArg.crop_en[1] = cmdArg.cam[2].enable && cmdArg.cam[3].enable;
 
     //TestBin audioBin;
     AudioBin audioBin;
-    
-    if (cmdArg.audio_en)
-    {
-        audioBin.init();
-    }
 
     for(i=0; i<MAX_CHANNEL; i++)
     {
         //if(!(cmdArg.ch_enable & (0x1 << i))) continue;
-        if(!cmdArg.cam_en[i]) continue;
+        if(!cmdArg.cam[i].enable) continue;
         //chNum = i;
         csiNum = (i/2);
         __LOG(LOG_INFO, "[GST][%s:%d] ch[%d] enable", _FILE_, __LINE__, i);
-        if(!videoBin[csiNum].init(csiNum, cmdArg.crop_en[csiNum]))
+        if(!videoBin[csiNum].init(csiNum))
         {
             __LOG(LOG_CRIT, "[GST][%s:%d] csi%d video bin init err", _FILE_, __LINE__, csiNum);
             //goto main_end;
@@ -798,9 +792,9 @@ gint main(gint argc, gchar *argv[])
 
             //captureBin[i].setAppsrc(recordBin[chNum].getBinAppsrc());
 
-            if(cmdArg.cap_always)
+            if(1)   //(cmdArg.cap_always)
             {
-                if(!captureBin[i].init(i, cmdArg.crop_en[csiNum]))
+                if(!captureBin[i].init(i))
                 {
                     __LOG(LOG_CRIT, "[GST][%s:%d] ch%d capture bin init err", _FILE_, __LINE__, i);
                     goto main_end;
@@ -825,7 +819,7 @@ gint main(gint argc, gchar *argv[])
         //print_option();
         if(cmdArg.dual_enc == FALSE && (cmdArg.stream_en[STREAM_REC] || cmdArg.stream_en[STREAM_RTSP]))
         {
-            if (!encoderBin[i].init(i, cmdArg.crop_en[csiNum]))
+            if (!encoderBin[i].init(i))
             {
                 __LOG(LOG_CRIT, "[GST][%s:%d] ch%d init err in encoderBin", _FILE_, __LINE__, i, csiNum);
                 goto main_end;
@@ -849,12 +843,6 @@ gint main(gint argc, gchar *argv[])
             if(!muxSinkBin[i].init(i))
             {
                 __LOG(LOG_CRIT, "[GST][%s:%d] ch%d record sink init err", _FILE_, __LINE__, i);
-                goto main_end;
-            }
-
-            if(!muxSinkBin[i].addBinQueuePad())
-            {
-                __LOG(LOG_CRIT, "[GST][%s:%d] ch%d record sink pad add err", _FILE_, __LINE__, i);
                 goto main_end;
             }
 
@@ -886,13 +874,13 @@ gint main(gint argc, gchar *argv[])
             }
             else
             {
-                if (!encoderBin[i].addBinRecSrcPad(i))
+                if (!encoderBin[i].addBinRecSrcPad())
                 {
                     __LOG(LOG_CRIT, "[GST][%s:%d] ch%d record pad add err in encoderBin", _FILE_, __LINE__, i);
                     goto main_end;
                 }
 
-                if (gst_pad_link(encoderBin[i].getBinRecSrcPad(i), muxSinkBin[i].getBinQueuePad()) != GST_PAD_LINK_OK)
+                if (gst_pad_link(encoderBin[i].getBinRecSrcPad(), muxSinkBin[i].getBinQueuePad()) != GST_PAD_LINK_OK)
                 {
                     __LOG(LOG_CRIT, "[GST][%s:%d] ch%d record sink pad link err", _FILE_, __LINE__, i);
                     goto main_end;
@@ -932,13 +920,13 @@ gint main(gint argc, gchar *argv[])
             }
             else
             {
-                if(!encoderBin[i].addBinRtspSrcPad(i))
+                if(!encoderBin[i].addBinRtspSrcPad())
                 {
                     __LOG(LOG_CRIT, "[GST][%s:%d] ch%d rtsp pad add err in csi%d encoderBin", _FILE_, __LINE__, i, csiNum);
                     goto main_end;
                 }
 
-                if(gst_pad_link(encoderBin[i].getBinRtspSrcPad(i), rtspServerBin[i].getBinSinkPad()) != GST_PAD_LINK_OK)
+                if(gst_pad_link(encoderBin[i].getBinRtspSrcPad(), rtspServerBin[i].getBinSinkPad()) != GST_PAD_LINK_OK)
                 {
                     __LOG(LOG_CRIT, "[GST][%s:%d] ch%d rtsp pad link err", _FILE_, __LINE__, i);
                     goto main_end;
@@ -949,6 +937,9 @@ gint main(gint argc, gchar *argv[])
 
         if(cmdArg.audio_en)
         {
+
+            audioBin.init();
+
             if(!audioBin.addBinSrcPad(i))
             {
                 __LOG(LOG_CRIT, "[GST][%s:%d] ch%d audio src pad add err", _FILE_, __LINE__, i);
@@ -1090,36 +1081,34 @@ gint main(gint argc, gchar *argv[])
         }
 #endif
     }
-    //__LOG(LOG_NOTICE, "[GST][%s:%d] Main loop exit", _FILE_, __LINE__);
+    __LOG(LOG_NOTICE, "[GST][%s:%d] Main loop exit", _FILE_, __LINE__);
 
-#if 0
-    if(!gst_element_send_event(pipeline, gst_event_new_eos()))
+    if (gst_element_set_state (pipeline, GST_STATE_NULL) != GST_STATE_CHANGE_SUCCESS)
     {
-        __LOG(LOG_CRIT, "[GST][%s:%d] Failed to gst_element_send_event", _FILE_, __LINE__);
-    }
-#else
-    for(i=0; i<MAX_CHANNEL; i++)
-    {
-        //if(muxSinkBin[i].getBinVideoSinkPad()) muxSinkBin[i].handle_last_sample();
-        if(muxSinkBin[i].getBinAudioSinkPad()) gst_pad_send_event(muxSinkBin[i].getBinAudioSinkPad(), gst_event_new_eos());
-        if(muxSinkBin[i].getBinVideoSinkPad()) {
-            gst_pad_send_event(muxSinkBin[i].getBinVideoSinkPad(), gst_event_new_eos());
+        for(i=0; i<MAX_CHANNEL; i++)
+        {
+            //if(muxSinkBin[i].getBinVideoSinkPad()) muxSinkBin[i].handle_last_sample();
+            if(muxSinkBin[i].getBinAudioSinkPad()) gst_pad_send_event(muxSinkBin[i].getBinAudioSinkPad(), gst_event_new_eos());
+            if(muxSinkBin[i].getBinVideoSinkPad()) {
+                gst_pad_send_event(muxSinkBin[i].getBinVideoSinkPad(), gst_event_new_eos());
+                gst_element_send_event(muxSinkBin[i].be.bin, gst_event_new_eos());
+            }
+            if(rtspServerBin[i].getBinSinkPad()) {
+                gst_pad_send_event(rtspServerBin[i].getBinSinkPad(), gst_event_new_eos());
+                gst_element_send_event(rtspServerBin[i].re.bin, gst_event_new_eos());
+            }
+            if(captureBin[i].getBinSinkPad()) {
+                gst_pad_send_event(captureBin[i].getBinSinkPad(), gst_event_new_eos());
+                gst_element_send_event(captureBin[i].be.bin, gst_event_new_eos());
+            }
+
             if(videoBin[i/2].getBinRtspSrcPad(i)) gst_pad_send_event(videoBin[i/2].getBinRtspSrcPad(i), gst_event_new_eos());
-            gst_element_send_event(muxSinkBin[i].be.bin, gst_event_new_eos());
-        }
-        if(rtspServerBin[i].getBinSinkPad()) {
-            gst_pad_send_event(rtspServerBin[i].getBinSinkPad(), gst_event_new_eos());
             if(videoBin[i/2].getBinRecordSrcPad(i)) gst_pad_send_event(videoBin[i/2].getBinRecordSrcPad(i), gst_event_new_eos());
-            gst_element_send_event(rtspServerBin[i].re.bin, gst_event_new_eos());
-        }
-        if(captureBin[i].getBinSinkPad()) {
-            gst_pad_send_event(captureBin[i].getBinSinkPad(), gst_event_new_eos());
             if(videoBin[i/2].getBinCaptureSrcPad(i)) gst_pad_send_event(videoBin[i/2].getBinCaptureSrcPad(i), gst_event_new_eos());
-            gst_element_send_event(captureBin[i].be.bin, gst_event_new_eos());
+            //if(captureBin[i].add_cap_f == TRUE) gst_pad_send_event(captureBin[i].getBinSinkPad(), gst_event_new_eos());
         }
-        //if(captureBin[i].add_cap_f == TRUE) gst_pad_send_event(captureBin[i].getBinSinkPad(), gst_event_new_eos());
     }
-#endif
+
     gst_element_send_event(pipeline, gst_event_new_eos());
 
     //sleep(1);

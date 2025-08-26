@@ -44,11 +44,11 @@ void ParserClass::init_arg(gchar *argv)
     arg.ioMode = IO_AUTO;
     arg.levelMode = MODE_NORMAL;
     arg.dotDir = DEFAULT_DOT_PATH;
-    arg.captureDir = DEFAULT_CAP_DIR;
+    arg.cap.path = DEFAULT_CAP_DIR;
     arg.play_delay = DEFAULT_PLAY_DELAY;
     arg.fault = FALSE;
     arg.audio_en = FALSE;
-    arg.captureMaxCnt = DEFAULT_CAPTURE_MAX_CNT;
+    arg.cap.maxCnt = DEFAULT_CAPTURE_MAX_CNT;
     arg.input_en = FALSE;
     arg.overlay_en = FALSE;
     arg.split_diff_msec = DEFAULT_SPLIT_DIFF_MSEC;
@@ -59,40 +59,38 @@ void ParserClass::init_arg(gchar *argv)
     arg.stream_en[STREAM_REC] = TRUE;
     arg.stream_en[STREAM_RTSP] = TRUE;
     arg.stream_en[STREAM_CAP] = FALSE;
-    arg.dual_enc = TRUE;
+    arg.dual_enc = FALSE;
 
-    arg.cap_encoder_en = FALSE;
-    arg.cap_always = FALSE;
-    arg.cap_res_en = FALSE;
-    arg.cap_delay = 0;
-    arg.cap_timeout = 200;
-    arg.turbojpeg = FALSE;
-    arg.padding = TRUE;
+    arg.cap.path = DEFAULT_CAP_DIR;
+    arg.cap.maxCnt = DEFAULT_CAPTURE_MAX_CNT;
+    arg.cap.encoder = NULL;
+    arg.cap.res_en = FALSE;
+    arg.cap.delay = DEFAULT_CAPTURE_DELAY;
+    arg.cap.timeout = DEFAULT_CAPTURE_TIMEOUT;
+    arg.cap.padding = TRUE;
     arg.tcp_en = FALSE;
     arg.tcp_port = DEFAULT_TCP_PORT;
 
     arg.ipc_en = FALSE;
     arg.ipc_mid = DEFAULT_IPC_MID;
 
-    arg.i2cConfig[CSI_1].exp_time = DEFAULT_EXP_TIME;
-    arg.i2cConfig[CSI_2].exp_time = DEFAULT_EXP_TIME;
     for(guint8 i=0; i<MAX_CHANNEL; i++)
     {
-        arg.camConfig[i].enable = FALSE;
-        arg.camConfig[i].hflip = FALSE;
-        arg.camConfig[i].vflip = FALSE;
-        arg.camConfig[i].bps[0] = DEFAULT_RECORD_BITRATE;
-        arg.camConfig[i].bps[1] = DEFAULT_RECORD_BITRATE;
-        arg.camConfig[i].gop[0] = DEFAULT_GOP_SIZE;
-        arg.camConfig[i].gop[1] = DEFAULT_GOP_SIZE;
-        arg.camConfig[i].ae_on = TRUE;
-        arg.camConfig[i].ae_gain = DEFAULT_AE_GAIN;
-        arg.camConfig[i].awb = DEFAULT_AWB;
-        arg.camConfig[i].iso = DEFAULT_ISO;
-        arg.camConfig[i].lsc = DEFAULT_LSC;
-        arg.camConfig[i].exp_time = DEFAULT_EXP_TIME;
+        arg.cam[i].enable = FALSE;
+        arg.cam[i].hflip = FALSE;
+        arg.cam[i].vflip = FALSE;
+        arg.cam[i].bps[0] = DEFAULT_RECORD_BITRATE;
+        arg.cam[i].bps[1] = DEFAULT_RECORD_BITRATE;
+        arg.cam[i].gop[0] = DEFAULT_GOP_SIZE;
+        arg.cam[i].gop[1] = DEFAULT_GOP_SIZE;
+        arg.cam[i].ae_on = TRUE;
+        arg.cam[i].ae_gain = DEFAULT_AE_GAIN;
+        arg.cam[i].awb = DEFAULT_AWB;
+        arg.cam[i].iso = DEFAULT_ISO;
+        arg.cam[i].lsc = DEFAULT_LSC;
+        arg.cam[i].exp_time = DEFAULT_EXP_TIME;
 #if 0
-        arg.cam_en[i] = FALSE;
+        arg.cam[i].enable = FALSE;
         arg.hflip[i] = FALSE;
         arg.vflip[i] = FALSE;
         arg.fps[STREAM_REC][i] = DEFAULT_RECORD_FPS;
@@ -315,35 +313,35 @@ gint ParserClass::json_parser(const gchar *path, const gchar *header)
 
         sobj = json_object_object_get(hobj, JSON_CAP_OBJ_NAME);
         json_object_get_value(sobj, "enable", &arg.stream_en[STREAM_CAP]);
-        json_object_get_value(sobj, "delay", &arg.cap_delay);
-        json_object_get_value(sobj, "timeout", &arg.cap_timeout);
-        json_object_get_value(sobj, "turbojpeg", &arg.turbojpeg);
-        json_object_get_value(sobj, "padding", &arg.padding);
+        if(arg.stream_en[STREAM_CAP])
+        {
+            json_object_get_value(sobj, "delay", &arg.cap.delay);
+            json_object_get_value(sobj, "timeout", &arg.cap.timeout);
+            json_object_get_value(sobj, "encoder", &arg.cap.encoder);
+            json_object_get_value(sobj, "padding", &arg.cap.padding);
+            json_object_get_value(sobj, "record", &arg.cap.record_en);
+            json_object_get_value(sobj, "rtsp", &arg.cap.rtsp_en);
+            arg.stream_en[STREAM_REC] = arg.cap.record_en;
+            arg.stream_en[STREAM_RTSP] = arg.cap.rtsp_en;
+            arg.ipc_en = TRUE;
+        }
 
         for(guint8 i=0; i<MAX_CHANNEL; i++)
         {
             sobj = json_object_object_get(hobj, g_strdup_printf("i2c%d", i/2? 1:2));
-            json_object_get_value(sobj, "exp_time", &arg.i2cConfig[i/2].exp_time);
-            arg.camConfig[i].exp_time = arg.i2cConfig[i/2].exp_time;
+            json_object_get_value(sobj, "exp_time", &arg.cam[i].exp_time);
             vobj = json_object_object_get(sobj, g_strdup_printf("ch%d", i));
-            json_object_get_value(vobj, "enable", &arg.camConfig[i].enable);
-            json_object_get_value(vobj, "hflip", &arg.camConfig[i].hflip);
-            json_object_get_value(vobj, "vflip", &arg.camConfig[i].vflip);
-            json_object_get_value(vobj, "bps", &arg.camConfig[i].bps);
-            json_object_get_value(vobj, "ae_on", &arg.camConfig[i].ae_on);
-            json_object_get_value(vobj, "ae_gain", &arg.camConfig[i].ae_gain);
-            //json_object_get_value(vobj, "exp_time", &arg.camConfig[i].exp_time);
-            //json_object_get_value(vobj, "gop", &arg.camConfig[i].gop);
-            //json_object_get_value(vobj, "awb", &arg.camConfig[i].awb);
-            //json_object_get_value(vobj, "lsc", &arg.camConfig[i].lsc);
-            //json_object_get_value(vobj, "iso", &arg.camConfig[i].iso);
+            json_object_get_value(vobj, "enable", &arg.cam[i].enable);
+            json_object_get_value(vobj, "hflip", &arg.cam[i].hflip);
+            json_object_get_value(vobj, "vflip", &arg.cam[i].vflip);
+            json_object_get_value(vobj, "bps", &arg.cam[i].bps);
+            json_object_get_value(vobj, "ae_on", &arg.cam[i].ae_on);
+            json_object_get_value(vobj, "ae_gain", &arg.cam[i].ae_gain);
             
-            arg.ch_enable |= (arg.camConfig[i].enable<<i);
-            arg.ch_rotate |= (arg.camConfig[i].hflip<<(i*2));
-            arg.ch_rotate |= (arg.camConfig[i].vflip<<(i*2+1));
-            //arg.ch_enable |= (arg.cam_en[i]<<i);
-            //arg.ch_rotate |= (arg.hflip[i]<<(i*2));
-            //arg.ch_rotate |= (arg.vflip[i]<<(i*2+1));
+            arg.ch_enable |= (arg.cam[i].enable<<i);
+            arg.ch_rotate |= (arg.cam[i].hflip<<(i*2));
+            arg.ch_rotate |= (arg.cam[i].vflip<<(i*2+1));
+
             for(guint8 k=0; k<MAX_MODE; k++)
                 arg.fps[k][i]= arg.main_fps[CSI_1];
         }
@@ -358,18 +356,6 @@ gint ParserClass::json_parser(const gchar *path, const gchar *header)
 
 gint ParserClass::arg_parser(int *argc, char **argv[])
 {
-#if 0
-    gint debug_level = 0;
-    gchar *saveDot = "/tmp";
-    gchar *saveDir = "/mnt/sd_cam";
-    gint ch_enable = 0x0f;
-    gint resolution_mode = 0;
-    gint rec_fps = RECORD_FPS;
-    gint rtsp_fps = RTSP_FPS;
-    gint rec_bitrate = RECORD_BITRATE;
-    gint rtsp_bitrate = RTSP_BITRATE;
-    gchar *ohtName = CHARNEXT(*argv[0], '/');
-#endif
     //arg* arg = (arg *)data;
     GOptionContext *ctx;
     GError *err = NULL;
@@ -383,7 +369,7 @@ gint ParserClass::arg_parser(int *argc, char **argv[])
         {"dbg", 'g', 0, G_OPTION_ARG_INT, &arg.dbg_level, "debug level, default(5)", "INT"},
         {"log", 'l', 0, G_OPTION_ARG_INT, &arg.log_level, "log level, default(6)", "INT"},
         {"dot", 'o', 0, G_OPTION_ARG_STRING, &arg.dotDir, "save dot representation of pipeline to FILE and exit, default(/tmp)", "STRING"},
-        {"channel", 'c', 0, G_OPTION_ARG_INT, &arg.ch_enable, "cam channel enable bit, default(0x0f)", "HEX"},
+        {"channel", 'c', 0, G_OPTION_ARG_INT, &arg.ch_enable, "cam channel enable bit, default(0x00)", "HEX"},
         {"rotation", 'r', 0, G_OPTION_ARG_INT, &arg.ch_rotate, "cam channel rotation bit, default(0x00)", "HEX"},
         {"mnt", 'O', 0, G_OPTION_ARG_STRING, &arg.mntDir, "save video & audio file to directory, default(/mnt/sd_cam)", "STRING"},
         {"width", 'w', 0, G_OPTION_ARG_INT, &arg.width, "cam width HD(1280), FHD(1920), default(1920)", "INT"},
@@ -395,28 +381,26 @@ gint ParserClass::arg_parser(int *argc, char **argv[])
         {"rtsp", 'E', 0, G_OPTION_ARG_INT, &arg.stream_en[STREAM_RTSP], "rtsp streaming enable, default(1)", "INT"},
         {"cap", 'a', 0, G_OPTION_ARG_INT, &arg.stream_en[STREAM_CAP], "video capturing enable, default(0)", "INT"},
         {"audio", 's', 0, G_OPTION_ARG_INT, &arg.audio_en, "audio recording enable, default(FALSE)", "INT"},
-        {"turbo", 'j', 0, G_OPTION_ARG_INT, &arg.turbojpeg, "turbojpeg enable, default(FALSE)", "INT"},
-        {"padding", 'J', 0, G_OPTION_ARG_INT, &arg.padding, "padding enable, default(TRUE)", "INT"},
-        {"capenc", 'N', 0, G_OPTION_ARG_INT, &arg.cap_encoder_en, "video capture encoder(jpeg) enable, default(FALSE)", "INT"},
-        {"capalways", 'y', 0, G_OPTION_ARG_INT, &arg.cap_always, "video capture bin always add, default(FALSE)", "INT"},
-        {"capres", 'R', 0, G_OPTION_ARG_INT, &arg.cap_res_en, "video capture response enable, default(FALSE)", "INT"},
-        {"capdelay", 'A', 0, G_OPTION_ARG_INT, &arg.cap_delay, "video capture delay(msec), default(0)", "INT"},
-        {"capdir", 'I', 0, G_OPTION_ARG_STRING, &arg.captureDir, "save capture file to directory, default capture", "STRING"},
+        {"padding", 'J', 0, G_OPTION_ARG_INT, &arg.cap.padding, "padding enable, default(TRUE)", "INT"},
+        {"capenc", 'N', 0, G_OPTION_ARG_STRING, &arg.cap.encoder, "video capture encoder(jpeg, turbo/turbojpeg, raw/rgb), default(jpeg)", "INT"},
+        {"capres", 'R', 0, G_OPTION_ARG_INT, &arg.cap.res_en, "video capture response enable, default(FALSE)", "INT"},
+        {"capmax", 'x', 0, G_OPTION_ARG_INT, &arg.cap.maxCnt, "capture max count, default(3)", "INT"},
+        {"capdelay", 'A', 0, G_OPTION_ARG_INT, &arg.cap.delay, "video capture delay(msec), default(0)", "INT"},
+        {"capdir", 'I', 0, G_OPTION_ARG_STRING, &arg.cap.path, "save capture file to directory, default capture", "STRING"},
         {"etcp", 'C', 0, G_OPTION_ARG_INT, &arg.tcp_en, "tcp server enable, default(FALSE)", "INT"},
         {"ein", 'i', 0, G_OPTION_ARG_INT, &arg.input_en, "terminal input enable, default(FALSE)", "INT"},
         {"rport", 'P', 0, G_OPTION_ARG_STRING, &arg.rtsp_port, "rtsp port number, default(8554)", "STRING"},
         {"id", 'u', 0, G_OPTION_ARG_STRING, &arg.rtsp_id, "rtsp id, default(user)", "STRING"},
         {"passwd", 'p', 0, G_OPTION_ARG_STRING, &arg.rtsp_passwd, "rtsp passwd, default(user)", "STRING"},
-        {"cmax", 'x', 0, G_OPTION_ARG_INT, &arg.captureMaxCnt, "capture max count, default(3)", "INT"},
         {"eover", 'v', 0, G_OPTION_ARG_INT, &arg.overlay_en, "overlay enable, default(FALSE)", "INT"},
         {"split_diff", 'D', 0, G_OPTION_ARG_INT, &arg.split_diff_msec, "split diff msec, default(100)", "INT"},
         {"split_max", 'X', 0, G_OPTION_ARG_INT, &arg.split_max_msec, "split max msec, default(2000)", "INT"},
         {"split_sec", 'S', 0, G_OPTION_ARG_INT, &arg.split_sec, "split sec, default(0)", "INT"},
         {"eipc", 'f', 0, G_OPTION_ARG_INT, &arg.ipc_en, "ipc enable, default(FALSE)", "INT"},
         {"ipc_mid", 'F', 0, G_OPTION_ARG_INT, &arg.ipc_mid, "ipc message id, default(0x65)", "INT"},
+        {"dual_enc", 'U', 0, G_OPTION_ARG_INT, &arg.dual_enc, "dual encoder, default(FALSE)", "INT"},
         {"fault", 0, 0, G_OPTION_ARG_INT, &arg.fault, "fault debug setup, default(FALSE)", "INT"},
         {"tport", 0, 0, G_OPTION_ARG_INT, &arg.tcp_port, "tcp port num, default(8555)", "INT"},
-        {"dual_enc", 'U', 0, G_OPTION_ARG_INT, &arg.dual_enc, "dual encoder, default(TRUE)", "INT"},
         {"fmain0", 0, 0, G_OPTION_ARG_INT, &arg.main_fps[CSI_1], "csi1 main frame per second, default(15)", "INT"},
         {"fmain1", 0, 0, G_OPTION_ARG_INT, &arg.main_fps[CSI_2], "csi2 main frame per second, default(15)", "INT"},
         {"frec0", 0, 0, G_OPTION_ARG_INT, &arg.fps[STREAM_REC][0], "ch0 record frame per second, default(15)", "INT"},
@@ -431,22 +415,22 @@ gint ParserClass::arg_parser(int *argc, char **argv[])
         {"fcap1", 0, 0, G_OPTION_ARG_INT, &arg.fps[STREAM_CAP][1], "ch1 capture frame per second, default(15)", "INT"},
         {"fcap2", 0, 0, G_OPTION_ARG_INT, &arg.fps[STREAM_CAP][2], "ch2 capture frame per second, default(15)", "INT"},
         {"fcap3", 0, 0, G_OPTION_ARG_INT, &arg.fps[STREAM_CAP][3], "ch3 capture frame per second, default(15)", "INT"},
-        {"brec0", 0, 0, G_OPTION_ARG_INT, &arg.camConfig[0].bps[STREAM_REC], "ch0 record Kbyte per second, default(4096)", "INT"},
-        {"brec1", 0, 0, G_OPTION_ARG_INT, &arg.camConfig[1].bps[STREAM_REC], "ch1 record Kbyte per second, default(4096)", "INT"},
-        {"brec2", 0, 0, G_OPTION_ARG_INT, &arg.camConfig[2].bps[STREAM_REC], "ch2 record Kbyte per second, default(4096)", "INT"},
-        {"brec3", 0, 0, G_OPTION_ARG_INT, &arg.camConfig[3].bps[STREAM_REC], "ch3 record Kbyte per second, default(4096)", "INT"},
-        {"brtsp0", 0, 0, G_OPTION_ARG_INT, &arg.camConfig[0].bps[STREAM_RTSP], "ch0 rtsp Kbyte per second, default(1024)", "INT"},
-        {"brtsp1", 0, 0, G_OPTION_ARG_INT, &arg.camConfig[1].bps[STREAM_RTSP], "ch1 rtsp Kbyte per second, default(1024)", "INT"},
-        {"brtsp2", 0, 0, G_OPTION_ARG_INT, &arg.camConfig[2].bps[STREAM_RTSP], "ch2 rtsp Kbyte per second, default(1024)", "INT"},
-        {"brtsp3", 0, 0, G_OPTION_ARG_INT, &arg.camConfig[3].bps[STREAM_RTSP], "ch3 rtsp Kbyte per second, default(1024)", "INT"},
-        {"grec0", 0, 0, G_OPTION_ARG_INT, &arg.camConfig[0].gop[STREAM_REC], "ch0 rec gop size, default(15)", "INT"},
-        {"grec1", 0, 0, G_OPTION_ARG_INT, &arg.camConfig[1].gop[STREAM_REC], "ch1 rec gop size, default(15)", "INT"},
-        {"grec3", 0, 0, G_OPTION_ARG_INT, &arg.camConfig[2].gop[STREAM_REC], "ch2 rec gop size, default(15)", "INT"},
-        {"grec0", 0, 0, G_OPTION_ARG_INT, &arg.camConfig[3].gop[STREAM_REC], "ch3 rec gop size, default(15)", "INT"},
-        {"grtsp0", 0, 0, G_OPTION_ARG_INT, &arg.camConfig[0].gop[STREAM_RTSP], "ch0 rtsp gop size, default(15)", "INT"},
-        {"grtsp1", 0, 0, G_OPTION_ARG_INT, &arg.camConfig[1].gop[STREAM_RTSP], "ch1 rtsp gop size, default(15)", "INT"},
-        {"grtsp2", 0, 0, G_OPTION_ARG_INT, &arg.camConfig[2].gop[STREAM_RTSP], "ch2 rtsp gop size, default(15)", "INT"},
-        {"grtsp3", 0, 0, G_OPTION_ARG_INT, &arg.camConfig[3].gop[STREAM_RTSP], "ch3 rtsp gop size, default(15)", "INT"},
+        {"brec0", 0, 0, G_OPTION_ARG_INT, &arg.cam[0].bps[STREAM_REC], "ch0 record Kbyte per second, default(4096)", "INT"},
+        {"brec1", 0, 0, G_OPTION_ARG_INT, &arg.cam[1].bps[STREAM_REC], "ch1 record Kbyte per second, default(4096)", "INT"},
+        {"brec2", 0, 0, G_OPTION_ARG_INT, &arg.cam[2].bps[STREAM_REC], "ch2 record Kbyte per second, default(4096)", "INT"},
+        {"brec3", 0, 0, G_OPTION_ARG_INT, &arg.cam[3].bps[STREAM_REC], "ch3 record Kbyte per second, default(4096)", "INT"},
+        {"brtsp0", 0, 0, G_OPTION_ARG_INT, &arg.cam[0].bps[STREAM_RTSP], "ch0 rtsp Kbyte per second, default(1024)", "INT"},
+        {"brtsp1", 0, 0, G_OPTION_ARG_INT, &arg.cam[1].bps[STREAM_RTSP], "ch1 rtsp Kbyte per second, default(1024)", "INT"},
+        {"brtsp2", 0, 0, G_OPTION_ARG_INT, &arg.cam[2].bps[STREAM_RTSP], "ch2 rtsp Kbyte per second, default(1024)", "INT"},
+        {"brtsp3", 0, 0, G_OPTION_ARG_INT, &arg.cam[3].bps[STREAM_RTSP], "ch3 rtsp Kbyte per second, default(1024)", "INT"},
+        {"grec0", 0, 0, G_OPTION_ARG_INT, &arg.cam[0].gop[STREAM_REC], "ch0 rec gop size, default(15)", "INT"},
+        {"grec1", 0, 0, G_OPTION_ARG_INT, &arg.cam[1].gop[STREAM_REC], "ch1 rec gop size, default(15)", "INT"},
+        {"grec3", 0, 0, G_OPTION_ARG_INT, &arg.cam[2].gop[STREAM_REC], "ch2 rec gop size, default(15)", "INT"},
+        {"grec0", 0, 0, G_OPTION_ARG_INT, &arg.cam[3].gop[STREAM_REC], "ch3 rec gop size, default(15)", "INT"},
+        {"grtsp0", 0, 0, G_OPTION_ARG_INT, &arg.cam[0].gop[STREAM_RTSP], "ch0 rtsp gop size, default(15)", "INT"},
+        {"grtsp1", 0, 0, G_OPTION_ARG_INT, &arg.cam[1].gop[STREAM_RTSP], "ch1 rtsp gop size, default(15)", "INT"},
+        {"grtsp2", 0, 0, G_OPTION_ARG_INT, &arg.cam[2].gop[STREAM_RTSP], "ch2 rtsp gop size, default(15)", "INT"},
+        {"grtsp3", 0, 0, G_OPTION_ARG_INT, &arg.cam[3].gop[STREAM_RTSP], "ch3 rtsp gop size, default(15)", "INT"},
         {NULL}
     };
 
@@ -477,26 +461,18 @@ gint ParserClass::arg_parser(int *argc, char **argv[])
     if(max[0] > 0) arg.main_fps[CSI_2] = max[0];
     if(max[1] > 0) arg.main_fps[CSI_1] = max[1];
 
-    __LOG(LOG_NOTICE, "[%s][%s:%d] arg.main_fps[CSI_1]:%d, arg.main_fps[CSI_2]:%d", LOG_KEY, _FILE_, __LINE__, arg.main_fps[CSI_1], arg.main_fps[CSI_2]);
+    __LOG(LOG_INFO, "[%s][%s:%d] arg.main_fps[CSI_1]:%d, arg.main_fps[CSI_2]:%d", LOG_KEY, _FILE_, __LINE__, arg.main_fps[CSI_1], arg.main_fps[CSI_2]);
 #endif
-
-    //__LOG(LOG_CRIT, "[GST][%s:%d] arg.ch_enable : 0x%02x", _FILE_, __LINE__, arg.ch_enable);
+    //__LOG(LOG_NOTICE, "[%s][%s:%d] arg.ch_enable : 0x%x", LOG_KEY, _FILE_, __LINE__, arg.ch_enable);
     for(i=0; i<MAX_CHANNEL; i++)
     {
-        if((arg.ch_enable>>i & 0x1) == 0x01) arg.cam_en[i] = TRUE;
-        else arg.cam_en[i] = FALSE;
-
-        if((arg.ch_rotate>>(i*2) & 0x01) == 0x01) arg.hflip[i] = TRUE;
-        else arg.hflip[i] = FALSE;
-
-        if((arg.ch_rotate>>(i*2) & 0x02) == 0x02) arg.vflip[i] = TRUE;
-        else arg.vflip[i] = FALSE;
-
-        //__LOG(LOG_CRIT, "[GST][%s:%d] arg.cam_en : %d", _FILE_, __LINE__, arg.cam_en[i]);
+        arg.cam[i].enable = (arg.ch_enable>>i)&0x01;
+        arg.cam[i].hflip = (arg.ch_rotate>>(i*2))&0x01;
+        arg.cam[i].vflip = (arg.ch_rotate>>(i*2+1))&0x01;
     }
-
+    
     sprintf(str, "echo %d > %s", arg.ch_enable&0x03, DEFAULT_ENABLE_PATH_01);
-    __LOG(LOG_NOTICE, "[%s][%s:%d] %s", LOG_KEY, _FILE_, __LINE__, str);
+    __LOG(LOG_INFO, "[%s][%s:%d] %s", LOG_KEY, _FILE_, __LINE__, str);
     ret = system(str);
     if (ret < 0) {
         __LOG(LOG_CRIT, "[%s][%s:%d] ret:%d", LOG_KEY, _FILE_, __LINE__, ret);
@@ -504,7 +480,7 @@ gint ParserClass::arg_parser(int *argc, char **argv[])
     }
 
     sprintf(str, "echo %d > %s", (arg.ch_enable>>2)&0x03, DEFAULT_ENABLE_PATH_23);
-    __LOG(LOG_NOTICE, "[%s][%s:%d] %s", LOG_KEY, _FILE_, __LINE__, str);
+    __LOG(LOG_INFO, "[%s][%s:%d] %s", LOG_KEY, _FILE_, __LINE__, str);
     ret = system(str);
     if (ret < 0) {
         __LOG(LOG_CRIT, "[%s][%s:%d] ret:%d", LOG_KEY, _FILE_, __LINE__, ret);
@@ -512,7 +488,7 @@ gint ParserClass::arg_parser(int *argc, char **argv[])
     }
 
     sprintf(str, "echo %d > %s", arg.ch_rotate&0x0f, DEFAULT_ROTATE_PATH_01);
-    __LOG(LOG_NOTICE, "[%s][%s:%d] %s", LOG_KEY, _FILE_, __LINE__, str);
+    __LOG(LOG_INFO, "[%s][%s:%d] %s", LOG_KEY, _FILE_, __LINE__, str);
     ret = system(str);
     if (ret < 0) {
         __LOG(LOG_CRIT, "[%s][%s:%d] ret:%d", LOG_KEY, _FILE_, __LINE__, ret);
@@ -520,7 +496,7 @@ gint ParserClass::arg_parser(int *argc, char **argv[])
     }
 
     sprintf(str, "echo %d > %s", (arg.ch_rotate>>4)&0x0f, DEFAULT_ROTATE_PATH_23);
-    __LOG(LOG_NOTICE, "[%s][%s:%d] %s", LOG_KEY, _FILE_, __LINE__, str);
+    __LOG(LOG_INFO, "[%s][%s:%d] %s", LOG_KEY, _FILE_, __LINE__, str);
     ret = system(str);
     if (ret < 0) {
         __LOG(LOG_CRIT, "[%s][%s:%d] ret:%d", LOG_KEY, _FILE_, __LINE__, ret);
@@ -548,12 +524,12 @@ gint ParserClass::check_arg()
 
     for(i=0; i<MAX_CHANNEL; i++) {
         __LOG(LOG_NOTICE, "[%s][%s:%d] ch%d en:%s, vflip:%s, hflip:%s, bps:%d,%d, ae_on:%d, ae_gain:%d, exp_time:%d", \
-            LOG_KEY, _FILE_, __LINE__, i, arg.camConfig[i].enable? "true":"false",  arg.camConfig[i].vflip? "true":"false", arg.camConfig[i].hflip? "true":"false", \
-            arg.camConfig[i].bps[STREAM_REC], arg.camConfig[i].bps[STREAM_RTSP], arg.camConfig[i].ae_on, arg.camConfig[i].ae_gain, arg.camConfig[i].exp_time);
+            LOG_KEY, _FILE_, __LINE__, i, arg.cam[i].enable? "true":"false",  arg.cam[i].vflip? "true":"false", arg.cam[i].hflip? "true":"false", \
+            arg.cam[i].bps[STREAM_REC], arg.cam[i].bps[STREAM_RTSP], arg.cam[i].ae_on, arg.cam[i].ae_gain, arg.cam[i].exp_time);
 
-        if(arg.camConfig[i].bps[STREAM_REC] < 1 || arg.camConfig[i].bps[STREAM_RTSP] < 1) {
+        if(arg.cam[i].bps[STREAM_REC] < 1 || arg.cam[i].bps[STREAM_RTSP] < 1) {
             __LOG(LOG_CRIT, "[%s][%s:%d] rec bps %d, rtsp bps %d not supported", LOG_KEY, _FILE_, __LINE__, \
-                    arg.camConfig[i].bps[STREAM_REC], arg.camConfig[i].bps[STREAM_RTSP]);
+                    arg.cam[i].bps[STREAM_REC], arg.cam[i].bps[STREAM_RTSP]);
 
             return -1;
         }
@@ -573,25 +549,23 @@ gint ParserClass::check_arg()
 
     if(arg.stream_en[STREAM_CAP])
     {
-        if(system(g_strdup_printf("mkdir -p %s/%s", cmdArg.mntDir, cmdArg.captureDir)) < 0)
+        if(system(g_strdup_printf("mkdir -p %s/%s", cmdArg.mntDir, cmdArg.cap.path)) < 0)
             __LOG(LOG_ERR, "[CFG][%s:%d] err mkdir", __FILE__, __LINE__);
 
         __LOG(LOG_NOTICE, "[%s][%s:%d] capture ch0 fps:%d, ch1 fps:%d, ch2 fps:%d, ch3 fps:%d", LOG_KEY, _FILE_, __LINE__, \
                             arg.fps[STREAM_CAP][0], arg.fps[STREAM_CAP][1], arg.fps[STREAM_CAP][2], arg.fps[STREAM_CAP][3]);  
-        __LOG(LOG_NOTICE, "[%s][%s:%d] capEncEn:%d capAlways:%d, MaxCnt:%d, res_en:%d, capDir:%s, delay:%d, timeout:%d, turbo:%d, padding:%d", \
-                            LOG_KEY, _FILE_, __LINE__, arg.cap_encoder_en, arg.cap_always, arg.captureMaxCnt, arg.cap_res_en, arg.captureDir, arg.cap_delay, arg.cap_timeout, arg.turbojpeg, arg.padding);
+        __LOG(LOG_NOTICE, "[%s][%s:%d] capEnc:%s, MaxCnt:%d, res_en:%d, path:%s, delay:%d, timeout:%d, padding:%d", \
+                            LOG_KEY, _FILE_, __LINE__, arg.cap.encoder, arg.cap.maxCnt, arg.cap.res_en, arg.cap.path, arg.cap.delay, arg.cap.timeout, arg.cap.padding);
     }
 
     gint total_fps = 0;
-    //total_fps += arg.stream_en[STREAM_REC]*arg.fps[STREAM_REC]*(arg.cam_en[0]+arg.cam_en[1]+arg.cam_en[2]+arg.cam_en[3]);
-    //total_fps += arg.stream_en[STREAM_RTSP]*arg.fps[STREAM_RTSP]*(arg.cam_en[0]+arg.cam_en[1]+arg.cam_en[2]+arg.cam_en[3]);
+ 
     for(i=0; i<MAX_CHANNEL; i++)
     {
-        if(arg.stream_en[STREAM_REC]) total_fps += arg.fps[STREAM_REC][i]*arg.cam_en[i];
-        if(arg.stream_en[STREAM_RTSP]) total_fps += arg.fps[STREAM_RTSP][i]*arg.cam_en[i];
+        if(arg.stream_en[STREAM_REC]) total_fps += arg.fps[STREAM_REC][i]*cmdArg.cam[i].enable;
+        if(arg.stream_en[STREAM_RTSP]) total_fps += arg.fps[STREAM_RTSP][i]*cmdArg.cam[i].enable;
     }
 
-    //total_fps += arg.stream_en[STREAM_CAP]*arg.fps[STREAM_CAP]*(arg.cam_en[0]+arg.cam_en[1]+arg.cam_en[2]+arg.cam_en[3]);
     total_fps += arg.stream_en[STREAM_CAP]*0;
     total_fps += arg.audio_en*0;
 
@@ -667,18 +641,18 @@ gint ParserClass::cfi_parser(gchar* buffer, gint len, gpointer data)
     
     ch_en = _TCfiData.data.channel;
     capMaxCnt = _TCfiData.data.cap_cnt;
-    //json_sub_object_get_value(cmdArg.json_file, JSON_CAM_OBJ_NAME, JSON_CAP_OBJ_NAME, "delay", &cmdArg.cap_delay);
-    __LOG(LOG_INFO, "[%s][%s:%d] ch:0x%x, tx:%d, cnt:%d, prefix:%s, delay:%d", CAP_LOG_KEY, _FILE_, __LINE__, ch_en, _TCfiData.data.tx_id, capMaxCnt, _TCfiData.data.prefix, cmdArg.cap_delay);
+    //json_sub_object_get_value(cmdArg.json_file, JSON_CAM_OBJ_NAME, JSON_CAP_OBJ_NAME, "delay", &cmdArg.cap.delay);
+    __LOG(LOG_INFO, "[%s][%s:%d] ch:0x%x, tx:%d, cnt:%d, prefix:%s, delay:%d", CAP_LOG_KEY, _FILE_, __LINE__, ch_en, _TCfiData.data.tx_id, capMaxCnt, _TCfiData.data.prefix, cmdArg.cap.delay);
     
-    g_usleep(1000*cmdArg.cap_delay);
+    g_usleep(1000*cmdArg.cap.delay);
 
     for(i=0; i<MAX_CHANNEL; i++)
     {
         if((ch_en>>i & 0x1) != 0x01) continue;
 
-        if (!(cmdArg.cam_en[i] && cmdArg.stream_en[STREAM_CAP]))
+        if (!(cmdArg.cam[i].enable && cmdArg.stream_en[STREAM_CAP]))
         {
-            __LOG(LOG_ERR, "[%s][%s:%d] cmd ch %d capture but not ch enable", CAP_LOG_KEY, _FILE_, __LINE__, i);
+            __LOG(LOG_ERR, "[%s][%s:%d] ch%d capture is not available because ch%d is disable", CAP_LOG_KEY, _FILE_, __LINE__, i, i);
             ch_en &= ~(1 << i);
             continue;
         }
@@ -694,12 +668,12 @@ gint ParserClass::cfi_parser(gchar* buffer, gint len, gpointer data)
                 __LOG(LOG_ERR, "[%s][%s:%d] ch%d has invalid FPS=%d", CAP_LOG_KEY, _FILE_, __LINE__, i ,fps);
                 fps = 1; // fallback
             } 
-            if (cmdArg.cap_timeout <= 100)
+            if (cmdArg.cap.timeout <= 100)
             {
-                __LOG(LOG_ERR, "[%s][%s:%d] ch%d has invalid timeout=%d", CAP_LOG_KEY, _FILE_, __LINE__, i ,cmdArg.cap_timeout);
-                cmdArg.cap_timeout = 200; // fallback
+                __LOG(LOG_ERR, "[%s][%s:%d] ch%d has invalid timeout=%d", CAP_LOG_KEY, _FILE_, __LINE__, i ,cmdArg.cap.timeout);
+                cmdArg.cap.timeout = 200; // fallback
             }
-            timeout_msec[i] = (capMaxCnt * 1000) / fps + cmdArg.cap_timeout;
+            timeout_msec[i] = (capMaxCnt * 1000) / fps + cmdArg.cap.timeout;
 
             __LOG(LOG_INFO, "[%s][%s:%d] ch%d timeout: %lu", CAP_LOG_KEY, _FILE_, __LINE__, i, timeout_msec[i]);
         }
@@ -716,7 +690,7 @@ gint ParserClass::cfi_parser(gchar* buffer, gint len, gpointer data)
         }
     }
 
-    if(cmdArg.cap_res_en && _TCfiData.data.cmd_id == CFI_CAP_REQ_CMD_ID)
+    if(cmdArg.cap.res_en && _TCfiData.data.cmd_id == CFI_CAP_REQ_CMD_ID)
     {
         //memset(chk_cnt, 0, sizeof(chk_cnt));
         _TCfiData.data.cmd_id = CFI_CAP_RES_CMD_ID;
@@ -807,13 +781,13 @@ gint ParserClass::cmd_parser(gchar* buffer, gint len, gpointer data)
             if (compareBuf(token, "rec", 3))
             {
                 for (i = 0; i < MAX_CHANNEL; i++)
-                    if (cmdArg.cam_en[i] && cmdArg.stream_en[STREAM_REC])
+                    if (cmdArg.cam[i].enable && cmdArg.stream_en[STREAM_REC])
                         recordBin[i].getBitrate();
             }
             else if (compareBuf(token, "rtsp", 4))
             {
                 for (i = 0; i < MAX_CHANNEL; i++)
-                    if (cmdArg.cam_en[i] && cmdArg.stream_en[STREAM_RTSP])
+                    if (cmdArg.cam[i].enable && cmdArg.stream_en[STREAM_RTSP])
                         rtspServerBin[i].getBitrate();
             }
             else
@@ -825,13 +799,13 @@ gint ParserClass::cmd_parser(gchar* buffer, gint len, gpointer data)
             if (compareBuf(token, "rec", 3))
             {
                 for (i = 0; i < MAX_CHANNEL; i++)
-                    if (cmdArg.cam_en[i] && cmdArg.stream_en[STREAM_REC])
+                    if (cmdArg.cam[i].enable && cmdArg.stream_en[STREAM_REC])
                         recordBin[i].getFps();
             }
             else if (compareBuf(token, "rtsp", 4))
             {
                 for (i = 0; i < MAX_CHANNEL; i++)
-                    if (cmdArg.cam_en[i] && cmdArg.stream_en[STREAM_RTSP])
+                    if (cmdArg.cam[i].enable && cmdArg.stream_en[STREAM_RTSP])
                         rtspServerBin[i].getFps();
             }
             else
@@ -843,12 +817,12 @@ gint ParserClass::cmd_parser(gchar* buffer, gint len, gpointer data)
             if (compareBuf(token, "rec", 3))
             {
                 // for (i = 0; i < MAX_CHANNEL; i++)
-                // if (cmdArg.cam_en[i] && cmdArg.stream_en[STREAM_REC]) recordBin[i].getFps();
+                // if (cmdArg.cam[i].enable && cmdArg.stream_en[STREAM_REC]) recordBin[i].getFps();
             }
             else if (compareBuf(token, "rtsp", 4))
             {
                 for (i = 0; i < MAX_CHANNEL; i++)
-                    if (cmdArg.cam_en[i] && cmdArg.stream_en[STREAM_RTSP])
+                    if (cmdArg.cam[i].enable && cmdArg.stream_en[STREAM_RTSP])
                         rtspServerBin[i].getCaps();
             }
             else
@@ -860,13 +834,13 @@ gint ParserClass::cmd_parser(gchar* buffer, gint len, gpointer data)
             if (compareBuf(token, "rec", 3))
             {
                 for (i = 0; i < MAX_CHANNEL; i++)
-                    if (cmdArg.cam_en[i] && cmdArg.stream_en[STREAM_REC])
+                    if (cmdArg.cam[i].enable && cmdArg.stream_en[STREAM_REC])
                         recordBin[i].getRotation();
             }
             else if (compareBuf(token, "rtsp", 4))
             {
                 for (i = 0; i < MAX_CHANNEL; i++)
-                    if (cmdArg.cam_en[i] && cmdArg.stream_en[STREAM_RTSP])
+                    if (cmdArg.cam[i].enable && cmdArg.stream_en[STREAM_RTSP])
                         rtspServerBin[i].getRotation();
             }
             else
@@ -879,7 +853,7 @@ gint ParserClass::cmd_parser(gchar* buffer, gint len, gpointer data)
             {
                 for (i = 0; i < MAX_CHANNEL; i++)
                 {
-                    if (cmdArg.cam_en[i] && cmdArg.stream_en[STREAM_REC])
+                    if (cmdArg.cam[i].enable && cmdArg.stream_en[STREAM_REC])
                     {
                         state = recordBin[i].getState();
                         g_print("rec ch%d state : %s\n", i, stateStr[state]);
@@ -890,7 +864,7 @@ gint ParserClass::cmd_parser(gchar* buffer, gint len, gpointer data)
             {
                 for (i = 0; i < MAX_CHANNEL; i++)
                 {
-                    if (cmdArg.cam_en[i] && cmdArg.stream_en[STREAM_RTSP])
+                    if (cmdArg.cam[i].enable && cmdArg.stream_en[STREAM_RTSP])
                     {
                         state = rtspServerBin[i].getState();
                         g_print("rtsp ch%d state : %s\n", i, stateStr[state]);
@@ -901,7 +875,7 @@ gint ParserClass::cmd_parser(gchar* buffer, gint len, gpointer data)
             {
                 for (i = 0; i < MAX_CHANNEL; i++)
                 {
-                    if (cmdArg.cam_en[i] && cmdArg.stream_en[STREAM_CAP])
+                    if (cmdArg.cam[i].enable && cmdArg.stream_en[STREAM_CAP])
                     {
                         state = captureBin[i].getState();
                         g_print("capture ch%d state : %s\n", i, stateStr[state]);
@@ -947,13 +921,13 @@ gint ParserClass::cmd_parser(gchar* buffer, gint len, gpointer data)
             if (compareBuf(token, "rec", 3))
             {
                 for (i = 0; i < MAX_CHANNEL; i++)
-                    if (cmdArg.cam_en[i] && cmdArg.stream_en[STREAM_REC])
+                    if (cmdArg.cam[i].enable && cmdArg.stream_en[STREAM_REC])
                         recordBin[i].getGop();
             }
             else if (compareBuf(token, "rtsp", 4))
             {
                 for (i = 0; i < MAX_CHANNEL; i++)
-                    if (cmdArg.cam_en[i] && cmdArg.stream_en[STREAM_RTSP])
+                    if (cmdArg.cam[i].enable && cmdArg.stream_en[STREAM_RTSP])
                         rtspServerBin[i].getGop();
             }
             else
@@ -965,13 +939,13 @@ gint ParserClass::cmd_parser(gchar* buffer, gint len, gpointer data)
             if (compareBuf(token, "rec", 3))
             {
                 for (i = 0; i < MAX_CHANNEL; i++)
-                    if (cmdArg.cam_en[i] && cmdArg.stream_en[STREAM_REC])
+                    if (cmdArg.cam[i].enable && cmdArg.stream_en[STREAM_REC])
                         recordBin[i].getKeyframe();
             }
             else if (compareBuf(token, "rtsp", 4))
             {
                 for (i = 0; i < MAX_CHANNEL; i++)
-                    if (cmdArg.cam_en[i] && cmdArg.stream_en[STREAM_RTSP])
+                    if (cmdArg.cam[i].enable && cmdArg.stream_en[STREAM_RTSP])
                         rtspServerBin[i].getKeyframe();
             }
             else
@@ -1007,9 +981,9 @@ gint ParserClass::cmd_parser(gchar* buffer, gint len, gpointer data)
                     return -1;
                 }
 
-                if (cmdArg.cam_en[i] && cmdArg.stream_en[STREAM_REC]) recordBin[i].setBitrate(key);
+                if (cmdArg.cam[i].enable && cmdArg.stream_en[STREAM_REC]) recordBin[i].setBitrate(key);
                 //for (i = 0; i < MAX_CHANNEL; i++)
-                    //if (cmdArg.cam_en[i] && cmdArg.stream_en[STREAM_REC])
+                    //if (cmdArg.cam[i].enable && cmdArg.stream_en[STREAM_REC])
                         //recordBin[i].setBitrate(key);
             }
             else if (compareBuf(token, "rtsp", 4))
@@ -1024,7 +998,7 @@ gint ParserClass::cmd_parser(gchar* buffer, gint len, gpointer data)
                 }
 
                 for (i = 0; i < MAX_CHANNEL; i++)
-                    if (cmdArg.cam_en[i] && cmdArg.stream_en[STREAM_RTSP])
+                    if (cmdArg.cam[i].enable && cmdArg.stream_en[STREAM_RTSP])
                         rtspServerBin[i].setBitrate(key);
             }
             else
@@ -1053,10 +1027,10 @@ gint ParserClass::cmd_parser(gchar* buffer, gint len, gpointer data)
                     return -1;
                 }
 
-                if (cmdArg.cam_en[i] && cmdArg.stream_en[STREAM_REC]) recordBin[i].setFps(key);
+                if (cmdArg.cam[i].enable && cmdArg.stream_en[STREAM_REC]) recordBin[i].setFps(key);
 
                 //for (i = 0; i < MAX_CHANNEL; i++)
-                    //if (cmdArg.cam_en[i] && cmdArg.stream_en[STREAM_REC])
+                    //if (cmdArg.cam[i].enable && cmdArg.stream_en[STREAM_REC])
                         //recordBin[i].setFps(key);
             }
             else if (compareBuf(token, "rtsp", 4))
@@ -1079,9 +1053,9 @@ gint ParserClass::cmd_parser(gchar* buffer, gint len, gpointer data)
                     return -1;
                 }
 
-                if (cmdArg.cam_en[i] && cmdArg.stream_en[STREAM_RTSP]) rtspServerBin[i].setFps(key);
+                if (cmdArg.cam[i].enable && cmdArg.stream_en[STREAM_RTSP]) rtspServerBin[i].setFps(key);
                 //for (i = 0; i < MAX_CHANNEL; i++)
-                    //if (cmdArg.cam_en[i] && cmdArg.stream_en[STREAM_RTSP])
+                    //if (cmdArg.cam[i].enable && cmdArg.stream_en[STREAM_RTSP])
                         //rtspServerBin[i].setFps(key);
             }
             else
@@ -1102,7 +1076,7 @@ gint ParserClass::cmd_parser(gchar* buffer, gint len, gpointer data)
                 }
 
                 for (i = 0; i < MAX_CHANNEL; i++)
-                    if (cmdArg.cam_en[i] && cmdArg.stream_en[STREAM_REC])
+                    if (cmdArg.cam[i].enable && cmdArg.stream_en[STREAM_REC])
                         recordBin[i].setRotation(key);
             }
             else if (compareBuf(token, "rtsp", 4))
@@ -1117,7 +1091,7 @@ gint ParserClass::cmd_parser(gchar* buffer, gint len, gpointer data)
                 }
 
                 for (i = 0; i < MAX_CHANNEL; i++)
-                    if (cmdArg.cam_en[i] && cmdArg.stream_en[STREAM_RTSP])
+                    if (cmdArg.cam[i].enable && cmdArg.stream_en[STREAM_RTSP])
                         rtspServerBin[i].setRotation(key);
             }
             else
@@ -1139,7 +1113,7 @@ gint ParserClass::cmd_parser(gchar* buffer, gint len, gpointer data)
 
                 for (i = 0; i < MAX_CHANNEL; i++)
                 {
-                    if (cmdArg.cam_en[i] && cmdArg.stream_en[STREAM_REC])
+                    if (cmdArg.cam[i].enable && cmdArg.stream_en[STREAM_REC])
                     {
                         g_print("rec ch%d state : %s\n", i, stateStr[recordBin[i].getState()]);
                         if(recordBin[i].setState((GstState)key) == GST_STATE_CHANGE_FAILURE)
@@ -1168,7 +1142,7 @@ gint ParserClass::cmd_parser(gchar* buffer, gint len, gpointer data)
 
                 for (i = 0; i < MAX_CHANNEL; i++)
                 {
-                    if (cmdArg.cam_en[i] && cmdArg.stream_en[STREAM_RTSP])
+                    if (cmdArg.cam[i].enable && cmdArg.stream_en[STREAM_RTSP])
                     {
                         g_print("rtsp ch%d state : %s\n", i, stateStr[rtspServerBin[i].getState()]);
                         if(rtspServerBin[i].setState((GstState)key) == GST_STATE_CHANGE_FAILURE)
@@ -1222,7 +1196,7 @@ gint ParserClass::cmd_parser(gchar* buffer, gint len, gpointer data)
 
                 for (i = 0; i < MAX_CHANNEL; i++)
                 {
-                    if (cmdArg.cam_en[i] && cmdArg.stream_en[STREAM_CAP])
+                    if (cmdArg.cam[i].enable && cmdArg.stream_en[STREAM_CAP])
                     {
                         g_print("before capture ch%d state : %s\n", i, stateStr[captureBin[i].getState()]);
                         g_print("capture ch%d state change ret : %d\n", i, captureBin[i].setState((GstState)key));
@@ -1295,7 +1269,7 @@ gint ParserClass::cmd_parser(gchar* buffer, gint len, gpointer data)
                 }
 
                 for (i = 0; i < MAX_CHANNEL; i++)
-                    if (cmdArg.cam_en[i] && cmdArg.stream_en[STREAM_REC])
+                    if (cmdArg.cam[i].enable && cmdArg.stream_en[STREAM_REC])
                         recordBin[i].setGop(key);
             }
             else if (compareBuf(token, "rtsp", 4))
@@ -1310,7 +1284,7 @@ gint ParserClass::cmd_parser(gchar* buffer, gint len, gpointer data)
                 }
 
                 for (i = 0; i < MAX_CHANNEL; i++)
-                    if (cmdArg.cam_en[i] && cmdArg.stream_en[STREAM_RTSP])
+                    if (cmdArg.cam[i].enable && cmdArg.stream_en[STREAM_RTSP])
                         rtspServerBin[i].setGop(key);
             }
             else
@@ -1331,7 +1305,7 @@ gint ParserClass::cmd_parser(gchar* buffer, gint len, gpointer data)
                 }
 
                 for (i = 0; i < MAX_CHANNEL; i++)
-                    if (cmdArg.cam_en[i] && cmdArg.stream_en[STREAM_REC])
+                    if (cmdArg.cam[i].enable && cmdArg.stream_en[STREAM_REC])
                         recordBin[i].setkeyframe(key);
             }
             else if (compareBuf(token, "rtsp", 4))
@@ -1346,7 +1320,7 @@ gint ParserClass::cmd_parser(gchar* buffer, gint len, gpointer data)
                 }
 
                 for (i = 0; i < MAX_CHANNEL; i++)
-                    if (cmdArg.cam_en[i] && cmdArg.stream_en[STREAM_RTSP])
+                    if (cmdArg.cam[i].enable && cmdArg.stream_en[STREAM_RTSP])
                         rtspServerBin[i].setkeyframe(key);
             }
             else
@@ -1358,7 +1332,7 @@ gint ParserClass::cmd_parser(gchar* buffer, gint len, gpointer data)
             if (compareBuf(token, "rtsp", 4))
             {
                 for (i = 0; i < MAX_CHANNEL; i++)
-                    if (cmdArg.cam_en[i] && cmdArg.stream_en[STREAM_RTSP])
+                    if (cmdArg.cam[i].enable && cmdArg.stream_en[STREAM_RTSP])
                         rtspServerBin[i].setTimeStampDebug();
 
                 if(cmdArg.audio_en) rtspServerBin[4].setTimeStampDebug();
@@ -1370,7 +1344,7 @@ gint ParserClass::cmd_parser(gchar* buffer, gint len, gpointer data)
             else if (compareBuf(token, "cap", 3))
             {
                 for (i = 0; i < MAX_CHANNEL; i++)
-                    if (cmdArg.cam_en[i] && cmdArg.stream_en[STREAM_CAP])
+                    if (cmdArg.cam[i].enable && cmdArg.stream_en[STREAM_CAP])
                         captureBin[i].setTimeStampDebug();
             }
         }
@@ -1420,7 +1394,7 @@ gint ParserClass::cmd_parser(gchar* buffer, gint len, gpointer data)
             {
                 for (i = 0; i < MAX_CHANNEL; i++)
                 {
-                    if (cmdArg.cam_en[i] && cmdArg.stream_en[STREAM_REC])
+                    if (cmdArg.cam[i].enable && cmdArg.stream_en[STREAM_REC])
                     {
                         if (gst_pad_is_linked(videoBin[i / 2].getBinRecordSrcPad(i)) == TRUE)
                         {
@@ -1434,7 +1408,7 @@ gint ParserClass::cmd_parser(gchar* buffer, gint len, gpointer data)
                         else
                             g_print("ch%d rec already unlinked!\n", i);
                     }
-                    if (cmdArg.cam_en[i] && cmdArg.stream_en[STREAM_RTSP])
+                    if (cmdArg.cam[i].enable && cmdArg.stream_en[STREAM_RTSP])
                     {
                         if (gst_pad_is_linked(videoBin[i / 2].getBinRtspSrcPad(i)) == TRUE)
                         {
@@ -1451,11 +1425,11 @@ gint ParserClass::cmd_parser(gchar* buffer, gint len, gpointer data)
                 }
             }
 
-            if (cmdArg.cam_en[key] && cmdArg.stream_en[STREAM_CAP])
+            if (cmdArg.cam[key].enable && cmdArg.stream_en[STREAM_CAP])
             {
                 if(key1 == 2)
                 {
-                    if(!captureBin[key].init(key, cmdArg.crop_en[key/2]))
+                    if(!captureBin[key].init(key))
                         g_print("ch%d captrueBin init failed\n",key);
 
                     if(captureBin[key].addBinToPipe(pipeline)) g_print("ch%d capture bin add\n", key);
@@ -1507,9 +1481,9 @@ gint ParserClass::cmd_parser(gchar* buffer, gint len, gpointer data)
                 if(key1 == 0) {
                     key2 = cmdArg.fps[STREAM_CAP][key]*60;
                 } else if(key1 == 1) {
-                    if(key2 == 0) key2 = cmdArg.captureMaxCnt;
+                    if(key2 == 0) key2 = cmdArg.cap.maxCnt;
                 } else if(key1 == 2) {
-                    if(key2 == 0) key2 = cmdArg.captureMaxCnt;
+                    if(key2 == 0) key2 = cmdArg.cap.maxCnt;
                 } 
 
                 g_print("ch:%d, fps:%d, mode : %d, max_cnt : %d\n", key, cmdArg.fps[STREAM_CAP][key], key1, key2);
@@ -1569,7 +1543,7 @@ gint ParserClass::cmd_parser(gchar* buffer, gint len, gpointer data)
                 for (i = 0; i < MAX_CHANNEL; i++)
                 {
 
-                    if (cmdArg.cam_en[i] && cmdArg.stream_en[STREAM_REC])
+                    if (cmdArg.cam[i].enable && cmdArg.stream_en[STREAM_REC])
                     {
                         gst_element_sync_state_with_parent(recordBin[i].re.bin);
 
@@ -1597,7 +1571,7 @@ gint ParserClass::cmd_parser(gchar* buffer, gint len, gpointer data)
                 }
 
                 gst_element_set_state(pipeline, GST_STATE_PLAYING);
-                if (cmdArg.cam_en[i] && cmdArg.stream_en[STREAM_REC])
+                if (cmdArg.cam[i].enable && cmdArg.stream_en[STREAM_REC])
                 {
                     gst_element_sync_state_with_parent(recordBin[i].re.bin);
 
@@ -1622,7 +1596,7 @@ gint ParserClass::cmd_parser(gchar* buffer, gint len, gpointer data)
                 gst_element_set_state(pipeline, GST_STATE_PLAYING);
                 for (i = 0; i < MAX_CHANNEL; i++)
                 {
-                    if (cmdArg.cam_en[i] && cmdArg.stream_en[STREAM_RTSP])
+                    if (cmdArg.cam[i].enable && cmdArg.stream_en[STREAM_RTSP])
                     {
                         gst_element_sync_state_with_parent(rtspServerBin[i].re.bin);
 
@@ -1650,7 +1624,7 @@ gint ParserClass::cmd_parser(gchar* buffer, gint len, gpointer data)
                 }
 
                 gst_element_set_state(pipeline, GST_STATE_PLAYING);
-                if (cmdArg.cam_en[i] && cmdArg.stream_en[STREAM_RTSP])
+                if (cmdArg.cam[i].enable && cmdArg.stream_en[STREAM_RTSP])
                 {
                     gst_element_sync_state_with_parent(rtspServerBin[i].re.bin);
 
@@ -1704,7 +1678,7 @@ gint ParserClass::cmd_parser(gchar* buffer, gint len, gpointer data)
                 //gst_element_set_state(pipeline, GST_STATE_PAUSED);
                 for (i = 0; i < MAX_CHANNEL; i++)
                 {
-                    if (cmdArg.cam_en[i] && cmdArg.stream_en[STREAM_CAP])
+                    if (cmdArg.cam[i].enable && cmdArg.stream_en[STREAM_CAP])
                     {
                         if (gst_pad_is_linked(videoBin[i / 2].getBinRtspSrcPad(i)) != TRUE)
                         {
@@ -1733,7 +1707,7 @@ gint ParserClass::cmd_parser(gchar* buffer, gint len, gpointer data)
                     return -1;
                 }
 
-                if (cmdArg.cam_en[i] && cmdArg.stream_en[STREAM_CAP])
+                if (cmdArg.cam[i].enable && cmdArg.stream_en[STREAM_CAP])
                 {
                     if (gst_pad_is_linked(videoBin[i / 2].getBinCaptureSrcPad(i)) != TRUE)
                     {
@@ -1765,7 +1739,7 @@ gint ParserClass::cmd_parser(gchar* buffer, gint len, gpointer data)
             {
                 for (i = 0; i < MAX_CHANNEL; i++)
                 {
-                    if (cmdArg.cam_en[i] && cmdArg.stream_en[STREAM_REC])
+                    if (cmdArg.cam[i].enable && cmdArg.stream_en[STREAM_REC])
                     {
                         if (gst_pad_is_linked(videoBin[i / 2].getBinRecordSrcPad(i)) != TRUE)
                         {
@@ -1791,7 +1765,7 @@ gint ParserClass::cmd_parser(gchar* buffer, gint len, gpointer data)
                     return -1;
                 }
 
-                if (cmdArg.cam_en[i] && cmdArg.stream_en[STREAM_REC])
+                if (cmdArg.cam[i].enable && cmdArg.stream_en[STREAM_REC])
                 {
                     if (gst_pad_is_linked(videoBin[i / 2].getBinRecordSrcPad(i)) != TRUE)
                     {
@@ -1815,7 +1789,7 @@ gint ParserClass::cmd_parser(gchar* buffer, gint len, gpointer data)
             {
                 for (i = 0; i < MAX_CHANNEL; i++)
                 {
-                    if (cmdArg.cam_en[i] && cmdArg.stream_en[STREAM_RTSP])
+                    if (cmdArg.cam[i].enable && cmdArg.stream_en[STREAM_RTSP])
                     {
                         if (gst_pad_is_linked(videoBin[i / 2].getBinRtspSrcPad(i)) != TRUE)
                         {
@@ -1841,7 +1815,7 @@ gint ParserClass::cmd_parser(gchar* buffer, gint len, gpointer data)
                     return -1;
                 }
 
-                if (cmdArg.cam_en[i] && cmdArg.stream_en[STREAM_RTSP])
+                if (cmdArg.cam[i].enable && cmdArg.stream_en[STREAM_RTSP])
                 {
                     if (gst_pad_is_linked(videoBin[i / 2].getBinRtspSrcPad(i)) != TRUE)
                     {
@@ -1872,7 +1846,7 @@ gint ParserClass::cmd_parser(gchar* buffer, gint len, gpointer data)
                 //gst_element_set_state(pipeline, GST_STATE_PAUSED);
                 for (i = 0; i < MAX_CHANNEL; i++)
                 {
-                    if (cmdArg.cam_en[i] && cmdArg.stream_en[STREAM_CAP])
+                    if (cmdArg.cam[i].enable && cmdArg.stream_en[STREAM_CAP])
                     {
                         if (gst_pad_is_linked(videoBin[i / 2].getBinCaptureSrcPad(i)) == TRUE)
                         {
@@ -1901,7 +1875,7 @@ gint ParserClass::cmd_parser(gchar* buffer, gint len, gpointer data)
                     return -1;
                 }
 
-                if (cmdArg.cam_en[i] && cmdArg.stream_en[STREAM_CAP])
+                if (cmdArg.cam[i].enable && cmdArg.stream_en[STREAM_CAP])
                 {
                     if (gst_pad_is_linked(videoBin[i / 2].getBinCaptureSrcPad(i)) == TRUE)
                     {
@@ -1933,7 +1907,7 @@ gint ParserClass::cmd_parser(gchar* buffer, gint len, gpointer data)
             {
                 for (i = 0; i < MAX_CHANNEL; i++)
                 {
-                    if (cmdArg.cam_en[i] && cmdArg.stream_en[STREAM_REC])
+                    if (cmdArg.cam[i].enable && cmdArg.stream_en[STREAM_REC])
                     {
                         if (1)  //(gst_pad_is_linked(videoBin[i / 2].getBinRecordSrcPad(i)) == TRUE)
                         {
@@ -1959,7 +1933,7 @@ gint ParserClass::cmd_parser(gchar* buffer, gint len, gpointer data)
                     return -1;
                 }
 
-                if (cmdArg.cam_en[i] && cmdArg.stream_en[STREAM_REC])
+                if (cmdArg.cam[i].enable && cmdArg.stream_en[STREAM_REC])
                 {
                     if (1)
                     {
@@ -1983,7 +1957,7 @@ gint ParserClass::cmd_parser(gchar* buffer, gint len, gpointer data)
             {
                 for (i = 0; i < MAX_CHANNEL; i++)
                 {
-                    if (cmdArg.cam_en[i] && cmdArg.stream_en[STREAM_RTSP])
+                    if (cmdArg.cam[i].enable && cmdArg.stream_en[STREAM_RTSP])
                     {
                         if (gst_pad_is_linked(videoBin[i / 2].getBinRtspSrcPad(i)) == TRUE)
                         {
@@ -2009,7 +1983,7 @@ gint ParserClass::cmd_parser(gchar* buffer, gint len, gpointer data)
                     return -1;
                 }
 
-                if (cmdArg.cam_en[i] && cmdArg.stream_en[STREAM_RTSP])
+                if (cmdArg.cam[i].enable && cmdArg.stream_en[STREAM_RTSP])
                 {
                     if (gst_pad_is_linked(videoBin[i / 2].getBinRtspSrcPad(i)) == TRUE)
                     {
@@ -2038,7 +2012,7 @@ gint ParserClass::cmd_parser(gchar* buffer, gint len, gpointer data)
             {
                 for (i = 0; i < MAX_CHANNEL; i++)
                 {
-                    if (cmdArg.cam_en[i] && cmdArg.stream_en[STREAM_CAP])
+                    if (cmdArg.cam[i].enable && cmdArg.stream_en[STREAM_CAP])
                     {
                         if(captureBin[i].addBinToPipe(pipeline)) g_print("ch%d capture bin add\n", i);
                         else g_print("ch%d capture bin add error\n", i);
@@ -2055,7 +2029,7 @@ gint ParserClass::cmd_parser(gchar* buffer, gint len, gpointer data)
                     return -1;
                 }
 
-                if (cmdArg.cam_en[i] && cmdArg.stream_en[STREAM_CAP]) {
+                if (cmdArg.cam[i].enable && cmdArg.stream_en[STREAM_CAP]) {
                     //g_print("ch%d caputre bin add\n", i);
                     if(captureBin[i].addBinToPipe(pipeline)) g_print("ch%d capture bin add\n", i);
                     else g_print("ch%d capture bin add error\n", i);
@@ -2069,7 +2043,7 @@ gint ParserClass::cmd_parser(gchar* buffer, gint len, gpointer data)
             {
                 for (i = 0; i < MAX_CHANNEL; i++)
                 {
-                    if (cmdArg.cam_en[i] && cmdArg.stream_en[STREAM_REC])
+                    if (cmdArg.cam[i].enable && cmdArg.stream_en[STREAM_REC])
                     {
                         if(recordBin[i].addBinToPipe(pipeline)) g_print("ch%d record bin add\n", i);
                         else g_print("ch%d record bin add error\n", i);
@@ -2086,7 +2060,7 @@ gint ParserClass::cmd_parser(gchar* buffer, gint len, gpointer data)
                     return -1;
                 }
 
-                if (cmdArg.cam_en[i] && cmdArg.stream_en[STREAM_REC]) {
+                if (cmdArg.cam[i].enable && cmdArg.stream_en[STREAM_REC]) {
                     //g_print("ch%d caputre bin add\n", i);
                     if(recordBin[i].addBinToPipe(pipeline)) g_print("ch%d record bin add\n", i);
                     else g_print("ch%d record bin add error\n", i);
@@ -2100,7 +2074,7 @@ gint ParserClass::cmd_parser(gchar* buffer, gint len, gpointer data)
             {
                 for (i = 0; i < MAX_CHANNEL; i++)
                 {
-                    if (cmdArg.cam_en[i] && cmdArg.stream_en[STREAM_RTSP])
+                    if (cmdArg.cam[i].enable && cmdArg.stream_en[STREAM_RTSP])
                     {
                         if(rtspServerBin[i].addBinToPipe(pipeline)) g_print("ch%d rtsp bin add\n", i);
                         else g_print("ch%d rtsp bin add error\n", i);
@@ -2117,7 +2091,7 @@ gint ParserClass::cmd_parser(gchar* buffer, gint len, gpointer data)
                     return -1;
                 }
 
-                if (cmdArg.cam_en[i] && cmdArg.stream_en[STREAM_RTSP]) {
+                if (cmdArg.cam[i].enable && cmdArg.stream_en[STREAM_RTSP]) {
                     //g_print("ch%d caputre bin add\n", i);
                     if(rtspServerBin[i].addBinToPipe(pipeline)) g_print("ch%d rtsp bin add\n", i);
                     else g_print("ch%d rtsp bin add error\n", i);
@@ -2138,7 +2112,7 @@ gint ParserClass::cmd_parser(gchar* buffer, gint len, gpointer data)
             if(token == NULL)
             {
                 for (i = 0; i < MAX_CHANNEL; i++)
-                    if (cmdArg.cam_en[i] && cmdArg.stream_en[STREAM_CAP])
+                    if (cmdArg.cam[i].enable && cmdArg.stream_en[STREAM_CAP])
                     {
                         if (gst_pad_unlink(videoBin[i / 2].getBinCaptureSrcPad(i), captureBin[i].getBinSinkPad()) != TRUE)
                         {
@@ -2180,7 +2154,7 @@ gint ParserClass::cmd_parser(gchar* buffer, gint len, gpointer data)
             if(token == NULL)
             {
                 for (i = 0; i < MAX_CHANNEL; i++)
-                    if (cmdArg.cam_en[i] && cmdArg.stream_en[STREAM_REC])
+                    if (cmdArg.cam[i].enable && cmdArg.stream_en[STREAM_REC])
                     {
                         if (gst_pad_unlink(videoBin[i / 2].getBinRecordSrcPad(i), recordBin[i].getBinSinkPad()) != TRUE)
                         {
@@ -2223,7 +2197,7 @@ gint ParserClass::cmd_parser(gchar* buffer, gint len, gpointer data)
             if(token == NULL)
             {
                 for (i = 0; i < MAX_CHANNEL; i++)
-                    if (cmdArg.cam_en[i] && cmdArg.stream_en[STREAM_RTSP])
+                    if (cmdArg.cam[i].enable && cmdArg.stream_en[STREAM_RTSP])
                     {
                         if (gst_pad_unlink(videoBin[i / 2].getBinRtspSrcPad(i), rtspServerBin[i].getBinSinkPad()) != TRUE)
                         {

@@ -25,6 +25,13 @@ typedef struct {
     void* arg1;
 } CapArgs;
 
+typedef enum
+{
+    CAP_ENC_JPEG = 0,
+    CAP_ENC_TURBO =1,
+    CAP_ENC_RAW =2
+} CapEncType;
+
 typedef struct _CaptureData
 {
     GstElement *appsrc;
@@ -33,11 +40,13 @@ typedef struct _CaptureData
     gint captureCnt_;
     gint captureMaxCnt;
     GstBuffer *buf;
-    gchar *filePath;
     guint8 mode;
     gint fps;
     gboolean debug;
     tjhandle tjCompressor;
+    CapEncType enc_type;
+    const gchar *filePath;
+    const gchar *extention;
 } CaptureData;
 
 typedef struct _CaptureElement
@@ -50,13 +59,13 @@ typedef struct _CaptureElement
     GstElement *convert;
     GstElement *parse;
     GstElement *bin;
-    GstElement *sink;
+    GstElement *appsink;
     GstElement *crop;
     GstElement *overlay;
     GstElement *capsfilter;
     GstElement *capsfilter2;
     GstElement *queue_sink;
-    GstElement *queue_src;
+    GstElement *appsrc;
     GstElement *queue3;
 } CaptureElement;
 
@@ -66,7 +75,7 @@ public :
 	static CaptureBin* getInstance();
     CaptureBin();
     ~CaptureBin();
-	gboolean init(guint8 num, gboolean crop_en);
+	gboolean init(guint8 num);
     gint setFilePath(guint8 *prefix);
     gint startCapture(gint maxCnt);
     gint stopCapture();
@@ -75,7 +84,7 @@ public :
     guint8 getFPS();
     gint getCaptureCnt();
     gint getCaptureCnt_();
-    gchar* getCaptureFilePath();
+    const gchar* getCaptureFilePath();
     GstPad* getBinSinkPad();
     void setQueueSize(guint size);
     GstStateChangeReturn setState(GstState state);

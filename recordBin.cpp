@@ -427,11 +427,11 @@ gboolean RecordBin::init(guint8 num, gboolean crop_en)
     }
 
 #ifdef CHANNEL_EACH_CROP
-    if(crop_en && cmdArg.overlay_en) ret = gst_element_link_many(re.queue, re.crop, re.overlay, re.convert, re.rate, re.capsfilter, re.enc, re.queue2, NULL);
-    else if(cmdArg.overlay_en) ret = gst_element_link_many(re.queue, re.overlay, re.convert, re.rate, re.capsfilter, re.enc, re.queue2, NULL);
+    if(crop_en && cmdArg.overlay_en) ret = gst_element_link_many(re.queue, re.crop, re.overlay, re.convert, re.rate, re.capsfilter, re.enc, NULL);
+    else if(cmdArg.overlay_en) ret = gst_element_link_many(re.queue, re.overlay, re.convert, re.rate, re.capsfilter, re.enc, NULL);
     else if(crop_en) {
         //ret = gst_element_link_many(re.queue, re.crop, re.convert, re.rate, re.capsfilter, re.enc, re.parse, re.tee, NULL);
-        ret = gst_element_link_many(re.queue, re.crop, re.convert, re.rate, re.capsfilter, re.enc, re.queue2, NULL);
+        ret = gst_element_link_many(re.queue, re.crop, re.convert, re.rate, re.capsfilter, re.enc, NULL);
 #if 0
         if(recordData.dual_bps == TRUE)
             ret = gst_element_link_many(re.queue, re.crop, re.convert, re.rate, re.capsfilter, re.enc, re.parse, re.queue2, NULL);
@@ -440,7 +440,7 @@ gboolean RecordBin::init(guint8 num, gboolean crop_en)
 #endif
     }
     //else if(crop_en) ret = gst_element_link_many(re.queue, re.convert, re.rate, re.capsfilter, re.enc, re.parse, re.queue2, NULL);
-    else ret = gst_element_link_many(re.queue, re.rate, re.capsfilter, re.enc, re.queue2, NULL);
+    else ret = gst_element_link_many(re.queue, re.rate, re.capsfilter, re.enc, NULL);
     //if(cmdArg.mode) ret = gst_element_link_many(re.queue, re.crop, re.convert, re.enc, re.parse, re.queue2, NULL);
 #else
     ret = gst_element_link_many(re.queue, re.rate, re.capsfilter, re.enc, re.parse, re.queue2, NULL);
@@ -473,8 +473,8 @@ gboolean RecordBin::init(guint8 num, gboolean crop_en)
     g_object_set(re.overlay, "halignment", 0, NULL);
     g_object_set(re.overlay, "font-desc", DEFAULT_OVERLAY_FONT, NULL);
 
-    g_object_set(re.enc, "bitrate", cmdArg.camConfig[ch].bps[STREAM_REC], NULL);
-    g_object_set(re.enc, "gop-size", cmdArg.camConfig[ch].gop[STREAM_REC], NULL);
+    g_object_set(re.enc, "bitrate", cmdArg.cam[ch].bps[STREAM_REC], NULL);
+    g_object_set(re.enc, "gop-size", cmdArg.cam[ch].gop[STREAM_REC], NULL);
     //g_object_set(re.enc, "quant", 35, NULL);
     //g_object_set(re.parse, "config-interval", -1, NULL);
     //g_object_set(re.rate, "max-rate", MAIN_FPS, "drop-only", FALSE, NULL);
@@ -510,7 +510,7 @@ gboolean RecordBin::init(guint8 num, gboolean crop_en)
     }
 
 #if 1
-    sinkPad = gst_ghost_pad_new(g_strdup_printf("recordBin_sink_ch%d", ch), gst_element_get_static_pad(re.queue, "sink"));
+    sinkPad = gst_ghost_pad_new(g_strdup_printf("sinkpad_ch%d", ch), gst_element_get_static_pad(re.queue, "sink"));
     ret = gst_element_add_pad(re.bin, sinkPad);
     if(!ret) {
         __LOG(LOG_CRIT, "[GST][%s:%d] record bin add err", _FILE_, __LINE__);
@@ -527,7 +527,7 @@ gboolean RecordBin::init(guint8 num, gboolean crop_en)
     //    return -1;
     //}
 #endif
-    srcPad = gst_ghost_pad_new(g_strdup_printf("queue_pad_ch%d", ch), gst_element_get_static_pad(re.queue2, "src"));
+    srcPad = gst_ghost_pad_new(g_strdup_printf("srcpad_ch%d", ch), gst_element_get_static_pad(re.enc, "src"));
     ret = gst_element_add_pad(re.bin, srcPad);
     if(!ret) {
         __LOG(LOG_CRIT, "[GST][%s:%d] record bin add err", _FILE_, __LINE__);

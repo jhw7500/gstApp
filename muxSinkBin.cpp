@@ -34,6 +34,7 @@ static gboolean handle_eos_event(GstPad *pad, GstPadProbeInfo *info, gpointer us
         case GST_EVENT_EOS:
         {
             __LOG(LOG_NOTICE, "[GST][%s:%d] ch%d Received EOS event on pad : %s", _FILE_, __LINE__, data->ch, GST_PAD_NAME(pad));
+            is_interrupted = TRUE;
             break;
         }
         case GST_EVENT_TAG:
@@ -256,20 +257,12 @@ GstPad* MuxSinkBin::getBinAudioSinkPad()
 
 GstPad* MuxSinkBin::getBinQueuePad()
 {
-    if(queuePad == NULL)
+    if(sinkPad == NULL)
         __LOG(LOG_ERR, "[GST][%s:%d] %s ch:%d pad is null", _FILE_, __LINE__, __FUNCTION__, muxSinkData.ch);
     else
         __LOG(LOG_INFO, "[GST][%s:%d] %s ch:%d", _FILE_, __LINE__, __FUNCTION__, muxSinkData.ch);
 
-    return queuePad;
-}
-
-gboolean MuxSinkBin::addBinQueuePad()
-{
-    queuePad = gst_ghost_pad_new(g_strdup_printf("queue_pad_ch%d", muxSinkData.ch), gst_element_get_static_pad(be.queue, "sink"));
-    gst_pad_add_probe(queuePad, GST_PAD_PROBE_TYPE_EVENT_BOTH, (GstPadProbeCallback)handle_eos_event, &muxSinkData, NULL);
-
-    return gst_element_add_pad(be.bin, queuePad);
+    return sinkPad;
 }
 
 gboolean MuxSinkBin::init(guint8 num)
@@ -289,60 +282,26 @@ gboolean MuxSinkBin::init(guint8 num)
     be.tsmux = gst_element_factory_make("mpegtsmux", "mpegtsmux");
     be.queue = gst_element_factory_make(QUEUE_TYPE, "queue");
     be.parse = gst_element_factory_make("h264parse", "h264parse");
-#if 0
-    be.filesink = gst_element_factory_make("filesink", g_strdup_printf("filesink%d", muxSinkData.ch));
-    g_object_set(be.mp4mux, "movie-timescale", 3000, NULL);
-    g_object_set(be.filesink, "location", "output_test.mp4", NULL);
-    //g_object_set(be.filesink, "last-sample", 3000, NULL);
-
-    gst_bin_add_many(GST_BIN(be.bin), be.mp4mux, be.filesink, NULL);
-    //GstCaps *caps = gst_caps_new_simple("audio/x-raw","channel", G_TYPE_INT, 1, NULL);
-
-    ret = gst_element_link_many(be.mp4mux, be.filesink, NULL);
-    //ret = gst_element_link_filtered(be.mux, be.resample, caps);
-    //ret = gst_element_link_filtered(be.mux, be.filesink, caps);
-    if (!ret) {
-        __LOG(LOG_CRIT, "[GST][%s:%d] link error in bin", _FILE_, __LINE__);
-        return ret;
-    }
-    //gst_caps_unref(caps);
-#if 0
-    ret = gst_element_link(be.resample, be.filesink);
-    if (!ret) {
-        __LOG(LOG_CRIT, "[GST][%s:%d] link error in bin", _FILE_, __LINE__);
-        return ret;
-    }
-
-    
-#endif
-
-#endif
 
     if (!be.bin || !be.sink || !be.mp4mux || !be.tsmux || !be.queue || !be.parse) {
         __LOG(LOG_CRIT, "[GST][%s:%d] element create error", _FILE_, __LINE__);
         return ret;
     }
-    gst_bin_add_many(GST_BIN(be.bin), be.queue, be.parse, be.sink, NULL);
+    gst_bin_add_many(GST_BIN(be.bin), be.parse, be.sink, NULL);
     ret =gst_bin_add(GST_BIN(pipeline), be.bin);
     if(!ret) {
         __LOG(LOG_CRIT, "[GST][%s:%d] bin add error in pipeline", _FILE_, __LINE__);
         return ret;
     }
 #if 1
-    ret = gst_element_link_many(be.queue, be.parse, be.sink, NULL);
+    ret = gst_element_link_many(be.parse, be.sink, NULL);
     if(!ret) {
         __LOG(LOG_CRIT, "[GST][%s:%d] bin link error in pipeline", _FILE_, __LINE__);
         return ret;
     }
 #endif
 
-#if 0
-    g_object_set(be.sink, "max-size-time", 60*GST_SECOND, NULL);
-    if(ch==0) g_object_set(be.sink, "location", "test_ch0_%02d.mp4", NULL);
-    if(ch==1) g_object_set(be.sink, "location", "test_ch1_%02d.mp4", NULL);
-    if(ch==2) g_object_set(be.sink, "location", "test_ch2_%02d.mp4", NULL);
-    if(ch==3) g_object_set(be.sink, "location", "test_ch3_%02d.mp4", NULL);
-#endif
+
     guint64 duration;
     //duration = ((615)*GST_SECOND*cmdArg.duration)/10;
     duration = GST_SECOND*cmdArg.duration*60;
@@ -416,6 +375,15 @@ gboolean MuxSinkBin::init(guint8 num)
 
     //if(!gst_element_add_pad(me.bin, gst_ghost_pad_new(g_strdup_printf("muxBinSink_video_ch%d", ch), gst_element_get_request_pad(me.sink, "video_aux_%u"))))
         //g_error("error");
+
+    sinkPad = gst_ghost_pad_new("srcpad", gst_element_get_static_pad(be.parse, "sink"));
+    gst_pad_add_probe(sinkPad, GST_PAD_PROBE_TYPE_EVENT_BOTH, (GstPadProbeCallback)handle_eos_event, &muxSinkData, NULL);
+
+    ret = gst_element_add_pad(be.bin, sinkPad);
+    if(!ret) {
+        __LOG(LOG_CRIT, "[GST][%s:%d] record bin add err", _FILE_, __LINE__);
+        return ret;
+    }
 
     return ret;
 }

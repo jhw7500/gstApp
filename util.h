@@ -119,18 +119,22 @@ typedef struct {
 } CamConfig;
 
 typedef struct {
-    guint32 exp_time;
-} I2cConfig;
+    gboolean res_en;
+    gboolean rtsp_en;
+    gboolean record_en;
+    gint maxCnt;
+    gboolean padding;
+    gint delay;
+    gint timeout;
+    const gchar *path;
+    const gchar *encoder;
+} CaptureConfig;
 
 typedef struct _CmdArg
 {
     LevelMode levelMode;
     IoMode ioMode;
-    I2cConfig i2cConfig[MAX_VIDEO_SRC];
-    CamConfig camConfig[MAX_CHANNEL];
-    gboolean hflip[MAX_CHANNEL];
-    gboolean vflip[MAX_CHANNEL];
-    gboolean cam_en[MAX_CHANNEL];
+    CamConfig cam[MAX_CHANNEL];
     gint fps[MAX_MODE][MAX_CHANNEL];
     gboolean stream_en[MAX_MODE];
     gint gop[MAX_MODE][MAX_CHANNEL];
@@ -147,21 +151,16 @@ typedef struct _CmdArg
     gint play_delay;
     gboolean fault;
     gint duration;
-    gboolean cap_encoder_en;
-    gboolean cap_always;
-    gboolean cap_res_en;
     gboolean tcp_en;
     gint tcp_port;
     gboolean audio_en;
     const gchar *appname;
-    gint captureMaxCnt;
     gint split_diff_msec;
     gint split_max_msec;
     gint split_audio_min_msec;
     gint split_sec;
     gboolean input_en;
     const gchar *rtsp_port;
-    const gchar *captureDir;
     const gchar *rtsp_id;
     const gchar *rtsp_passwd;
     gboolean overlay_en;
@@ -170,12 +169,9 @@ typedef struct _CmdArg
     gboolean crop_en[2];
     gboolean ipc_en;
     gint ipc_mid;
-    gint cap_delay;
-    gint cap_timeout;
     const gchar *muxer;
-    gboolean turbojpeg;
     gboolean dual_enc;
-    gboolean padding;
+    CaptureConfig cap;
 } CmdArg;
 
 #pragma pack(pop)

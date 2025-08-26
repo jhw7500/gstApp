@@ -287,7 +287,10 @@ static void	media_configure(GstRTSPMediaFactory *factory, GstRTSPMedia *media, g
 
 static void eos_callback(GstAppSink *appsink, gpointer user_data) 
 {
-    __LOG(LOG_NOTICE, "[GST][%s:%d] %s", _FILE_, __LINE__, __FUNCTION__);
+    RtspServerData *info = (RtspServerData *)user_data;
+
+    __LOG(LOG_NOTICE, "[GST][%s:%d] ch%d %s", _FILE_, __LINE__, info->ch, __FUNCTION__);
+    is_interrupted = TRUE;
 }
 
 static GstFlowReturn new_sample_handler(GstElement *sink, gpointer userData) 
@@ -686,7 +689,7 @@ gboolean RtspServerBin::audioInit()
     g_object_set(re.sink, "emit-signals", TRUE, "sync", TRUE, "async", FALSE, NULL);
     //g_object_set(re.convert, "videocrop-meta-enable", TRUE, NULL);
 
-    g_signal_connect(re.sink, "eos", G_CALLBACK(eos_callback), NULL);
+    g_signal_connect(re.sink, "eos", G_CALLBACK(eos_callback), &rtspServerData);
     g_signal_connect(re.sink, "new-sample", G_CALLBACK(new_sample_handler), &rtspServerData);
     g_signal_connect(re.sink, "new-preroll", G_CALLBACK(new_preroll_handler), &rtspServerData);
     //g_signal_connect(re.identity, "handoff", G_CALLBACK(on_identity_handoff), &rtspServerData);
@@ -854,7 +857,7 @@ gboolean RtspServerBin::init(guint8 ch, gboolean crop_en)
         return ret;
     }
 
-    gst_bin_add_many(GST_BIN(re.bin), re.queue, re.rate, re.convert, re.parse, re.queue2, re.sink, re.capsfilter, re.crop, re.overlay, re.identity, re.enc, re.tee, NULL);
+    gst_bin_add_many(GST_BIN(re.bin), re.queue, re.rate, re.convert, re.parse, re.sink, re.capsfilter, re.crop, re.overlay, re.enc, NULL);
     
     //gst_bin_add_many(GST_BIN(re.bin), re.convert2, re.compositor, re.capsfilter2, re.videoflip, re.convert2, NULL);
 
@@ -863,34 +866,6 @@ gboolean RtspServerBin::init(guint8 ch, gboolean crop_en)
         __LOG(LOG_CRIT, "[GST][%s:%d] rtsp bin add error in pipeline", _FILE_, __LINE__);
         return ret;
     }
-
-#ifdef CHANNEL_EACH_CROP
-    if(crop_en && cmdArg.overlay_en) ret = gst_element_link_many(re.queue, re.crop, re.overlay, re.convert, re.rate, re.capsfilter, re.enc, re.parse, re.queue2, re.sink, NULL);
-    else if(cmdArg.overlay_en) ret = gst_element_link_many(re.queue, re.overlay, re.convert, re.rate, re.capsfilter, re.enc, re.parse, re.queue2, re.sink, NULL);
-    else if(crop_en) {
-        if(cmdArg.dual_enc == TRUE)
-            ret = gst_element_link_many(re.queue, re.crop, re.convert, re.rate, re.capsfilter, re.enc, re.parse, re.queue2, re.sink, NULL);
-        else
-        {
-            //gst_bin_remove_many(GST_BIN(re.bin), re.crop, re.convert, re.rate, re.capsfilter, re.enc, re.parse, re.queue2, NULL);
-            ret = gst_element_link_many(re.queue, re.sink, NULL);
-        }
-    }
-    else ret = gst_element_link_many(re.queue, re.rate, re.capsfilter, re.enc, re.parse, re.queue2, re.sink, NULL);
-
-    //if(cmdArg.overlay_en) ret = gst_element_link_many(re.queue, re.crop, re.overlay, re.convert, re.rate, re.capsfilter, re.enc, re.parse, re.queue2, re.sink, NULL);
-    //else ret = gst_element_link_many(re.queue, re.crop, re.convert, re.rate, re.capsfilter, re.enc, re.parse, re.queue2, re.sink, NULL);
-    //if(cmdArg.mode) ret = gst_element_link_many(re.queue, re.crop, re.convert, re.enc, re.parse, re.queue2, re.sink, NULL);
-#else
-    ret = gst_element_link_many(re.queue, re.rate, re.capsfilter, re.enc, re.parse, re.queue2, re.sink, NULL);
-#endif
-    if (!ret) {
-        __LOG(LOG_CRIT, "[GST][%s:%d] rtsp link err", _FILE_, __LINE__);
-        return ret;
-    }
-
-    //g_object_set(re.convert, "composition-meta-enable", TRUE, NULL);
-    //g_object_set(re.convert, "videocrop-meta-enable", TRUE, NULL);
 
     GstCaps *caps = gst_caps_new_simple("video/x-raw", 
                                         //"format", G_TYPE_STRING, "NV12",
@@ -913,17 +888,51 @@ gboolean RtspServerBin::init(guint8 ch, gboolean crop_en)
         g_object_set(re.crop, "top", 0, "bottom", 0, "left", 0, "right", cmdArg.width, NULL);
         //g_object_set(re.crop, "top", 0, "bottom", 0, "left", 0, "right", cmdArg.res[cmdArg.resMode].width, NULL);
 
-    //if(cmdArg.rtsp_fps >= 25) g_object_set(re.rate, "max-rate", cmdArg.rtsp_fps, "drop-only", TRUE, NULL);
     g_object_set(re.overlay, "valignment", 2, NULL);
     g_object_set(re.overlay, "halignment", 0, NULL);
     g_object_set(re.overlay, "font-desc", DEFAULT_OVERLAY_FONT, NULL);
 
-    g_object_set(re.enc, "bitrate", cmdArg.camConfig[ch].bps[STREAM_RTSP], NULL);
-    g_object_set(re.enc, "gop-size", cmdArg.camConfig[ch].gop[STREAM_RTSP], NULL);
+    g_object_set(re.enc, "bitrate", cmdArg.cam[ch].bps[STREAM_RTSP], NULL);
+    g_object_set(re.enc, "gop-size", cmdArg.cam[ch].gop[STREAM_RTSP], NULL);
     g_object_set(re.queue, "max-size-time", GST_SECOND/2, "leaky", LEAKY_DOWNSTREAM, NULL);
-    g_object_set(re.queue2, "max-size-time", GST_SECOND/2, "leaky", LEAKY_DOWNSTREAM, NULL);
+
+#ifdef CHANNEL_EACH_CROP
+    if(crop_en && cmdArg.overlay_en) ret = gst_element_link_many(re.queue, re.crop, re.overlay, re.convert, re.rate, re.capsfilter, re.enc, re.parse, re.sink, NULL);
+    else if(crop_en) {
+        if(cmdArg.dual_enc == TRUE)
+            ret = gst_element_link_many(re.queue, re.crop, re.convert, re.rate, re.capsfilter, re.enc, re.parse, re.sink, NULL);
+        else {
+            gst_bin_remove_many(GST_BIN(re.bin), re.crop, re.convert, re.rate, re.capsfilter, re.enc, re.parse, NULL);
+            ret = gst_element_link_many(re.queue, re.sink, NULL);
+        }
+    }
+    else {
+        if(cmdArg.dual_enc == TRUE)
+            ret = gst_element_link_many(re.queue, re.rate, re.capsfilter, re.enc, re.parse, re.sink, NULL);
+        else {
+            gst_bin_remove_many(GST_BIN(re.bin), re.crop, re.convert, re.rate, re.capsfilter, re.enc, re.parse, NULL);
+            ret = gst_element_link_many(re.queue, re.sink, NULL);
+        }
+    }
+
+    //if(cmdArg.overlay_en) ret = gst_element_link_many(re.queue, re.crop, re.overlay, re.convert, re.rate, re.capsfilter, re.enc, re.parse, re.queue2, re.sink, NULL);
+    //else ret = gst_element_link_many(re.queue, re.crop, re.convert, re.rate, re.capsfilter, re.enc, re.parse, re.queue2, re.sink, NULL);
+    //if(cmdArg.mode) ret = gst_element_link_many(re.queue, re.crop, re.convert, re.enc, re.parse, re.queue2, re.sink, NULL);
+#else
+    ret = gst_element_link_many(re.queue, re.rate, re.capsfilter, re.enc, re.parse, re.queue2, re.sink, NULL);
+#endif
+    if (!ret) {
+        __LOG(LOG_CRIT, "[GST][%s:%d] rtsp link err", _FILE_, __LINE__);
+        return ret;
+    }
+
+    //g_object_set(re.convert, "composition-meta-enable", TRUE, NULL);
+    //g_object_set(re.convert, "videocrop-meta-enable", TRUE, NULL);
+
+    //if(cmdArg.rtsp_fps >= 25) g_object_set(re.rate, "max-rate", cmdArg.rtsp_fps, "drop-only", TRUE, NULL);
+
     //g_object_set(re.capsfilter, "max-size-time", 5*GST_SECOND, "max-size-buffers", 60, "leaky", 1, NULL);
-    g_object_set(re.sink, "max-buffers", cmdArg.fps[STREAM_RTSP][ch], NULL);
+    g_object_set(re.sink, "max-buffers", cmdArg.fps[STREAM_RTSP][ch]/2, NULL);
     g_object_set(re.sink, "drop", TRUE, NULL);
     //g_object_set(pipe->sink, "max-lateness", 1*GST_SECOND, NULL);
     //g_object_set(pipe->sink, "render-delay", 100*GST_MSECOND, NULL);

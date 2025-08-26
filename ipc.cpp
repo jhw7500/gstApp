@@ -57,7 +57,7 @@ int CIPCInsance::init(ThreadArgs *args)
     if(ret < 0)
 		__LOG(LOG_CRIT, "[IPC][%s:%d] ret:%d", _FILE_, __LINE__, ret);
 
-    makeDir(cmdArg.captureDir);
+    makeDir(cmdArg.cap.path);
 
     return ret;
 }

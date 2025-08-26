@@ -42,7 +42,7 @@ public :
 	static EncoderBin* getInstance() ;
     EncoderBin();
     ~EncoderBin();
-	gboolean init(guint8 num, gboolean crop_en) ;
+	gboolean init(guint8 ch) ;
     GstPad* getBinSinkPad();
     void setBitrate(guint16 data);
     void getBitrate();
@@ -56,10 +56,10 @@ public :
     void getKeyframe();
     void setkeyframe(guint16 data);
     void setDualBps(gboolean val);
-    gboolean addBinRtspSrcPad(guint8 ch);
-    GstPad* getBinRtspSrcPad(guint8 ch);
-    gboolean addBinRecSrcPad(guint8 ch);
-    GstPad* getBinRecSrcPad(guint8 ch);
+    gboolean addBinRtspSrcPad();
+    GstPad* getBinRtspSrcPad();
+    gboolean addBinRecSrcPad();
+    GstPad* getBinRecSrcPad();
     GstStateChangeReturn setState(GstState state);
     GstState getState();
     GstElement* getBinAppsrc();
@@ -75,10 +75,9 @@ public :
     //GstElement *pipeline[2];
 	
 private :
-    guint8 ch;
     GstPad *sinkPad;
     GstPad *srcPad;
-    EncData recordData;
+    EncData encData;
 	GstPad *srcRtspPad;
     GstPad *srcRecPad;
 };

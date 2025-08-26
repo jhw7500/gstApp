@@ -50,7 +50,6 @@ public :
     void setSplitMsec(gint msec);
     void handle_last_sample();
     GstPad* getBinQueuePad();
-    gboolean addBinQueuePad();
     //gchararray format_location(GstElement *sink, guint arg0, gpointer data);
 private :
     //static gchararray format_location(GstElement *sink, guint arg0, gpointer data);
@@ -65,7 +64,7 @@ private :
     GstPad *sinkAudioPad;
     GstPad *sinkAudioPad_;
     GstPad *sinkVideoPad;
-    GstPad *queuePad;
+    GstPad *sinkPad;
 };
 
 #endif

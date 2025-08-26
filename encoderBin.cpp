@@ -30,7 +30,7 @@ void EncoderBin::getBitrate()
     //g_object_get(re.enc, "bitrate", &bps, NULL);
     g_object_get(re.enc, "bitrate", &bps, NULL);
     //__LOG(LOG_NOTICE, "[GST][%s:%d] ch%d get bitrate : %d", _FILE_, __LINE__, ch, bps);
-     g_print("rec ch%d get bitrate : %d\n", ch, bps);
+     g_print("rec ch%d get bitrate : %d\n", encData.ch, bps);
 }
 
 void EncoderBin::setBitrate(guint16 data)
@@ -40,8 +40,8 @@ void EncoderBin::setBitrate(guint16 data)
     //g_object_get(re.enc, "bitrate", &bps, NULL);
     g_object_set(re.enc, "bitrate", data, NULL);
     g_object_get(re.enc, "bitrate", &bps, NULL);
-    __LOG(LOG_NOTICE, "[GST][%s:%d] ch%d set bitrate : %d", _FILE_, __LINE__, ch, bps);
-    g_print("rec ch%d set bitrate : %d\n", ch, bps);
+    __LOG(LOG_NOTICE, "[GST][%s:%d] ch%d set bitrate : %d", _FILE_, __LINE__, encData.ch, bps);
+    g_print("rec ch%d set bitrate : %d\n", encData.ch, bps);
 }
 
 void EncoderBin::getFps()
@@ -54,7 +54,7 @@ void EncoderBin::getFps()
     caps_str = gst_caps_to_string(caps);
 
     //__LOG(LOG_NOTICE, "[GST][%s:%d] ch%d get caps : %s", _FILE_, __LINE__, ch, caps_str);
-    g_print("rec ch%d get caps : %s\n", ch, caps_str);
+    g_print("rec ch%d get caps : %s\n", encData.ch, caps_str);
 
     gst_caps_unref(caps);
     g_free(caps_str);
@@ -81,8 +81,8 @@ void EncoderBin::setFps(guint16 data)
     g_object_set(re.capsfilter, "caps", caps, NULL);
     //g_object_get(re.capsfilter, "caps", caps, NULL);
     caps_str = gst_caps_to_string(caps);
-    __LOG(LOG_NOTICE, "[GST][%s:%d] ch%d set caps : %s", _FILE_, __LINE__, ch, caps_str);
-    g_print("rec ch%d set caps : %s\n", ch, caps_str);
+    __LOG(LOG_NOTICE, "[GST][%s:%d] ch%d set caps : %s", _FILE_, __LINE__, encData.ch, caps_str);
+    g_print("rec ch%d set caps : %s\n", encData.ch, caps_str);
 
     gst_caps_unref(caps);
     g_free(caps_str);
@@ -96,8 +96,8 @@ void EncoderBin::setRotation(guint16 data)
     //__LOG(LOG_NOTICE, "[GST][%s:%d] ch%d get bitrate : %d", _FILE_, __LINE__, ch, bps);
     g_object_set(re.convert, "rotation", data, NULL);
     g_object_get(re.convert, "rotation", &rotation, NULL);
-    __LOG(LOG_NOTICE, "[GST][%s:%d] ch%d set rotation : %d", _FILE_, __LINE__, ch, rotation);
-    g_print("rec ch%d set rotation : %d\n", ch, rotation);
+    __LOG(LOG_NOTICE, "[GST][%s:%d] ch%d set rotation : %d", _FILE_, __LINE__, encData.ch, rotation);
+    g_print("rec ch%d set rotation : %d\n", encData.ch, rotation);
 }
 
 void EncoderBin::getRotation()
@@ -106,7 +106,7 @@ void EncoderBin::getRotation()
 
     g_object_get(re.convert, "rotation", &rotation, NULL);
     //__LOG(LOG_NOTICE, "[GST][%s:%d] ch%d get rotation : %d", _FILE_, __LINE__, ch, rotation);
-    g_print("rec ch%d get rotation : %d\n", ch, rotation);
+    g_print("rec ch%d get rotation : %d\n", encData.ch, rotation);
 }
 
 void EncoderBin::setGop(guint16 data)
@@ -117,8 +117,8 @@ void EncoderBin::setGop(guint16 data)
     //__LOG(LOG_NOTICE, "[GST][%s:%d] ch%d get bitrate : %d", _FILE_, __LINE__, ch, bps);
     g_object_set(re.enc, "gop-size", data, NULL);
     g_object_get(re.enc, "gop-size", &gop, NULL);
-    __LOG(LOG_NOTICE, "[GST][%s:%d] ch%d set gop_size : %d", _FILE_, __LINE__, ch, gop);
-    g_print("rec ch%d set gop_size : %d\n", ch, gop);
+    __LOG(LOG_NOTICE, "[GST][%s:%d] ch%d set gop_size : %d", _FILE_, __LINE__, encData.ch, gop);
+    g_print("rec ch%d set gop_size : %d\n", encData.ch, gop);
 }
 
 void EncoderBin::getGop()
@@ -127,7 +127,7 @@ void EncoderBin::getGop()
 
     g_object_get(re.enc, "gop-size", &gop, NULL);
     //__LOG(LOG_NOTICE, "[GST][%s:%d] ch%d get gop_size : %d", _FILE_, __LINE__, ch, gop);
-    g_print("rec ch%d get gop_size : %d\n", ch, gop);
+    g_print("rec ch%d get gop_size : %d\n", encData.ch, gop);
 }
 
 void EncoderBin::getKeyframe()
@@ -138,7 +138,7 @@ void EncoderBin::getKeyframe()
     //__LOG(LOG_NOTICE, "[GST][%s:%d] ch%d get bitrate : %d", _FILE_, __LINE__, ch, bps);
     g_object_get(re.enc, "set-keyframe", &key, NULL);
     //__LOG(LOG_NOTICE, "[GST][%s:%d] ch%d get keyframe : %d", _FILE_, __LINE__, ch, key);
-    g_print("rec ch%d get keyframe : %d\n", ch, key);
+    g_print("rec ch%d get keyframe : %d\n", encData.ch, key);
 }
 
 void EncoderBin::setkeyframe(guint16 data)
@@ -149,8 +149,8 @@ void EncoderBin::setkeyframe(guint16 data)
     //__LOG(LOG_NOTICE, "[GST][%s:%d] ch%d get bitrate : %d", _FILE_, __LINE__, ch, bps);
     g_object_set(re.enc, "set-keyframe", data, NULL);
     g_object_get(re.enc, "set-keyframe", &key, NULL);
-    __LOG(LOG_NOTICE, "[GST][%s:%d] ch%d set keyframe : %d", _FILE_, __LINE__, ch, key);
-    g_print("rec ch%d set keyframe : %d\n", ch, key);
+    __LOG(LOG_NOTICE, "[GST][%s:%d] ch%d set keyframe : %d", _FILE_, __LINE__, encData.ch, key);
+    g_print("rec ch%d set keyframe : %d\n", encData.ch, key);
 }
 
 GstState EncoderBin::getState()
@@ -169,9 +169,9 @@ GstStateChangeReturn EncoderBin::setState(GstState state)
 
 gboolean EncoderBin::addBinToPipe(GstElement *pipe)
 {
-    if(gst_bin_get_by_name(GST_BIN(pipe), g_strdup_printf("captureBin%d", recordData.ch)) != NULL)
+    if(gst_bin_get_by_name(GST_BIN(pipe), g_strdup_printf("captureBin%d", encData.ch)) != NULL)
     {
-        __LOG(LOG_NOTICE, "[GST][%s:%d] ch%d capture bin is already added", _FILE_, __LINE__, recordData.ch);
+        __LOG(LOG_NOTICE, "[GST][%s:%d] ch%d capture bin is already added", _FILE_, __LINE__, encData.ch);
         return 1;
     }
 
@@ -181,7 +181,7 @@ gboolean EncoderBin::addBinToPipe(GstElement *pipe)
 gboolean EncoderBin::removeBinToPipe(GstElement *pipe)
 {
     //gst_element_set_state(be.bin, GST_STATE_NULL);
-    __LOG(LOG_NOTICE, "[GST][%s:%d] ch%d %s", _FILE_, __LINE__, recordData.ch, __FUNCTION__);
+    __LOG(LOG_NOTICE, "[GST][%s:%d] ch%d %s", _FILE_, __LINE__, encData.ch, __FUNCTION__);
 
     return gst_bin_remove(GST_BIN(pipe), re.bin);
 }
@@ -189,45 +189,45 @@ gboolean EncoderBin::removeBinToPipe(GstElement *pipe)
 GstPad* EncoderBin::getBinSinkPad()
 {
     if(sinkPad == NULL)
-        __LOG(LOG_ERR, "[GST][%s:%d] %s ch:%d pad is null", _FILE_, __LINE__, __FUNCTION__, ch);
+        __LOG(LOG_ERR, "[GST][%s:%d] %s ch:%d pad is null", _FILE_, __LINE__, __FUNCTION__, encData.ch);
     else
-        __LOG(LOG_INFO, "[GST][%s:%d] %s ch:%d", _FILE_, __LINE__, __FUNCTION__, ch);
+        __LOG(LOG_INFO, "[GST][%s:%d] %s ch:%d", _FILE_, __LINE__, __FUNCTION__, encData.ch);
     //return gst_element_get_static_pad(re.bin, g_strdup_printf("recordBin_sink_ch%d", ch));
     return sinkPad;
 }
 
-gboolean EncoderBin::addBinRtspSrcPad(guint8 ch)
+gboolean EncoderBin::addBinRtspSrcPad()
 {
-    __LOG(LOG_NOTICE, "[GST][%s:%d] %s[%d]", _FILE_, __LINE__, __FUNCTION__, ch);
-    srcRtspPad = gst_ghost_pad_new(g_strdup_printf("rtsp_pad_ch%d", ch), gst_element_get_request_pad(re.tee, "src_%u"));
+    __LOG(LOG_INFO, "[GST][%s:%d] ch%d %s", _FILE_, __LINE__, encData.ch, __FUNCTION__);
+    srcRtspPad = gst_ghost_pad_new("rtsp_srcpad", gst_element_get_request_pad(re.tee, "src_%u"));
 
     return gst_element_add_pad(re.bin, srcRtspPad);
 }
 
-GstPad* EncoderBin::getBinRtspSrcPad(guint8 ch)
+GstPad* EncoderBin::getBinRtspSrcPad()
 {
     if(srcRtspPad == NULL)
-        __LOG(LOG_ERR, "[GST][%s:%d] %s ch:%d pad is null", _FILE_, __LINE__, __FUNCTION__, ch);
+        __LOG(LOG_ERR, "[GST][%s:%d] %s ch:%d pad is null", _FILE_, __LINE__, __FUNCTION__, encData.ch);
     else
-        __LOG(LOG_INFO, "[GST][%s:%d] %s ch:%d", _FILE_, __LINE__, __FUNCTION__, ch);
+        __LOG(LOG_INFO, "[GST][%s:%d] %s ch:%d", _FILE_, __LINE__, __FUNCTION__, encData.ch);
 
     return srcRtspPad;
 }
 
-gboolean EncoderBin::addBinRecSrcPad(guint8 ch)
+gboolean EncoderBin::addBinRecSrcPad()
 {
-    __LOG(LOG_NOTICE, "[GST][%s:%d] %s[%d]", _FILE_, __LINE__, __FUNCTION__, ch);
-    srcRecPad = gst_ghost_pad_new(g_strdup_printf("rec_pad_ch%d", ch), gst_element_get_request_pad(re.tee, "src_%u"));
+    __LOG(LOG_INFO, "[GST][%s:%d] %s[%d]", _FILE_, __LINE__, __FUNCTION__, encData.ch);
+    srcRecPad = gst_ghost_pad_new("rec_srcpad", gst_element_get_request_pad(re.tee, "src_%u"));
 
     return gst_element_add_pad(re.bin, srcRecPad);
 }
 
-GstPad* EncoderBin::getBinRecSrcPad(guint8 ch)
+GstPad* EncoderBin::getBinRecSrcPad()
 {
     if(srcRecPad == NULL)
-        __LOG(LOG_ERR, "[GST][%s:%d] %s ch:%d pad is null", _FILE_, __LINE__, __FUNCTION__, ch);
+        __LOG(LOG_ERR, "[GST][%s:%d] %s ch:%d pad is null", _FILE_, __LINE__, __FUNCTION__, encData.ch);
     else
-        __LOG(LOG_INFO, "[GST][%s:%d] %s ch:%d", _FILE_, __LINE__, __FUNCTION__, ch);
+        __LOG(LOG_INFO, "[GST][%s:%d] %s ch:%d", _FILE_, __LINE__, __FUNCTION__, encData.ch);
 
     return srcRecPad;
 }
@@ -238,21 +238,21 @@ EncoderBin::EncoderBin()
     // 생성자 코드 추가
     __LOG(LOG_INFO, "[GST][%s:%d] %s", _FILE_, __LINE__, __FUNCTION__);
     re.bin = NULL;
-    recordData.debug = FALSE;
+    encData.debug = FALSE;
 }
 
 // RecordBin 클래스의 소멸자 정의
 EncoderBin::~EncoderBin()
 {
     // 소멸자 코드 추가
-    __LOG(LOG_INFO, "[GST][%s:%d] %s[%d]", _FILE_, __LINE__, __FUNCTION__, ch);
+    __LOG(LOG_INFO, "[GST][%s:%d] %s[%d]", _FILE_, __LINE__, __FUNCTION__, encData.ch);
 }
 
-gboolean EncoderBin::init(guint8 num, gboolean crop_en)
+gboolean EncoderBin::init(guint8 ch)
 {
     gboolean ret = 0;
-    ch = num;
-    recordData.ch = ch;
+    gboolean crop_en = cmdArg.crop_en[ch/2];
+    encData.ch = ch;
     //sinkPad = NULL;
     __LOG(LOG_INFO, "[GST][%s:%d] %s ch : %d, crop %s", _FILE_, __LINE__, __FUNCTION__, ch, crop_en? "enable":"disable");
 
@@ -269,7 +269,7 @@ gboolean EncoderBin::init(guint8 num, gboolean crop_en)
     re.tee = gst_element_factory_make("tee", "tee");
 
     if (!re.bin || !re.queue || !re.enc || !re.rate || !re.convert || !re.capsfilter || !re.crop || !re.overlay || !re.tee) {
-        __LOG(LOG_CRIT, "[GST][%s:%d] record element create error", _FILE_, __LINE__);
+        __LOG(LOG_CRIT, "[GST][%s:%d] encoder element create error", _FILE_, __LINE__);
         return ret;
     }
 
@@ -278,7 +278,7 @@ gboolean EncoderBin::init(guint8 num, gboolean crop_en)
     gst_bin_add_many(GST_BIN(re.bin), re.queue, re.rate, re.convert, re.capsfilter, re.enc, re.crop, re.overlay, re.tee, NULL);
     ret = gst_bin_add(GST_BIN(pipeline), re.bin);
     if(!ret) {
-        __LOG(LOG_CRIT, "[GST][%s:%d] record bin add err", _FILE_, __LINE__);
+        __LOG(LOG_CRIT, "[GST][%s:%d] encoder bin add err", _FILE_, __LINE__);
         return ret;
     }
 
@@ -296,7 +296,7 @@ gboolean EncoderBin::init(guint8 num, gboolean crop_en)
     ret = gst_element_link_many(re.queue, re.rate, re.capsfilter, re.enc, re.parse, re.queue2, NULL);
 #endif
     if (!ret) {
-        __LOG(LOG_CRIT, "[GST][%s:%d] record link err", _FILE_, __LINE__);
+        __LOG(LOG_CRIT, "[GST][%s:%d] encoder link err", _FILE_, __LINE__);
         return ret;
     }
 #endif
@@ -323,14 +323,14 @@ gboolean EncoderBin::init(guint8 num, gboolean crop_en)
     g_object_set(re.overlay, "halignment", 0, NULL);
     g_object_set(re.overlay, "font-desc", DEFAULT_OVERLAY_FONT, NULL);
 
-    g_object_set(re.enc, "bitrate", cmdArg.camConfig[ch].bps[STREAM_REC], NULL);
-    g_object_set(re.enc, "gop-size", cmdArg.camConfig[ch].gop[STREAM_REC], NULL);
+    g_object_set(re.enc, "bitrate", cmdArg.cam[ch].bps[STREAM_REC], NULL);
+    g_object_set(re.enc, "gop-size", cmdArg.cam[ch].gop[STREAM_REC], NULL);
     //g_object_set(re.enc, "quant", 35, NULL);
     //g_object_set(re.parse, "config-interval", -1, NULL);
     //g_object_set(re.rate, "max-rate", MAIN_FPS, "drop-only", FALSE, NULL);
     //g_object_set(re.queue, "max-size-time", GST_SECOND, "max-size-buffers", cmdArg.fps[STREAM_REC][ch], "leaky", LEAKY_DOWNSTREAM, NULL);
     //g_object_set(re.queue, "max-size-time", GST_SECOND, "max-size-buffers", cmdArg.fps[STREAM_RTSP][ch], "leaky", LEAKY_DOWNSTREAM, NULL);
-    g_object_set(re.queue, "max-size-time", GST_SECOND, "leaky", LEAKY_DOWNSTREAM, NULL);
+    g_object_set(re.queue, "max-size-time", GST_SECOND/2, "leaky", LEAKY_DOWNSTREAM, NULL);
     if(cmdArg.levelMode == MODE_TEST)
     {
         gst_pad_add_probe(gst_element_get_static_pad(re.enc, "src"), GST_PAD_PROBE_TYPE_BUFFER, (GstPadProbeCallback)probe_function, re.enc, NULL);
@@ -342,7 +342,7 @@ gboolean EncoderBin::init(guint8 num, gboolean crop_en)
     sinkPad = gst_ghost_pad_new(g_strdup_printf("sink_pad_ch%d", ch), gst_element_get_static_pad(re.queue, "sink"));
     ret = gst_element_add_pad(re.bin, sinkPad);
     if(!ret) {
-        __LOG(LOG_CRIT, "[GST][%s:%d] record bin add err", _FILE_, __LINE__);
+        __LOG(LOG_CRIT, "[GST][%s:%d] encoder bin padd add err", _FILE_, __LINE__);
         return ret;
     }
 #endif
