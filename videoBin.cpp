@@ -265,7 +265,7 @@ gboolean VideoBin::init(guint8 csiNum)
     else
     {
         caps = gst_caps_new_simple("video/x-raw", 
-                                    "format", G_TYPE_STRING, "NV12",
+                                    //"format", G_TYPE_STRING, "NV12",
                                     "width", G_TYPE_INT, cmdArg.width,
                                     "height", G_TYPE_INT, cmdArg.height,
                                     "framerate", GST_TYPE_FRACTION, cmdArg.main_fps[csiNum], 1,

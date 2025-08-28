@@ -382,7 +382,7 @@ gint ParserClass::arg_parser(int *argc, char **argv[])
         {"cap", 'a', 0, G_OPTION_ARG_INT, &arg.stream_en[STREAM_CAP], "video capturing enable, default(0)", "INT"},
         {"audio", 's', 0, G_OPTION_ARG_INT, &arg.audio_en, "audio recording enable, default(FALSE)", "INT"},
         {"padding", 'J', 0, G_OPTION_ARG_INT, &arg.cap.padding, "padding enable, default(TRUE)", "INT"},
-        {"capenc", 'N', 0, G_OPTION_ARG_STRING, &arg.cap.encoder, "video capture encoder(jpeg, turbo/turbojpeg, raw/rgb), default(jpeg)", "INT"},
+        {"capenc", 'N', 0, G_OPTION_ARG_STRING, &arg.cap.encoder, "video capture encoder(jpeg, turbo/turbojpeg, raw/rgb), default(jpeg)", "STRING"},
         {"capres", 'R', 0, G_OPTION_ARG_INT, &arg.cap.res_en, "video capture response enable, default(FALSE)", "INT"},
         {"capmax", 'x', 0, G_OPTION_ARG_INT, &arg.cap.maxCnt, "capture max count, default(3)", "INT"},
         {"capdelay", 'A', 0, G_OPTION_ARG_INT, &arg.cap.delay, "video capture delay(msec), default(0)", "INT"},

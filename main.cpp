@@ -45,6 +45,7 @@ void handle_sigint(int sig) {
 gboolean bus_message_parse(GstBus *bus, GstMessage *message, gpointer data)
 {
     //PipeMain *info = (PipeMain *)data;
+    gchar *str = NULL;
     static guint8 cam_cnt = 0;
     static GstState state = GST_STATE_VOID_PENDING;
     GstMessageType mType = GST_MESSAGE_TYPE(message);
@@ -72,6 +73,11 @@ gboolean bus_message_parse(GstBus *bus, GstMessage *message, gpointer data)
                 //__LOG(LOG_NOTICE, "[GST][%s:%d] from %s to %s in %s", _FILE_, __LINE__, gst_element_state_get_name(old_state), gst_element_state_get_name(new_state), GST_OBJECT_NAME (message->src));
                 //g_print("from %s to %s at %s\n", gst_element_state_get_name(old_state), gst_element_state_get_name(new_state), GST_OBJECT_NAME (message->src));
                 state = old_state;
+                const gchar *oldn = gst_element_state_get_name(old_state);
+                const gchar *newn = gst_element_state_get_name(new_state);
+
+                str = g_strdup_printf("%s_%s_%s", gst_element_get_name(pipeline), oldn, newn);
+                GST_DEBUG_BIN_TO_DOT_FILE(GST_BIN(pipeline), GST_DEBUG_GRAPH_SHOW_ALL, str);
             }
             __LOG(LOG_INFO, "[GST][%s:%d] from %s to %s int %s", _FILE_, __LINE__, gst_element_state_get_name(old_state), gst_element_state_get_name(new_state), GST_OBJECT_NAME (message->src));
             break;
@@ -81,7 +87,6 @@ gboolean bus_message_parse(GstBus *bus, GstMessage *message, gpointer data)
         {
             GError *err;
             gchar *debug;
-            gchar *str;
             gst_message_parse_error(message, &err, &debug);
             if (err)
             {
@@ -90,7 +95,6 @@ gboolean bus_message_parse(GstBus *bus, GstMessage *message, gpointer data)
                 str = g_strdup_printf("echo '%s' > /tmp/gst_err", err->message);
                 if(system(str) < 0) __LOG(LOG_ERR, "[GST][%s:%d] err %s", _FILE_, __LINE__, str);
                 g_error_free(err);
-                g_free(str);
             }
             if (debug)
             {
@@ -99,7 +103,6 @@ gboolean bus_message_parse(GstBus *bus, GstMessage *message, gpointer data)
                 str = g_strdup_printf("echo '%s' > /tmp/gst_err", debug);
                 if(system(str) < 0) __LOG(LOG_ERR, "[GST][%s:%d] err %s", _FILE_, __LINE__, str);
                 g_free(debug);
-                g_free(str);
             }
             //destroy();
             gst_element_send_event(pipeline, gst_event_new_eos());
@@ -296,13 +299,11 @@ gboolean bus_message_parse(GstBus *bus, GstMessage *message, gpointer data)
         {
             if(cmdArg.stream_en[STREAM_REC] || cmdArg.audio_en)
             {
-                gchar *str = g_strdup_printf("echo '%s' > %s &", g_date_time_format(g_date_time_new_now_local(), "%Y%m%d %H:%M:%S"), DEFAULT_START_VIDEO_TIME_PATH);
+                str = g_strdup_printf("echo '%s' > %s &", g_date_time_format(g_date_time_new_now_local(), "%Y%m%d %H:%M:%S"), DEFAULT_START_VIDEO_TIME_PATH);
                 if(system(str) < 0) 
                     __LOG(LOG_ERR, "[GST][%s:%d] %s error in %s", _FILE_, __LINE__, str, __FUNCTION__);
                 else
                     __LOG(LOG_NOTICE, "[GST][%s:%d] %s in %s", _FILE_, __LINE__, str, __FUNCTION__);
-
-                g_free(str);
             }
 #if 0
             FILE *fp = NULL;
@@ -322,6 +323,8 @@ gboolean bus_message_parse(GstBus *bus, GstMessage *message, gpointer data)
             break;
 
     }
+    
+    if(str) g_free(str);
 
     return TRUE;
 }

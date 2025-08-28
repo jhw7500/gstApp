@@ -635,10 +635,10 @@ gboolean CaptureBin::init(guint8 ch)
     gboolean ret = 0;
     GstPad *staticPad = NULL;
     GstCaps *caps = NULL;
+    GstCaps *srccaps = NULL;
     gboolean crop_en = cmdArg.crop_en[ch/2];
     captureData.ch = ch;
     captureData.fps = cmdArg.fps[STREAM_CAP][captureData.ch];
-    gchar *format = NULL;
     //sinkPad = NULL;
     __LOG(LOG_NOTICE, "[%s][%s:%d] %s ch : %d, crop : %s", CAP_LOG_KEY, _FILE_, __LINE__, __FUNCTION__, captureData.ch, crop_en? "enable":"disable");
 
@@ -699,7 +699,7 @@ gboolean CaptureBin::init(guint8 ch)
     }
     else if(g_strcmp0(cmdArg.cap.encoder, "raw") == 0 || g_strcmp0(cmdArg.cap.encoder, "rgb") == 0) {
         captureData.enc_type = CAP_ENC_RAW;
-        captureData.extention = g_strdup_printf("%s", "rgb");
+        captureData.extention = g_strdup_printf("%s", "raw");
     }
     else {
         __LOG(LOG_ERR, "[%s][%s:%d] capture enc %s is invalid : default enc type is jpeg", CAP_LOG_KEY, _FILE_, __LINE__, cmdArg.cap.encoder);
@@ -709,18 +709,39 @@ gboolean CaptureBin::init(guint8 ch)
     switch(captureData.enc_type)
     {
         case CAP_ENC_JPEG:
-            if(crop_en) ret = gst_element_link_many(be.appsrc, be.crop, be.imx_convert, be.capsfilter, be.convert, be.capsfilter2, be.enc, be.appsink, NULL);
+            if(crop_en) ret = gst_element_link_many(be.appsrc, be.crop, be.imx_convert, be.capsfilter, be.enc, be.appsink, NULL);
             else ret = gst_element_link_many(be.appsrc, be.capsfilter, be.enc, be.appsink, NULL);
-            format = g_strdup_printf("%s", "I420");
-            caps = gst_caps_new_simple("video/x-raw", "format", G_TYPE_STRING, format, NULL);
-            g_object_set(be.capsfilter2, "caps", caps, NULL);
+            caps = gst_caps_new_simple("video/x-raw",
+                                        //"format", G_TYPE_STRING, "RGBx",
+                                        "width", G_TYPE_INT, cmdArg.width,
+                                        "height", G_TYPE_INT, cmdArg.height,
+                                        "framerate", GST_TYPE_FRACTION, captureData.fps, 1,
+                                        NULL);
+            g_object_set(be.capsfilter, "caps", caps, NULL);
             gst_caps_unref(caps);
-            g_free(format);
             break;
         case CAP_ENC_TURBO:
-        case CAP_ENC_RAW:
+            caps = gst_caps_new_simple("video/x-raw",
+                                        "format", G_TYPE_STRING, "RGBx",
+                                        "width", G_TYPE_INT, cmdArg.width,
+                                        "height", G_TYPE_INT, cmdArg.height,
+                                        "framerate", GST_TYPE_FRACTION, captureData.fps, 1,
+                                        NULL);
+            g_object_set(be.capsfilter, "caps", caps, NULL);
+            gst_caps_unref(caps);
             if(crop_en) ret = gst_element_link_many(be.appsrc, be.crop, be.imx_convert, be.capsfilter, be.appsink, NULL);
             else ret = gst_element_link_many(be.appsrc, be.capsfilter, be.appsink, NULL);
+            break;
+        case CAP_ENC_RAW:
+            caps = gst_caps_new_simple("video/x-raw",
+                                        "width", G_TYPE_INT, cmdArg.width,
+                                        "height", G_TYPE_INT, cmdArg.height,
+                                        "framerate", GST_TYPE_FRACTION, captureData.fps, 1,
+                                        NULL);
+            g_object_set(be.capsfilter, "caps", caps, NULL);
+            gst_caps_unref(caps);
+            if(crop_en) ret = gst_element_link_many(be.appsrc, be.crop, be.imx_convert, be.capsfilter, be.appsink, NULL);
+            else ret = gst_element_link_many(be.appsrc, be.appsink, NULL);
             break;
         default:
             __LOG(LOG_CRIT, "[%s][%s:%d] capture encoder type is invalid : %d ", CAP_LOG_KEY, _FILE_, __LINE__, captureData.enc_type);
@@ -739,14 +760,28 @@ gboolean CaptureBin::init(guint8 ch)
     captureData.appsrc = be.appsrc;
 
 #if 1
-    GstCaps *srccaps = gst_caps_new_simple("video/x-raw",
-                                //"format", G_TYPE_STRING, "RGBx",
-                                "width", G_TYPE_INT, cmdArg.width*(crop_en+1),
-                                "height", G_TYPE_INT, cmdArg.height,
-                                //"framerate", GST_TYPE_FRACTION, captureData.fps, 1,
-                                NULL);
-    g_object_set(be.appsrc, "caps", srccaps, NULL);
-    gst_caps_unref(srccaps);
+    if(crop_en)
+    {
+        srccaps = gst_caps_new_simple("video/x-raw",
+                                    "format", G_TYPE_STRING, "RGBx",
+                                    "width", G_TYPE_INT, cmdArg.width*(crop_en+1),
+                                    "height", G_TYPE_INT, cmdArg.height,
+                                    //"framerate", GST_TYPE_FRACTION, captureData.fps, 1,
+                                    NULL);
+        g_object_set(be.appsrc, "caps", srccaps, NULL);
+        gst_caps_unref(srccaps);
+    }
+    else
+    {
+        srccaps = gst_caps_new_simple("video/x-raw",
+                                    //"format", G_TYPE_STRING, "RGBx",
+                                    "width", G_TYPE_INT, cmdArg.width*(crop_en+1),
+                                    "height", G_TYPE_INT, cmdArg.height,
+                                    //"framerate", GST_TYPE_FRACTION, captureData.fps, 1,
+                                    NULL);
+        g_object_set(be.appsrc, "caps", srccaps, NULL);
+        gst_caps_unref(srccaps);
+    }
 #endif
 
 #if 0
@@ -759,16 +794,6 @@ gboolean CaptureBin::init(guint8 ch)
     //g_signal_connect(be.queue_sink, "eos", G_CALLBACK(eos_callback2), &captureData);
     g_signal_connect(be.queue_sink, "new-sample", G_CALLBACK(on_new_sample_from_sink), &captureData);
     //g_signal_connect(be.queue_sink, "new-preroll", G_CALLBACK(new_preroll_handler), NULL );
-
-    caps = gst_caps_new_simple("video/x-raw",
-                                //"format", G_TYPE_STRING, "RGBx",
-                                "width", G_TYPE_INT, cmdArg.width,
-                                "height", G_TYPE_INT, cmdArg.height,
-                                //"framerate", GST_TYPE_FRACTION, captureData.fps, 1,
-                                NULL);
-
-    g_object_set(be.capsfilter, "caps", caps, NULL);
-    gst_caps_unref(caps);
 
 #if 0
     GstCaps *templ = gst_pad_get_pad_template_caps(gst_element_get_static_pad(be.convert, "sink"));
