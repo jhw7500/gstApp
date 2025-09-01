@@ -51,22 +51,16 @@ typedef struct _CaptureData
 
 typedef struct _CaptureElement
 {
-    GstElement *rate;
     GstElement *enc;
     GstElement *queue;
-    GstElement *queue2;
     GstElement *imx_convert;
-    GstElement *convert;
-    GstElement *parse;
     GstElement *bin;
     GstElement *appsink;
     GstElement *crop;
     GstElement *overlay;
     GstElement *capsfilter;
-    GstElement *capsfilter2;
     GstElement *queue_sink;
     GstElement *appsrc;
-    GstElement *queue3;
 } CaptureElement;
 
 class CaptureBin

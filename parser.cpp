@@ -318,7 +318,7 @@ gint ParserClass::json_parser(const gchar *path, const gchar *header)
             json_object_get_value(sobj, "delay", &arg.cap.delay);
             json_object_get_value(sobj, "timeout", &arg.cap.timeout);
             json_object_get_value(sobj, "encoder", &arg.cap.encoder);
-            json_object_get_value(sobj, "padding", &arg.cap.padding);
+            //json_object_get_value(sobj, "padding", &arg.cap.padding);
             json_object_get_value(sobj, "record", &arg.cap.record_en);
             json_object_get_value(sobj, "rtsp", &arg.cap.rtsp_en);
             arg.stream_en[STREAM_REC] = arg.cap.record_en;
