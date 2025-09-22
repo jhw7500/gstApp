@@ -46,6 +46,7 @@ void ParserClass::init_arg(gchar *argv)
     arg.dotDir = DEFAULT_DOT_PATH;
     arg.cap.path = DEFAULT_CAP_DIR;
     arg.play_delay = DEFAULT_PLAY_DELAY;
+    arg.config_delay = DEFAULT_CONFIG_DELAY;
     arg.fault = FALSE;
     arg.audio_en = FALSE;
     arg.cap.maxCnt = DEFAULT_CAPTURE_MAX_CNT;
@@ -68,6 +69,7 @@ void ParserClass::init_arg(gchar *argv)
     arg.cap.delay = DEFAULT_CAPTURE_DELAY;
     arg.cap.timeout = DEFAULT_CAPTURE_TIMEOUT;
     arg.cap.padding = TRUE;
+    arg.cap.quality = DEFAULT_CAPTURE_QUALITY;
     arg.tcp_en = FALSE;
     arg.tcp_port = DEFAULT_TCP_PORT;
 
@@ -321,6 +323,7 @@ gint ParserClass::json_parser(const gchar *path, const gchar *header)
             //json_object_get_value(sobj, "padding", &arg.cap.padding);
             json_object_get_value(sobj, "record", &arg.cap.record_en);
             json_object_get_value(sobj, "rtsp", &arg.cap.rtsp_en);
+            json_object_get_value(sobj, "quality", &arg.cap.quality);
             arg.stream_en[STREAM_REC] = arg.cap.record_en;
             arg.stream_en[STREAM_RTSP] = arg.cap.rtsp_en;
             arg.ipc_en = TRUE;
@@ -376,6 +379,7 @@ gint ParserClass::arg_parser(int *argc, char **argv[])
         {"height", 'h', 0, G_OPTION_ARG_INT, &arg.height, "cam height HD(720), FHD(1080), default(1080)", "INT"},
         {"oht", 'n', 0, G_OPTION_ARG_STRING, &arg.ohtName, "oht name, default(APPNAME)", "STRING"},
         {"delay", 'd', 0, G_OPTION_ARG_INT, &arg.play_delay, "from pause to play delay, default(0)", "SECOND"},
+        {"cdelay", 'G', 0, G_OPTION_ARG_INT, &arg.config_delay, "camera config delay, default(5)", "SECOND"},
         {"duration", 't', 0, G_OPTION_ARG_INT, &arg.duration, "recoding file split duration, default(1)", "MINUTE"},
         {"rec", 'e', 0, G_OPTION_ARG_INT, &arg.stream_en[STREAM_REC], "video recording enable, default(1)", "INT"},
         {"rtsp", 'E', 0, G_OPTION_ARG_INT, &arg.stream_en[STREAM_RTSP], "rtsp streaming enable, default(1)", "INT"},
@@ -386,6 +390,7 @@ gint ParserClass::arg_parser(int *argc, char **argv[])
         {"capres", 'R', 0, G_OPTION_ARG_INT, &arg.cap.res_en, "video capture response enable, default(FALSE)", "INT"},
         {"capmax", 'x', 0, G_OPTION_ARG_INT, &arg.cap.maxCnt, "capture max count, default(3)", "INT"},
         {"capdelay", 'A', 0, G_OPTION_ARG_INT, &arg.cap.delay, "video capture delay(msec), default(0)", "INT"},
+        {"capquality", 'q', 0, G_OPTION_ARG_INT, &arg.cap.quality, "video capture quality, default(85)", "INT"},
         {"capdir", 'I', 0, G_OPTION_ARG_STRING, &arg.cap.path, "save capture file to directory, default capture", "STRING"},
         {"etcp", 'C', 0, G_OPTION_ARG_INT, &arg.tcp_en, "tcp server enable, default(FALSE)", "INT"},
         {"ein", 'i', 0, G_OPTION_ARG_INT, &arg.input_en, "terminal input enable, default(FALSE)", "INT"},
@@ -511,9 +516,9 @@ gint ParserClass::check_arg()
     const gchar *ioModeStr[6] = {"auto", "rw", "mmap", "useptr", "dmabuf", "dmabuf-import"};
     gint i = 0;
     //__LOG(LOG_NOTICE, "[RTSP][%s:%d] 0 : %s, 1 : %s, 2 : %s", _FILE_, __LINE__, test0, test1, test2);
-    __LOG(LOG_NOTICE, "[%s][%s:%d] iomode:%s, test:%d, noFault:%d, delay:%d, logLevel:%d, dbgLevel:%d, mntDir:%s, dotDir:%s, ", \
-                        LOG_KEY, _FILE_, __LINE__, ioModeStr[arg.ioMode], arg.levelMode, arg.fault, arg.play_delay, arg.log_level, \
-                        arg.dbg_level, arg.mntDir, arg.dotDir);
+    __LOG(LOG_NOTICE, "[%s][%s:%d] iomode:%s, test:%d, noFault:%d, delay:%d, conf_delay:%d, logLevel:%d, dbgLevel:%d, mntDir:%s, dotDir:%s, ", \
+                        LOG_KEY, _FILE_, __LINE__, ioModeStr[arg.ioMode], arg.levelMode, arg.fault, arg.play_delay, arg.config_delay, \
+                        arg.log_level, arg.dbg_level, arg.mntDir, arg.dotDir);
 
     __LOG(LOG_NOTICE, "[%s][%s:%d] oht_name:%s, duration:%d, width:%d, height:%d, csi1_fps:%d, csi2_fps:%d", LOG_KEY, _FILE_, __LINE__, \
                         arg.ohtName, arg.duration, arg.width, arg.height, arg.main_fps[CSI_1], arg.main_fps[CSI_2]);
@@ -554,8 +559,8 @@ gint ParserClass::check_arg()
 
         __LOG(LOG_NOTICE, "[%s][%s:%d] capture ch0 fps:%d, ch1 fps:%d, ch2 fps:%d, ch3 fps:%d", LOG_KEY, _FILE_, __LINE__, \
                             arg.fps[STREAM_CAP][0], arg.fps[STREAM_CAP][1], arg.fps[STREAM_CAP][2], arg.fps[STREAM_CAP][3]);  
-        __LOG(LOG_NOTICE, "[%s][%s:%d] capEnc:%s, MaxCnt:%d, res_en:%d, path:%s, delay:%d, timeout:%d, padding:%d", \
-                            LOG_KEY, _FILE_, __LINE__, arg.cap.encoder, arg.cap.maxCnt, arg.cap.res_en, arg.cap.path, arg.cap.delay, arg.cap.timeout, arg.cap.padding);
+        __LOG(LOG_NOTICE, "[%s][%s:%d] capEnc:%s, MaxCnt:%d, res_en:%d, path:%s, delay:%d, timeout:%d, padding:%d, quality:%d", \
+                            LOG_KEY, _FILE_, __LINE__, arg.cap.encoder, arg.cap.maxCnt, arg.cap.res_en, arg.cap.path, arg.cap.delay, arg.cap.timeout, arg.cap.padding, arg.cap.quality);
     }
 
     gint total_fps = 0;

@@ -72,7 +72,7 @@ unsigned char *compress_frame_to_jpeg(GstSample *sample, long *jpeg_size, Captur
 
     unsigned char *jpeg_buf = NULL;
     int pixel_format = TJPF_RGBX;
-    int jpeg_quality = 85; // 1~100
+    int jpeg_quality = info->quality; // 1~100
     int subsamp = TJSAMP_444; // No chroma subsampling
 
     //__LOG(LOG_NOTICE, "[%s][%s:%d] tjCompress2", CAP_LOG_KEY, _FILE_, __LINE__);
@@ -640,6 +640,7 @@ gboolean CaptureBin::init(guint8 ch)
     gboolean crop_en = cmdArg.crop_en[ch/2];
     captureData.ch = ch;
     captureData.fps = cmdArg.fps[STREAM_CAP][captureData.ch];
+    captureData.quality = cmdArg.cap.quality;
     //sinkPad = NULL;
     __LOG(LOG_NOTICE, "[%s][%s:%d] %s ch : %d, crop : %s", CAP_LOG_KEY, _FILE_, __LINE__, __FUNCTION__, captureData.ch, crop_en? "enable":"disable");
 
@@ -713,6 +714,7 @@ gboolean CaptureBin::init(guint8 ch)
                                         NULL);
             g_object_set(be.capsfilter, "caps", caps, NULL);
             gst_caps_unref(caps);
+            g_object_set(be.enc, "quality", captureData.quality, NULL);
             break;
         case CAP_ENC_TURBO:
             caps = gst_caps_new_simple("video/x-raw",

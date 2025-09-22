@@ -47,6 +47,7 @@ typedef struct _CaptureData
     CapEncType enc_type;
     const gchar *filePath;
     const gchar *extention;
+    gint quality;
 } CaptureData;
 
 typedef struct _CaptureElement

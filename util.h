@@ -126,6 +126,7 @@ typedef struct {
     gboolean padding;
     gint delay;
     gint timeout;
+    gint quality;
     const gchar *path;
     const gchar *encoder;
 } CaptureConfig;
@@ -149,6 +150,7 @@ typedef struct _CmdArg
     ResMode resMode;
     gint main_fps[MAX_VIDEO_SRC];
     gint play_delay;
+    gint config_delay;
     gboolean fault;
     gint duration;
     gboolean tcp_en;

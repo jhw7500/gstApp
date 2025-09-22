@@ -190,6 +190,7 @@ gboolean VideoBin::init(guint8 csiNum)
     gboolean ret = 0;
     gboolean crop_en = cmdArg.crop_en[csiNum];
     videoData.csi = csiNum;
+    gint wdt_timeout;
 
     if(be.bin != NULL)
     {
@@ -197,7 +198,12 @@ gboolean VideoBin::init(guint8 csiNum)
         return 1;
     }
 
-    __LOG(LOG_NOTICE, "[GST][%s:%d] %s[%d] crop %s", _FILE_, __LINE__, __FUNCTION__, csiNum, crop_en? "enable":"disable");
+    if((cmdArg.cam[0].enable || cmdArg.cam[1].enable) && (cmdArg.cam[2].enable || cmdArg.cam[3].enable))
+        wdt_timeout = 30000;
+    else
+        wdt_timeout = 20000;
+
+    __LOG(LOG_NOTICE, "[GST][%s:%d] %s[%d] crop : %s, wdt_timeout : %d", _FILE_, __LINE__, __FUNCTION__, csiNum, crop_en? "enable":"disable", wdt_timeout);
 
     be.bin = gst_bin_new(g_strdup_printf("videoBin%d", csiNum));
     be.src = gst_element_factory_make("v4l2src", "src");
@@ -207,13 +213,14 @@ gboolean VideoBin::init(guint8 csiNum)
     be.queue_main = gst_element_factory_make(QUEUE_TYPE, "queue_main");
     be.deinterlace = gst_element_factory_make("deinterlace", "deinterlace");
     be.rate = gst_element_factory_make("videorate", "videorate");
+    be.watchdog = gst_element_factory_make("watchdog", "watchdog");
 
-    if (!be.bin || !be.src || !be.capsfilter || !be.teeCrop || !be.convert || !be.queue_main || !be.deinterlace || !be.rate)
+    if (!be.bin || !be.src || !be.capsfilter || !be.teeCrop || !be.convert || !be.queue_main || !be.deinterlace || !be.rate || !be.watchdog)
     {
         __LOG(LOG_CRIT, "[GST][%s:%d] video main element create error", _FILE_, __LINE__);
         return ret;
     }
-    gst_bin_add_many(GST_BIN(be.bin), be.src, be.convert, be.capsfilter, be.teeCrop, be.queue_main, be.deinterlace, be.rate, NULL);
+    gst_bin_add_many(GST_BIN(be.bin), be.src, be.convert, be.capsfilter, be.teeCrop, be.queue_main, be.deinterlace, be.rate, be.watchdog, NULL);
 
     g_object_set(be.src, "io-mode", cmdArg.ioMode, NULL);   //0:auto, 1:rw, 2:mmap, 3:userptr, 4:dmabuf, 5:dmabuf-import
     g_object_set(be.src, "do-timestamp", TRUE, NULL);
@@ -221,6 +228,7 @@ gboolean VideoBin::init(guint8 csiNum)
     //g_object_set(be.src, "pixel-aspect-ratio", "1/1", NULL);
     g_signal_connect(be.src, "prepare-format", G_CALLBACK(prepare_format), &csiNum);
     g_object_set(be.queue_main, "max-size-time", GST_SECOND, "max-size-buffers", cmdArg.main_fps[csiNum], "leaky", LEAKY_DOWNSTREAM, NULL);
+    g_object_set(be.watchdog, "timeout", wdt_timeout, NULL);
 
     if(cmdArg.levelMode == MODE_TEST)
     {
@@ -254,7 +262,7 @@ gboolean VideoBin::init(guint8 csiNum)
                                     //"pixel-aspect-ratio", GST_TYPE_FRACTION, 1, 1,
                                     NULL);
                                     
-        ret = gst_element_link_many(be.src, be.convert, be.capsfilter, be.teeCrop, NULL);
+        ret = gst_element_link_many(be.src, be.watchdog, be.convert, be.capsfilter, be.teeCrop, NULL);
         //ret = gst_element_link_filtered(be.src, be.teeCrop, caps);
         if (!ret)
         {
@@ -274,8 +282,8 @@ gboolean VideoBin::init(guint8 csiNum)
                                     //"pixel-aspect-ratio", GST_TYPE_FRACTION, 1, 1,
                                     NULL);
 
-        //ret = gst_element_link_many(be.src, be.capsfilter, be.teeCrop, NULL);
-        ret = gst_element_link_filtered(be.src, be.teeCrop, caps);
+        ret = gst_element_link_many(be.src, be.watchdog, be.capsfilter, be.teeCrop, NULL);
+        //ret = gst_element_link_filtered(be.src, be.teeCrop, caps);
         if (!ret)
         {
             __LOG(LOG_CRIT, "[GST][%s:%d] video main link err", _FILE_, __LINE__);

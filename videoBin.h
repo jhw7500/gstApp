@@ -36,6 +36,7 @@ typedef struct _VideoElement
     GstElement *queue[MAX_CHANNEL/2];
     GstElement *queue_main;
     GstElement *deinterlace;
+    GstElement *watchdog;
     GstElement *bin;
 } VideoElement;
 

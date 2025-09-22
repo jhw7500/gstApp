@@ -27,7 +27,7 @@
 #include <unistd.h>
 //#include <signal.h>
 
-#define APP_VERSION "1.0"
+#define APP_VERSION "1.1"
 
 #define SEGFAULT_DEBUG
 #define RECORDBIN_ENABLE
@@ -35,6 +35,7 @@
 #define AUDIOBIN_ENABLE
 #define SPLIT_TIME_RECOVERY
 //MuxSinkBin muxSinkBin[MAX_CHANNEL];
+gboolean config_camera(gpointer user_data);
 
 void handle_sigint(int sig) {
     //g_print("Caught signal %d, sending EOS to pipeline\n", sig);
@@ -317,11 +318,31 @@ gboolean bus_message_parse(GstBus *bus, GstMessage *message, gpointer data)
 #endif
             break;
         }
+
+        case GST_MESSAGE_ASYNC_DONE:
+        {
+            __LOG(LOG_NOTICE, "[GST][%s:%d] Got %s message from %s", _FILE_, __LINE__, GST_MESSAGE_TYPE_NAME(message), GST_OBJECT_NAME (message->src));
+            break;
+        }
         
+        case GST_MESSAGE_STREAM_START:
+        {
+            ThreadArgs *threadArgs = (ThreadArgs *)data;
+            VideoBin *videoBin = (VideoBin *)(threadArgs->arg0);
+            __LOG(LOG_NOTICE, "[GST][%s:%d] Got %s message from %s", _FILE_, __LINE__, GST_MESSAGE_TYPE_NAME(message), GST_OBJECT_NAME (message->src));
+            for(guint8 i = 0; i < MAX_VIDEO_SRC; i++)
+            {
+                if(videoBin[i].be.bin != NULL)
+                {
+                    config_camera(GINT_TO_POINTER(i));
+                }
+            }
+            break;
+        }
+
         default:
             __LOG(LOG_NOTICE, "[GST][%s:%d] Got %s message from %s", _FILE_, __LINE__, GST_MESSAGE_TYPE_NAME(message), GST_OBJECT_NAME (message->src));
             break;
-
     }
     
     if(str) g_free(str);
@@ -481,19 +502,18 @@ static void taskLoop(gpointer arg)
     //splitCheck(data, 0);
     //splitTimerStart(data);
     //if(cmdArg.input_en) check_terminal_input(arg0, arg1, arg2);
+    g_usleep(10000);
 
-    g_usleep(1000);
-    
     return;
 }
 
 static gboolean setSRT(gpointer arg) 
 {
-    ThreadArgs *thraedArgs = (ThreadArgs *)arg;
-    RecordBin *recordBin = (RecordBin *)(thraedArgs->arg1);
-    RtspServerBin *rtspServerBin = (RtspServerBin *)(thraedArgs->arg2);
-    EncoderBin *encoderBin = (EncoderBin *)(thraedArgs->arg5);
-    //CaptureBin *captrueBin = (CaptureBin *)(thraedArgs->arg2);
+    ThreadArgs *threadArgs = (ThreadArgs *)arg;
+    RecordBin *recordBin = (RecordBin *)(threadArgs->arg1);
+    RtspServerBin *rtspServerBin = (RtspServerBin *)(threadArgs->arg2);
+    EncoderBin *encoderBin = (EncoderBin *)(threadArgs->arg5);
+    //CaptureBin *captrueBin = (CaptureBin *)(threadArgs->arg2);
     static gint index = 0;
     guint8 i;
     gchar* text;
@@ -552,9 +572,10 @@ gint getPasswdWithAES(CmdArg *arg)
 	return ret;
 }
 
-gint config_camera(guint8 i)
+gboolean config_camera(gpointer user_data)
 {
     gchar *cmd;
+    gint i = GPOINTER_TO_INT(user_data);
     guint16 ch_num0 = i*2;
     guint16 ch_num1 = i*2+1;
 
@@ -613,11 +634,14 @@ gint config_camera(guint8 i)
         fp = popen(cmd, "r");
         if (NULL == fp)
         {
-            perror("popen() fail");
-            return - 1;
+            __LOG(LOG_CRIT, "[CFG][%s:%d] popen error : %s", _FILE_, __LINE__, cmd);
         }
-        while (fgets(str, STR_LEN, fp));
-        pclose(fp);
+        else
+        {
+            while (fgets(str, STR_LEN, fp));
+            pclose(fp);
+        }
+
         str[4] = 0;
         //__LOG(LOG_NOTICE, "[CFG][%s:%d] link byte : %s", _FILE_, __LINE__, str);
 
@@ -682,7 +706,7 @@ gint config_camera(guint8 i)
 
     g_free(cmd);
 
-    return 1;
+    return G_SOURCE_REMOVE;
 }
 
 gint main(gint argc, gchar *argv[]) 
@@ -735,17 +759,17 @@ gint main(gint argc, gchar *argv[])
     GstStateChangeReturn ret;
     guint8 i = 0;
     guint srtTimer_id = 0;
-    ThreadArgs* thraedArgs = g_new(ThreadArgs, 1);
+    ThreadArgs* threadArgs = g_new(ThreadArgs, 1);
     const gchar *stateChangeReturnStr[4] = {"GST_STATE_CHANGE_FAILURE", "GST_STATE_CHANGE_SUCCESS", "GST_STATE_CHANGE_ASYNC", "GST_STATE_CHANGE_NO_PREROLL"};
     CTCPServer *tcpServer = CTCPServer::getInstance();
     CIPCInsance *ipcInstance = CIPCInsance::getInstance();
 
-    thraedArgs->arg0 = videoBin;
-    thraedArgs->arg1 = recordBin;
-    thraedArgs->arg2 = rtspServerBin;
-    thraedArgs->arg3 = muxSinkBin;
-    thraedArgs->arg4 = captureBin;
-    thraedArgs->arg5 = encoderBin;
+    threadArgs->arg0 = videoBin;
+    threadArgs->arg1 = recordBin;
+    threadArgs->arg2 = rtspServerBin;
+    threadArgs->arg3 = muxSinkBin;
+    threadArgs->arg4 = captureBin;
+    threadArgs->arg5 = encoderBin;
 
     //pipeline = gst_pipeline_new("test-pipeline");
     pipeline = gst_pipeline_new(g_strdup_printf("%s_%s", cmdArg.appname, g_date_time_format(g_date_time_new_now_local(), "%Y%m%d_%H%M%S")));
@@ -1001,42 +1025,68 @@ gint main(gint argc, gchar *argv[])
         goto main_end;
     }
 
-    gst_bus_add_watch(bus, bus_message_parse, NULL);
+    gst_bus_add_watch(bus, bus_message_parse, threadArgs);
 
     gst_object_unref(bus);
-#if 1
-    ret = gst_element_set_state(pipeline, GST_STATE_PAUSED);
+
+#if 0
+    gint config_delay = 0;
+	for(i = 0; i < MAX_VIDEO_SRC; i++)
+	{
+		if(videoBin[i].be.bin != NULL)
+		{
+            config_delay += cmdArg.config_delay;
+        }
+    }
+
+	for(i = 0; i < MAX_VIDEO_SRC; i++)
+	{
+		if(videoBin[i].be.bin != NULL)
+		{
+            __LOG(LOG_NOTICE, "[GST][%s:%d] delay %d sec for config[%d]", __FILE__, __LINE__, config_delay, i);
+            //g_timeout_add(cmdArg.play_delay*1000, config_camera, GINT_TO_POINTER(i));
+            g_timeout_add(config_delay*1000, config_camera, GINT_TO_POINTER(i));
+        }
+    }
+#endif
     
-    __LOG(LOG_NOTICE, "[GST][%s:%d] paused : %s", _FILE_, __LINE__, stateChangeReturnStr[ret]);
-    if (ret == GST_STATE_CHANGE_FAILURE)
+    if(cmdArg.play_delay)
     {
-        __LOG(LOG_CRIT, "[GST][%s:%d] pipeline state paused error", _FILE_, __LINE__);
-        gst_object_unref(pipeline);
-        goto main_end;
-    }
-    else if(ret == GST_STATE_CHANGE_NO_PREROLL)
-    {
-        is_live = TRUE;
-        //__LOG(LOG_NOTICE, "[GST][%s:%d] pipeline state paused", _FILE_, __LINE__);
+        ret = gst_element_set_state(pipeline, GST_STATE_PAUSED);
+        
+        __LOG(LOG_NOTICE, "[GST][%s:%d] paused : %s", _FILE_, __LINE__, stateChangeReturnStr[ret]);
+        if (ret == GST_STATE_CHANGE_FAILURE)
+        {
+            __LOG(LOG_CRIT, "[GST][%s:%d] pipeline state paused error", _FILE_, __LINE__);
+            gst_object_unref(pipeline);
+            goto main_end;
+        }
+        else if(ret == GST_STATE_CHANGE_NO_PREROLL)
+        {
+            is_live = TRUE;
+            //__LOG(LOG_NOTICE, "[GST][%s:%d] pipeline state paused", _FILE_, __LINE__);
+        }
+
+        __LOG(LOG_NOTICE, "[GST][%s:%d] delay %d sec for play", __FILE__, __LINE__, cmdArg.play_delay);
+        sleep(cmdArg.play_delay);
     }
 
-    __LOG(LOG_NOTICE, "[GST][%s:%d] delay %d sec for play", __FILE__, __LINE__, cmdArg.play_delay);
-    sleep(cmdArg.play_delay);
+#if 0
+	for(i = 0; i < MAX_VIDEO_SRC; i++)
+	{
+		if(videoBin[i].be.bin != NULL)
+		{
+            config_camera(GINT_TO_POINTER(i));
+        }
+    }
+#endif
 
-    if (access("/tmp/sd_mount_flag", F_OK) != 0)
+    if (access("/dev/shm/sd_mount_flag", F_OK) != 0)
     {
         cmdArg.mntDir = FALLBACKDIR;
         __LOG(LOG_NOTICE, "[GST][%s:%d] sd card no mount...file dir fallback : %s", _FILE_, __LINE__, FALLBACKDIR);
     }
 
-	for(i = 0; i < MAX_VIDEO_SRC; ++i)
-	{
-		if(videoBin[i].be.bin != NULL)
-		{
-            config_camera(i);
-        }
-    }
-#endif
     ret = gst_element_set_state(pipeline, GST_STATE_PLAYING);
     __LOG(LOG_NOTICE, "[GST][%s:%d] playing : %s", _FILE_, __LINE__, stateChangeReturnStr[ret]);
     if (ret == GST_STATE_CHANGE_FAILURE)
@@ -1047,7 +1097,7 @@ gint main(gint argc, gchar *argv[])
     }
 
     if(cmdArg.input_en) {
-        terminalThread = g_thread_new("terminal-thread", (GThreadFunc)check_terminal_input, thraedArgs);
+        terminalThread = g_thread_new("terminal-thread", (GThreadFunc)check_terminal_input, threadArgs);
     }
 
     if(cmdArg.stream_en[STREAM_REC] || cmdArg.audio_en) {
@@ -1055,17 +1105,16 @@ gint main(gint argc, gchar *argv[])
     }
     
     if(cmdArg.overlay_en) {
-        srtTimer_id = g_timeout_add(100, (GSourceFunc)setSRT, thraedArgs);
+        srtTimer_id = g_timeout_add(100, (GSourceFunc)setSRT, threadArgs);
     }
 
     if(cmdArg.tcp_en) {
-        tcpServer->init(thraedArgs);
+        tcpServer->init(threadArgs);
     }
     
     if(cmdArg.ipc_en) {
         //__LOG(LOG_NOTICE, "[GST][%s:%d] ipc enable", _FILE_, __LINE__);
-        
-        ipcInstance->init(thraedArgs);
+        ipcInstance->init(threadArgs);
     }
 
     loop = g_main_loop_new(NULL, FALSE);
@@ -1119,7 +1168,7 @@ gint main(gint argc, gchar *argv[])
 main_end:
     __LOG(LOG_NOTICE, "[GST][%s:%d] main loop end", _FILE_, __LINE__);
 
-    if(thraedArgs) g_free(thraedArgs);
+    if(threadArgs) g_free(threadArgs);
 
     if(terminalThread) {
         g_thread_join(terminalThread);
