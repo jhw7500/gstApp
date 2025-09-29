@@ -324,12 +324,25 @@ gboolean bus_message_parse(GstBus *bus, GstMessage *message, gpointer data)
             __LOG(LOG_NOTICE, "[GST][%s:%d] Got %s message from %s", _FILE_, __LINE__, GST_MESSAGE_TYPE_NAME(message), GST_OBJECT_NAME (message->src));
             break;
         }
-        
+
+        case GST_MESSAGE_WARNING:
+        {
+            GError *gerror;
+            gchar *debug;
+            gst_message_parse_warning (message, &gerror, &debug);
+            gst_object_default_error (GST_MESSAGE_SRC (message), gerror, debug);
+            gst_message_unref (message);
+            g_error_free (gerror);
+            g_free (debug);
+            break;
+        }
+
         case GST_MESSAGE_STREAM_START:
         {
+            __LOG(LOG_NOTICE, "[GST][%s:%d] Got %s message from %s", _FILE_, __LINE__, GST_MESSAGE_TYPE_NAME(message), GST_OBJECT_NAME (message->src));
+#if 0
             ThreadArgs *threadArgs = (ThreadArgs *)data;
             VideoBin *videoBin = (VideoBin *)(threadArgs->arg0);
-            __LOG(LOG_NOTICE, "[GST][%s:%d] Got %s message from %s", _FILE_, __LINE__, GST_MESSAGE_TYPE_NAME(message), GST_OBJECT_NAME (message->src));
             for(guint8 i = 0; i < MAX_VIDEO_SRC; i++)
             {
                 if(videoBin[i].be.bin != NULL)
@@ -337,6 +350,7 @@ gboolean bus_message_parse(GstBus *bus, GstMessage *message, gpointer data)
                     config_camera(GINT_TO_POINTER(i));
                 }
             }
+#endif
             break;
         }
 
@@ -1071,12 +1085,12 @@ gint main(gint argc, gchar *argv[])
         sleep(cmdArg.play_delay);
     }
 
-#if 0
+#if 1
 	for(i = 0; i < MAX_VIDEO_SRC; i++)
 	{
 		if(videoBin[i].be.bin != NULL)
 		{
-            config_camera(GINT_TO_POINTER(i));
+            g_timeout_add(cmdArg.config_delay*1000, config_camera, GINT_TO_POINTER(i));
         }
     }
 #endif
