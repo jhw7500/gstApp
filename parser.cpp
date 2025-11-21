@@ -266,7 +266,7 @@ gint ParserClass::json_parser(const gchar *path, const gchar *header)
 	//const gchar* ptr;
 
     arg.json_file = search_file(path, JSON_NAME_PREFIX, JSON_NAME_SUFFIX);
-    __LOG(LOG_NOTICE, "[%s][%s:%d] json file name : %s", LOG_KEY, _FILE_, __LINE__, arg.json_file);
+    __LOG(LOG_INFO, "[%s][%s:%d] json file name : %s", LOG_KEY, _FILE_, __LINE__, arg.json_file);
 
     if(strstr(arg.json_file, JSON_NAME_PREFIX) == NULL || strstr(arg.json_file, JSON_NAME_SUFFIX) == NULL) {
         __LOG(LOG_CRIT, "[%s][%s:%d] json file name not match %s %s", LOG_KEY, _FILE_, __LINE__, JSON_NAME_PREFIX, JSON_NAME_SUFFIX);

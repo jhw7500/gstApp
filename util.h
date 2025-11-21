@@ -25,6 +25,7 @@
 #define MAX_CHANNEL 4
 #define MAX_VIDEO_SRC 2
 #define MAX_MODE    3
+#define SD_MOUNT_FLAG   "/dev/shm/sd_mount_flag"
 
 #define DEFAULT_OVERLAY_FONT "Times New Roman Italic, 12"
 
@@ -200,6 +201,7 @@ gchar *search_file(const gchar* path, const gchar* prefix, const gchar* suffix);
 void print_tag(const GstTagList * list, const gchar * tag, gpointer unused);
 void makeDir(const char* path);
 void convert_data_to_hex(const char *data, int len, char *buffer, int buffer_size);
+int check_sd_mount_flag(void);
 
 #define __LOG(opt, fmt, args...) do { mylog(opt, (char*)fmt, ##args); } while(0)
 #define CHARNEXT(x,y)    (strrchr(x,y)? strrchr(x,y)+1:x)

@@ -16,7 +16,7 @@ static void prepare_format(GstElement *object, gint arg0, GstCaps *caps, gpointe
 {
     guint8 *csi = (guint8 *)data;
     //__LOG(LOG_NOTICE, "[GST][%s:%d] %s [%d]", _FILE_, __LINE__, __FUNCTION__, *csi);
-    __LOG(LOG_NOTICE, "[GST][%s:%d] csi%d caps : %s", _FILE_, __LINE__, *csi, gst_caps_to_string(caps));
+    __LOG(LOG_INFO, "[GST][%s:%d] csi%d caps : %s", _FILE_, __LINE__, *csi, gst_caps_to_string(caps));
 }
 
 void VideoBin::getIoMode()
@@ -203,7 +203,7 @@ gboolean VideoBin::init(guint8 csiNum)
     else
         wdt_timeout = 20000;
 
-    __LOG(LOG_NOTICE, "[GST][%s:%d] %s[%d] crop : %s, wdt_timeout : %d", _FILE_, __LINE__, __FUNCTION__, csiNum, crop_en? "enable":"disable", wdt_timeout);
+    __LOG(LOG_INFO, "[GST][%s:%d] %s[%d] crop : %s, wdt_timeout : %d", _FILE_, __LINE__, __FUNCTION__, csiNum, crop_en? "enable":"disable", wdt_timeout);
 
     be.bin = gst_bin_new(g_strdup_printf("videoBin%d", csiNum));
     be.src = gst_element_factory_make("v4l2src", "src");

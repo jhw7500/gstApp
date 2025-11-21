@@ -496,7 +496,7 @@ static void splitCheck(gpointer data, guint8 startSec)
 
 static void splitLoop(gpointer data)
 {
-    __LOG(LOG_NOTICE, "[GST][%s:%d] %s start", _FILE_, __LINE__, __FUNCTION__);
+    __LOG(LOG_INFO, "[GST][%s:%d] %s start", _FILE_, __LINE__, __FUNCTION__);
     while(1)
     {
         if(is_interrupted)
@@ -508,7 +508,7 @@ static void splitLoop(gpointer data)
 
         g_usleep(1000);
     }
-    __LOG(LOG_NOTICE, "[GST][%s:%d] %s break", _FILE_, __LINE__, __FUNCTION__);
+    __LOG(LOG_INFO, "[GST][%s:%d] %s break", _FILE_, __LINE__, __FUNCTION__);
 }
 
 static void taskLoop(gpointer arg)
@@ -581,7 +581,7 @@ gint getPasswdWithAES(CmdArg *arg)
 	else
 		arg->rtsp_passwd = strdup(passwd);
 
-	__LOG(LOG_NOTICE, "[CFG][%s:%d] id : %s, passwd : %s", _FILE_, __LINE__, arg->rtsp_id, arg->rtsp_passwd);
+	__LOG(LOG_INFO, "[CFG][%s:%d] id : %s, passwd : %s", _FILE_, __LINE__, arg->rtsp_id, arg->rtsp_passwd);
 
 	return ret;
 }
@@ -595,45 +595,45 @@ gboolean config_camera(gpointer user_data)
 
     if (cmdArg.cam[ch_num0].enable && cmdArg.cam[ch_num1].enable)
     {
-        __LOG(LOG_NOTICE, "[CFG][%s:%d] ch%d enable, ch%d enable", _FILE_, __LINE__, ch_num0, ch_num1);
+        __LOG(LOG_INFO, "[CFG][%s:%d] ch%d enable, ch%d enable", _FILE_, __LINE__, ch_num0, ch_num1);
 
         cmd = g_strdup_printf("i2cwrite %d 0x11 0x100c 0x%04x", i ? 1 : 2, (cmdArg.ch_rotate >> (i * 4)) & 0x03);
-        __LOG(LOG_NOTICE, "[CFG][%s:%d] ch%d cmd : %s", _FILE_, __LINE__, ch_num0, cmd);
+        __LOG(LOG_INFO, "[CFG][%s:%d] ch%d cmd : %s", _FILE_, __LINE__, ch_num0, cmd);
         if (system(cmd) < 0)
             __LOG(LOG_ERR, "[CFG][%s:%d] ch%d rotation fail", __FILE__, __LINE__, ch_num0);
 
         cmd = g_strdup_printf("i2cwrite %d 0x11 0x5002 %s", i ? 1 : 2, cmdArg.cam[ch_num0].ae_on? "0x0299":"0x0290");
-        __LOG(LOG_NOTICE, "[CFG][%s:%d] ch%d cmd : %s", _FILE_, __LINE__, ch_num0, cmd);
+        __LOG(LOG_INFO, "[CFG][%s:%d] ch%d cmd : %s", _FILE_, __LINE__, ch_num0, cmd);
         if (system(cmd) < 0)
             __LOG(LOG_ERR, "[CFG][%s:%d] ch%d ae_on fail", __FILE__, __LINE__, ch_num0);
 
         cmd = g_strdup_printf("i2cwrite %d 0x11 0x5006 0x%04x", i ? 1 : 2, cmdArg.cam[ch_num0].ae_gain);
-        __LOG(LOG_NOTICE, "[CFG][%s:%d] ch%d cmd : %s", _FILE_, __LINE__, ch_num0, cmd);
+        __LOG(LOG_INFO, "[CFG][%s:%d] ch%d cmd : %s", _FILE_, __LINE__, ch_num0, cmd);
         if (system(cmd) < 0)
             __LOG(LOG_ERR, "[CFG][%s:%d] ch%d ae_gain fail", __FILE__, __LINE__, ch_num0);
 
         cmd = g_strdup_printf("i2cwrite %d 0x11 0x500c 0x%08x", i ? 1 : 2, cmdArg.cam[ch_num0].exp_time);
-        __LOG(LOG_NOTICE, "[CFG][%s:%d] ch%d cmd : %s", _FILE_, __LINE__, ch_num0, cmd);
+        __LOG(LOG_INFO, "[CFG][%s:%d] ch%d cmd : %s", _FILE_, __LINE__, ch_num0, cmd);
         if (system(cmd) < 0)
             __LOG(LOG_ERR, "[CFG][%s:%d] ch%d exp_time fail", __FILE__, __LINE__, ch_num0);
 
         cmd = g_strdup_printf("i2cwrite %d 0x12 0x100c 0x%04x", i ? 1 : 2, (cmdArg.ch_rotate >> (i * 4 + 2)) & 0x03);
-        __LOG(LOG_NOTICE, "[CFG][%s:%d] ch%d cmd : %s", _FILE_, __LINE__, ch_num1, cmd);
+        __LOG(LOG_INFO, "[CFG][%s:%d] ch%d cmd : %s", _FILE_, __LINE__, ch_num1, cmd);
         if (system(cmd) < 0)
             __LOG(LOG_ERR, "[CFG][%s:%d] ch%d rotation fail", __FILE__, __LINE__, ch_num1);
 
         cmd = g_strdup_printf("i2cwrite %d 0x12 0x5002 %s", i ? 1 : 2, cmdArg.cam[ch_num1].ae_on? "0x0299":"0x0290");
-        __LOG(LOG_NOTICE, "[CFG][%s:%d] ch%d cmd : %s", _FILE_, __LINE__, ch_num1, cmd);
+        __LOG(LOG_INFO, "[CFG][%s:%d] ch%d cmd : %s", _FILE_, __LINE__, ch_num1, cmd);
         if (system(cmd) < 0)
             __LOG(LOG_ERR, "[CFG][%s:%d] ch%d ae_on fail", __FILE__, __LINE__, ch_num1);
 
         cmd = g_strdup_printf("i2cwrite %d 0x12 0x5006 0x%04x", i ? 1 : 2, cmdArg.cam[ch_num1].ae_gain);
-        __LOG(LOG_NOTICE, "[CFG][%s:%d] ch%d cmd : %s", _FILE_, __LINE__, ch_num1, cmd);
+        __LOG(LOG_INFO, "[CFG][%s:%d] ch%d cmd : %s", _FILE_, __LINE__, ch_num1, cmd);
         if (system(cmd) < 0)
             __LOG(LOG_ERR, "[CFG][%s:%d] ch%d ae_gain fail", __FILE__, __LINE__, ch_num1);
 
         cmd = g_strdup_printf("i2cwrite %d 0x12 0x500c 0x%08x", i ? 1 : 2, cmdArg.cam[ch_num1].exp_time);
-        __LOG(LOG_NOTICE, "[CFG][%s:%d] ch%d cmd : %s", _FILE_, __LINE__, ch_num1, cmd);
+        __LOG(LOG_INFO, "[CFG][%s:%d] ch%d cmd : %s", _FILE_, __LINE__, ch_num1, cmd);
         if (system(cmd) < 0)
             __LOG(LOG_ERR, "[CFG][%s:%d] ch%d exp_time fail", __FILE__, __LINE__, ch_num1);
     }
@@ -668,51 +668,51 @@ gboolean config_camera(gpointer user_data)
 
         if (cmdArg.cam[ch_num0].enable & 0x01)
         {
-            __LOG(LOG_NOTICE, "[CFG][%s:%d] ch%d enable, ch%d disable", _FILE_, __LINE__, ch_num0, ch_num1);
+            __LOG(LOG_INFO, "[CFG][%s:%d] ch%d enable, ch%d disable", _FILE_, __LINE__, ch_num0, ch_num1);
             cmd = g_strdup_printf("i2cwrite %d 0x3c 0x100c 0x%04x", i ? 1 : 2, (cmdArg.ch_rotate >> (i * 4)) & 0x03);
-            __LOG(LOG_NOTICE, "[CFG][%s:%d] ch%d cmd : %s", _FILE_, __LINE__, ch_num0, cmd);
+            __LOG(LOG_INFO, "[CFG][%s:%d] ch%d cmd : %s", _FILE_, __LINE__, ch_num0, cmd);
             if (system(cmd) < 0)
                 __LOG(LOG_ERR, "[CFG][%s:%d] ch%d rotation fail", __FILE__, __LINE__, ch_num0);
             if (val[ch_num0] == 0)
                 __LOG(LOG_ERR, "[CFG][%s:%d] swap : ch%d enable but ch%d display", _FILE_, __LINE__, ch_num0, ch_num1);
 
             cmd = g_strdup_printf("i2cwrite %d 0x3c 0x5002 %s", i ? 1 : 2, cmdArg.cam[ch_num0].ae_on? "0x0299":"0x0290");
-            __LOG(LOG_NOTICE, "[CFG][%s:%d] ch%d cmd : %s", _FILE_, __LINE__, ch_num0, cmd);
+            __LOG(LOG_INFO, "[CFG][%s:%d] ch%d cmd : %s", _FILE_, __LINE__, ch_num0, cmd);
             if (system(cmd) < 0)
                 __LOG(LOG_ERR, "[CFG][%s:%d] ch%d ae_on fail", __FILE__, __LINE__, ch_num0);
 
             cmd = g_strdup_printf("i2cwrite %d 0x3c 0x5006 0x%04x", i ? 1 : 2, cmdArg.cam[ch_num0].ae_gain);
-            __LOG(LOG_NOTICE, "[CFG][%s:%d] ch%d cmd : %s", _FILE_, __LINE__, ch_num0, cmd);
+            __LOG(LOG_INFO, "[CFG][%s:%d] ch%d cmd : %s", _FILE_, __LINE__, ch_num0, cmd);
             if (system(cmd) < 0)
                 __LOG(LOG_ERR, "[CFG][%s:%d] ch%d ae_gain fail", __FILE__, __LINE__, ch_num0);
 
             cmd = g_strdup_printf("i2cwrite %d 0x3c 0x500c 0x%08x", i ? 1 : 2, cmdArg.cam[ch_num0].exp_time);
-            __LOG(LOG_NOTICE, "[CFG][%s:%d] ch%d cmd : %s", _FILE_, __LINE__, ch_num0, cmd);
+            __LOG(LOG_INFO, "[CFG][%s:%d] ch%d cmd : %s", _FILE_, __LINE__, ch_num0, cmd);
             if (system(cmd) < 0)
                 __LOG(LOG_ERR, "[CFG][%s:%d] ch%d ae_gain fail", __FILE__, __LINE__, ch_num0);
         }
         else if (cmdArg.cam[ch_num1].enable & 0x01)
         {
-            __LOG(LOG_NOTICE, "[CFG][%s:%d] ch%d disable, ch%d enable", _FILE_, __LINE__, ch_num0, ch_num1);
+            __LOG(LOG_INFO, "[CFG][%s:%d] ch%d disable, ch%d enable", _FILE_, __LINE__, ch_num0, ch_num1);
             cmd = g_strdup_printf("i2cwrite %d 0x3c 0x100c 0x%04x", i ? 1 : 2, (cmdArg.ch_rotate >> (i * 4 + 2)) & 0x03);
-            __LOG(LOG_NOTICE, "[CFG][%s:%d] %s", _FILE_, __LINE__, cmd);
+            __LOG(LOG_INFO, "[CFG][%s:%d] %s", _FILE_, __LINE__, cmd);
             if (system(cmd) < 0)
                 __LOG(LOG_ERR, "[CFG][%s:%d] ch%d rotation fail", __FILE__, __LINE__, ch_num1);
             if (val[ch_num1] == 0)
                 __LOG(LOG_ERR, "[CFG][%s:%d] swap : ch%d enable but ch%d display", _FILE_, __LINE__, ch_num1, ch_num0);
 
             cmd = g_strdup_printf("i2cwrite %d 0x3c 0x5002 %s", i ? 1 : 2, cmdArg.cam[ch_num1].ae_on? "0x0299":"0x0290");
-            __LOG(LOG_NOTICE, "[CFG][%s:%d] ch%d cmd : %s", _FILE_, __LINE__, ch_num1, cmd);
+            __LOG(LOG_INFO, "[CFG][%s:%d] ch%d cmd : %s", _FILE_, __LINE__, ch_num1, cmd);
             if (system(cmd) < 0)
                 __LOG(LOG_ERR, "[CFG][%s:%d] ch%d ae_on fail", __FILE__, __LINE__, ch_num1);
 
             cmd = g_strdup_printf("i2cwrite %d 0x3c 0x5006 0x%04x", i ? 1 : 2, cmdArg.cam[ch_num1].ae_gain);
-            __LOG(LOG_NOTICE, "[CFG][%s:%d] ch%d cmd : %s", _FILE_, __LINE__, ch_num1, cmd);
+            __LOG(LOG_INFO, "[CFG][%s:%d] ch%d cmd : %s", _FILE_, __LINE__, ch_num1, cmd);
             if (system(cmd) < 0)
                 __LOG(LOG_ERR, "[CFG][%s:%d] ch%d ae_gain fail", __FILE__, __LINE__, ch_num1);
 
             cmd = g_strdup_printf("i2cwrite %d 0x3c 0x500c 0x%08x", i ? 1 : 2, cmdArg.cam[ch_num1].exp_time);
-            __LOG(LOG_NOTICE, "[CFG][%s:%d] ch%d cmd : %s", _FILE_, __LINE__, ch_num1, cmd);
+            __LOG(LOG_INFO, "[CFG][%s:%d] ch%d cmd : %s", _FILE_, __LINE__, ch_num1, cmd);
             if (system(cmd) < 0)
                 __LOG(LOG_ERR, "[CFG][%s:%d] ch%d ae_gain fail", __FILE__, __LINE__, ch_num1);
         }
@@ -755,7 +755,7 @@ gint main(gint argc, gchar *argv[])
     getPasswdWithAES(&parser->arg);
     //if(!strcmp(parser->arg.rtsp_passwd, DEFAULT_RTSP_PASSWD) == 0)
     
-    __LOG(LOG_ALERT, "[GST][%s:%d] %s version : %s linked against Gstreamer %d.%d.%d %s", __FILE__, __LINE__, parser->arg.appname, APP_VERSION, major, minor, micro, nano_str);
+    __LOG(LOG_INFO, "[GST][%s:%d] %s version : %s linked against Gstreamer %d.%d.%d %s", __FILE__, __LINE__, parser->arg.appname, APP_VERSION, major, minor, micro, nano_str);
 
     cmdArg = parser->arg;
     if(parser->check_arg() < 0)
@@ -777,6 +777,7 @@ gint main(gint argc, gchar *argv[])
     const gchar *stateChangeReturnStr[4] = {"GST_STATE_CHANGE_FAILURE", "GST_STATE_CHANGE_SUCCESS", "GST_STATE_CHANGE_ASYNC", "GST_STATE_CHANGE_NO_PREROLL"};
     CTCPServer *tcpServer = CTCPServer::getInstance();
     CIPCInsance *ipcInstance = CIPCInsance::getInstance();
+    gint sd_mount_flag = 0;
 
     threadArgs->arg0 = videoBin;
     threadArgs->arg1 = recordBin;
@@ -1068,7 +1069,7 @@ gint main(gint argc, gchar *argv[])
     {
         ret = gst_element_set_state(pipeline, GST_STATE_PAUSED);
         
-        __LOG(LOG_NOTICE, "[GST][%s:%d] paused : %s", _FILE_, __LINE__, stateChangeReturnStr[ret]);
+        __LOG(LOG_INFO, "[GST][%s:%d] paused : %s", _FILE_, __LINE__, stateChangeReturnStr[ret]);
         if (ret == GST_STATE_CHANGE_FAILURE)
         {
             __LOG(LOG_CRIT, "[GST][%s:%d] pipeline state paused error", _FILE_, __LINE__);
@@ -1095,7 +1096,8 @@ gint main(gint argc, gchar *argv[])
     }
 #endif
 
-    if (access("/dev/shm/sd_mount_flag", F_OK) != 0)
+    sd_mount_flag = check_sd_mount_flag();
+    if (sd_mount_flag == 0)
     {
         cmdArg.mntDir = FALLBACKDIR;
         __LOG(LOG_NOTICE, "[GST][%s:%d] sd card no mount...file dir fallback : %s", _FILE_, __LINE__, FALLBACKDIR);
@@ -1136,7 +1138,7 @@ gint main(gint argc, gchar *argv[])
 	if(!loop) {
         __LOG(LOG_CRIT, "[GST][%s:%d] mainLoop create error", _FILE_, __LINE__);
     } else {
-        __LOG(LOG_NOTICE, "[GST][%s:%d] mainLoop start", _FILE_, __LINE__);
+        __LOG(LOG_INFO, "[GST][%s:%d] mainLoop start", _FILE_, __LINE__);
 #if 0
         g_main_loop_run(loop);
 #else
@@ -1147,7 +1149,7 @@ gint main(gint argc, gchar *argv[])
         }
 #endif
     }
-    __LOG(LOG_NOTICE, "[GST][%s:%d] Main loop exit", _FILE_, __LINE__);
+    __LOG(LOG_INFO, "[GST][%s:%d] Main loop exit", _FILE_, __LINE__);
 
     if (gst_element_set_state (pipeline, GST_STATE_NULL) != GST_STATE_CHANGE_SUCCESS)
     {

@@ -990,7 +990,7 @@ gboolean RtspServerBin::init(guint8 ch, gboolean crop_en)
 void rtspServerStop()
 {
     if(rtspServer) {
-        __LOG(LOG_EMERG, "[RTSP][%s:%d] %s", _FILE_, __LINE__, __FUNCTION__);
+        __LOG(LOG_INFO, "[RTSP][%s:%d] %s", _FILE_, __LINE__, __FUNCTION__);
         g_object_unref(rtspServer);
     }
 

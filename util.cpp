@@ -413,3 +413,35 @@ void convert_data_to_hex(const char *data, int len, char *buffer, int buffer_siz
     }
     buffer[buffer_size - 1] = '\0'; // Null-terminate
 }
+
+int check_sd_mount_flag(void)
+{
+    FILE *fp;
+    char buf[32];
+
+    // 1) 파일 존재 체크
+    if (access(SD_MOUNT_FLAG, F_OK) != 0)
+        return 0;   // 파일 없음
+
+    // 2) 파일 열기
+    fp = fopen(SD_MOUNT_FLAG, "r");
+    if (!fp)
+        return 0;   // 열기 실패
+
+    // 3) 한 줄 읽기
+    if (!fgets(buf, sizeof(buf), fp)) {
+        fclose(fp);
+        return 0;   // 읽기 실패
+    }
+    fclose(fp);
+
+    //__LOG(LOG_NOTICE, "[MNT][%s:%d] %s : %s", _FILE_, __LINE__, __FUNCTION__, buf);
+
+    // 5) 값 비교
+    if (strstr(buf, "1"))
+        return 1;
+    if (strstr(buf, "2"))
+        return 2;
+
+    return 0;   // 그 외 값
+}

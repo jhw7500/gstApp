@@ -33,7 +33,7 @@ static gboolean handle_eos_event(GstPad *pad, GstPadProbeInfo *info, gpointer us
     {
         case GST_EVENT_EOS:
         {
-            __LOG(LOG_NOTICE, "[GST][%s:%d] ch%d Received EOS event on pad : %s", _FILE_, __LINE__, data->ch, GST_PAD_NAME(pad));
+            __LOG(LOG_INFO, "[GST][%s:%d] ch%d Received EOS event on pad : %s", _FILE_, __LINE__, data->ch, GST_PAD_NAME(pad));
             is_interrupted = TRUE;
             break;
         }

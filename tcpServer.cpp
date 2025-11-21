@@ -49,7 +49,7 @@ void* thread_waitingConnect(void* pData)
 
 CTCPServer::CTCPServer()
 {
-    __LOG(LOG_NOTICE, "[GST][%s:%d] %s", _FILE_, __LINE__, __FUNCTION__);
+    __LOG(LOG_INFO, "[GST][%s:%d] %s", _FILE_, __LINE__, __FUNCTION__);
 
 	m_flagDestroy = 1;
 
@@ -65,7 +65,7 @@ CTCPServer::CTCPServer()
 
 CTCPServer::~CTCPServer()
 {
-    __LOG(LOG_NOTICE, "[GST][%s:%d] %s", _FILE_, __LINE__, __FUNCTION__);
+    __LOG(LOG_INFO, "[GST][%s:%d] %s", _FILE_, __LINE__, __FUNCTION__);
 }
 
 CTCPServer* CTCPServer::getInstance()
