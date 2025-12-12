@@ -54,6 +54,7 @@ typedef struct _CaptureElement
 {
     GstElement *enc;
     GstElement *queue;
+    GstElement *queue2;
     GstElement *imx_convert;
     GstElement *bin;
     GstElement *appsink;

@@ -199,10 +199,13 @@ gboolean VideoBin::init(guint8 csiNum)
     }
 
     if((cmdArg.cam[0].enable || cmdArg.cam[1].enable) && (cmdArg.cam[2].enable || cmdArg.cam[3].enable))
-        wdt_timeout = 30000;
+        wdt_timeout = cmdArg.wdt_timeout_long;
     else
-        wdt_timeout = 20000;
+        wdt_timeout = cmdArg.wdt_timeout_short;
 
+    //if(!cmdArg.stream_en[STREAM_REC])
+    //    wdt_timeout = 0;
+    
     __LOG(LOG_INFO, "[GST][%s:%d] %s[%d] crop : %s, wdt_timeout : %d", _FILE_, __LINE__, __FUNCTION__, csiNum, crop_en? "enable":"disable", wdt_timeout);
 
     be.bin = gst_bin_new(g_strdup_printf("videoBin%d", csiNum));
@@ -262,6 +265,7 @@ gboolean VideoBin::init(guint8 csiNum)
                                     //"pixel-aspect-ratio", GST_TYPE_FRACTION, 1, 1,
                                     NULL);
                                     
+        
         ret = gst_element_link_many(be.src, be.watchdog, be.convert, be.capsfilter, be.teeCrop, NULL);
         //ret = gst_element_link_filtered(be.src, be.teeCrop, caps);
         if (!ret)

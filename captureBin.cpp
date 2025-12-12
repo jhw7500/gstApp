@@ -645,7 +645,8 @@ gboolean CaptureBin::init(guint8 ch)
     __LOG(LOG_NOTICE, "[%s][%s:%d] %s ch : %d, crop : %s", CAP_LOG_KEY, _FILE_, __LINE__, __FUNCTION__, captureData.ch, crop_en? "enable":"disable");
 
     be.bin = gst_bin_new(g_strdup_printf("captureBin%d", captureData.ch));
-    be.queue = gst_element_factory_make(QUEUE_TYPE, g_strdup_printf("queue%d", captureData.ch));
+    be.queue = gst_element_factory_make(QUEUE_TYPE, g_strdup_printf("queue_%d", captureData.ch));
+    be.queue2 = gst_element_factory_make(QUEUE_TYPE, g_strdup_printf("queue2_%d", captureData.ch));
     be.imx_convert = gst_element_factory_make("imxvideoconvert_g2d", g_strdup_printf("imx_convert%d", captureData.ch));
     be.enc = gst_element_factory_make("jpegenc", g_strdup_printf("jpegenc%d", captureData.ch));
     be.appsink = gst_element_factory_make("appsink", g_strdup_printf("appsink%d", captureData.ch));
@@ -657,13 +658,13 @@ gboolean CaptureBin::init(guint8 ch)
 
     //GstElement *imx_convert = gst_element_factory_make("imxvideoconvert_g2d", g_strdup_printf("imxconvert%d", captureData.ch));
 
-    if (!be.bin || !be.queue || !be.enc || !be.appsink || !be.imx_convert || !be.crop || !be.overlay || \
+    if (!be.bin || !be.queue || !be.queue2 || !be.enc || !be.appsink || !be.imx_convert || !be.crop || !be.overlay || \
         !be.capsfilter || !be.appsrc || !be.queue_sink) {
         __LOG(LOG_CRIT, "[%s][%s:%d] capture element create error", CAP_LOG_KEY, _FILE_, __LINE__);
         return ret;
     }
 
-    gst_bin_add_many(GST_BIN(be.bin), be.queue, be.imx_convert, be.enc, be.appsink, be.crop, be.overlay, \
+    gst_bin_add_many(GST_BIN(be.bin), be.queue, be.queue2, be.imx_convert, be.enc, be.appsink, be.crop, be.overlay, \
                     be.capsfilter, be.queue_sink, be.appsrc, NULL);
     //gst_bin_add_many(GST_BIN(be.bin), be.queue_src, be.queue3, be.queue_sink, NULL);
     //gst_bin_add_many(GST_BIN(be.bin), imx_convert, , NULL);
@@ -704,8 +705,8 @@ gboolean CaptureBin::init(guint8 ch)
     switch(captureData.enc_type)
     {
         case CAP_ENC_JPEG:
-            if(crop_en) ret = gst_element_link_many(be.appsrc, be.crop, be.imx_convert, be.capsfilter, be.enc, be.appsink, NULL);
-            else ret = gst_element_link_many(be.appsrc, be.capsfilter, be.enc, be.appsink, NULL);
+            if(crop_en) ret = gst_element_link_many(be.appsrc, be.crop, be.imx_convert, be.capsfilter, be.enc, be.queue2, be.appsink, NULL);
+            else ret = gst_element_link_many(be.appsrc, be.capsfilter, be.enc, be.queue2, be.appsink, NULL);
             caps = gst_caps_new_simple("video/x-raw",
                                         //"format", G_TYPE_STRING, "RGBx",
                                         "width", G_TYPE_INT, cmdArg.width,
@@ -725,8 +726,8 @@ gboolean CaptureBin::init(guint8 ch)
                                         NULL);
             g_object_set(be.capsfilter, "caps", caps, NULL);
             gst_caps_unref(caps);
-            if(crop_en) ret = gst_element_link_many(be.appsrc, be.crop, be.imx_convert, be.capsfilter, be.appsink, NULL);
-            else ret = gst_element_link_many(be.appsrc, be.capsfilter, be.appsink, NULL);
+            if(crop_en) ret = gst_element_link_many(be.appsrc, be.crop, be.imx_convert, be.capsfilter, be.queue2, be.appsink, NULL);
+            else ret = gst_element_link_many(be.appsrc, be.capsfilter, be.queue2, be.appsink, NULL);
             break;
         case CAP_ENC_RAW:
             caps = gst_caps_new_simple("video/x-raw",
@@ -736,8 +737,8 @@ gboolean CaptureBin::init(guint8 ch)
                                         NULL);
             g_object_set(be.capsfilter, "caps", caps, NULL);
             gst_caps_unref(caps);
-            if(crop_en) ret = gst_element_link_many(be.appsrc, be.crop, be.imx_convert, be.capsfilter, be.appsink, NULL);
-            else ret = gst_element_link_many(be.appsrc, be.appsink, NULL);
+            if(crop_en) ret = gst_element_link_many(be.appsrc, be.crop, be.imx_convert, be.capsfilter, be.queue2, be.appsink, NULL);
+            else ret = gst_element_link_many(be.appsrc, be.queue2, be.appsink, NULL);
             break;
         default:
             __LOG(LOG_CRIT, "[%s][%s:%d] capture encoder type is invalid : %d ", CAP_LOG_KEY, _FILE_, __LINE__, captureData.enc_type);
@@ -816,6 +817,7 @@ gboolean CaptureBin::init(guint8 ch)
     //g_object_set(re.enc, "bitrate", cmdArg.rtsp_bitrate, NULL);
     
     g_object_set(be.queue, "max-size-time", GST_SECOND/2, "leaky", LEAKY_DOWNSTREAM, NULL);
+    g_object_set(be.queue2, "max-size-time", GST_SECOND/2, "leaky", LEAKY_DOWNSTREAM, NULL);
     //g_object_set(re.capsfilter, "max-size-time", 5*GST_SECOND, "max-size-buffers", 60, "leaky", 1, NULL);
     //g_object_set(pipe->sink, "max-lateness", 1*GST_SECOND, NULL);
     //g_object_set(pipe->sink, "render-delay", 100*GST_MSECOND, NULL);

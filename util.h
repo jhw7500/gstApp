@@ -175,6 +175,8 @@ typedef struct _CmdArg
     const gchar *muxer;
     gboolean dual_enc;
     CaptureConfig cap;
+    gint wdt_timeout_short;
+    gint wdt_timeout_long;
 } CmdArg;
 
 #pragma pack(pop)

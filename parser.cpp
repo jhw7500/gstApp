@@ -61,6 +61,8 @@ void ParserClass::init_arg(gchar *argv)
     arg.stream_en[STREAM_RTSP] = TRUE;
     arg.stream_en[STREAM_CAP] = FALSE;
     arg.dual_enc = FALSE;
+    arg.wdt_timeout_long = DEFAULT_WDT_TIMEOUT_LONG;
+    arg.wdt_timeout_short = DEFAULT_WDT_TIMEOUT_SHORT;
 
     arg.cap.path = DEFAULT_CAP_DIR;
     arg.cap.maxCnt = DEFAULT_CAPTURE_MAX_CNT;
@@ -404,6 +406,8 @@ gint ParserClass::arg_parser(int *argc, char **argv[])
         {"eipc", 'f', 0, G_OPTION_ARG_INT, &arg.ipc_en, "ipc enable, default(FALSE)", "INT"},
         {"ipc_mid", 'F', 0, G_OPTION_ARG_INT, &arg.ipc_mid, "ipc message id, default(0x65)", "INT"},
         {"dual_enc", 'U', 0, G_OPTION_ARG_INT, &arg.dual_enc, "dual encoder, default(FALSE)", "INT"},
+        {"wdt_l", 'B', 0, G_OPTION_ARG_INT, &arg.wdt_timeout_long, "watchdog timeout long, default(30000)", "INT"},
+        {"wdt_s", 'b', 0, G_OPTION_ARG_INT, &arg.wdt_timeout_short, "watchdog timeout short, default(20000)", "INT"},
         {"fault", 0, 0, G_OPTION_ARG_INT, &arg.fault, "fault debug setup, default(FALSE)", "INT"},
         {"tport", 0, 0, G_OPTION_ARG_INT, &arg.tcp_port, "tcp port num, default(8555)", "INT"},
         {"fmain0", 0, 0, G_OPTION_ARG_INT, &arg.main_fps[CSI_1], "csi1 main frame per second, default(15)", "INT"},
@@ -520,8 +524,8 @@ gint ParserClass::check_arg()
                         LOG_KEY, _FILE_, __LINE__, ioModeStr[arg.ioMode], arg.levelMode, arg.fault, arg.play_delay, arg.config_delay, \
                         arg.log_level, arg.dbg_level, arg.mntDir, arg.dotDir);
 
-    __LOG(LOG_NOTICE, "[%s][%s:%d] oht_name:%s, duration:%d, width:%d, height:%d, csi1_fps:%d, csi2_fps:%d", LOG_KEY, _FILE_, __LINE__, \
-                        arg.ohtName, arg.duration, arg.width, arg.height, arg.main_fps[CSI_1], arg.main_fps[CSI_2]);
+    __LOG(LOG_NOTICE, "[%s][%s:%d] oht_name:%s, duration:%d, width:%d, height:%d, csi1_fps:%d, csi2_fps:%d, wdt_timeout_l:%d, wdt_timeout_s:%d", LOG_KEY, _FILE_, __LINE__, \
+                        arg.ohtName, arg.duration, arg.width, arg.height, arg.main_fps[CSI_1], arg.main_fps[CSI_2], arg.wdt_timeout_long, arg.wdt_timeout_short);
                     
     __LOG(LOG_NOTICE, "[%s][%s:%d] chEn:0x%x, recEn:%d, rtspEn:%d, capEn:%d, audoEn:%d, dualEn:%d, inputEn:%d, overlayEn:%d tcpEn:%d, tcpPort:%d, ipc_en:%d, ipc_mid:%d", \
                         LOG_KEY, _FILE_, __LINE__, arg.ch_enable, arg.stream_en[STREAM_REC], arg.stream_en[STREAM_RTSP], arg.stream_en[STREAM_CAP], \
