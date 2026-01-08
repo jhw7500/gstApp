@@ -535,7 +535,7 @@ gint CaptureBin::stopCapture()
 
 void CaptureBin::setMode(guint8 mode)
 {
-    __LOG(LOG_INFO, "[%s][%s:%d] ch%d setMode %d", CAP_LOG_KEY, _FILE_, __LINE__, mode);
+    __LOG(LOG_INFO, "[%s][%s:%d] ch%d setMode %d", CAP_LOG_KEY, _FILE_, __LINE__, captureData.ch, mode);
     captureData.mode = mode;
 }
 
@@ -642,7 +642,7 @@ gboolean CaptureBin::init(guint8 ch)
     captureData.fps = cmdArg.fps[STREAM_CAP][captureData.ch];
     captureData.quality = cmdArg.cap.quality;
     //sinkPad = NULL;
-    __LOG(LOG_NOTICE, "[%s][%s:%d] %s ch : %d, crop : %s", CAP_LOG_KEY, _FILE_, __LINE__, __FUNCTION__, captureData.ch, crop_en? "enable":"disable");
+    __LOG(LOG_INFO, "[%s][%s:%d] %s ch : %d, crop : %s", CAP_LOG_KEY, _FILE_, __LINE__, __FUNCTION__, captureData.ch, crop_en? "enable":"disable");
 
     be.bin = gst_bin_new(g_strdup_printf("captureBin%d", captureData.ch));
     be.queue = gst_element_factory_make(QUEUE_TYPE, g_strdup_printf("queue_%d", captureData.ch));

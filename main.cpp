@@ -27,7 +27,7 @@
 #include <unistd.h>
 //#include <signal.h>
 
-#define APP_VERSION "1.1"
+#define APP_VERSION "1.2"
 
 #define SEGFAULT_DEBUG
 #define RECORDBIN_ENABLE

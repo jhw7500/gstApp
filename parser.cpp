@@ -67,7 +67,7 @@ void ParserClass::init_arg(gchar *argv)
     arg.cap.path = DEFAULT_CAP_DIR;
     arg.cap.maxCnt = DEFAULT_CAPTURE_MAX_CNT;
     arg.cap.encoder = NULL;
-    arg.cap.res_en = FALSE;
+    arg.cap.res_en = TRUE;
     arg.cap.delay = DEFAULT_CAPTURE_DELAY;
     arg.cap.timeout = DEFAULT_CAPTURE_TIMEOUT;
     arg.cap.padding = TRUE;
@@ -124,6 +124,10 @@ gint ParserClass::json_object_get_value(json_object *hobj, const gchar *name, gp
     json_object *vobj;
 
     vobj = json_object_object_get(hobj, name);
+    if (vobj == NULL) {
+        __LOG(LOG_CRIT, "[CFG][%s:%d] not exist : %s", _FILE_, __LINE__, name);
+        return -1;
+    }
 
     enum json_type type = json_object_get_type(vobj);
 
@@ -229,6 +233,11 @@ gint ParserClass::json_sub_object_get_value(const gchar *file, const gchar *head
     json_object *sobj = NULL;
 
     jobj = json_object_from_file(file);
+    if (jobj == NULL) {
+        __LOG(LOG_CRIT, "[%s][%s:%d] json file open fail : %s", LOG_KEY, _FILE_, __LINE__, file);
+        return -1;
+    }
+
     enum json_type type = json_object_get_type(jobj);
 
 	do {
@@ -239,6 +248,10 @@ gint ParserClass::json_sub_object_get_value(const gchar *file, const gchar *head
 
         //hobj = json_find_obj(jobj, "VHL_CAM");
         hobj = json_object_object_get(jobj, header);
+        if (hobj == NULL) {
+            __LOG(LOG_CRIT, "[%s][%s:%d] not exist header : %s", LOG_KEY, _FILE_, __LINE__, header);
+            return -1;
+        }
         type = json_object_get_type(hobj);
 		if(type != json_type_object) {
 			__LOG(LOG_ERR, "[%s][%s:%d] data not json type[%d]", LOG_KEY, _FILE_, __LINE__, type);
@@ -246,6 +259,10 @@ gint ParserClass::json_sub_object_get_value(const gchar *file, const gchar *head
 		}
 
         sobj = json_object_object_get(hobj, sub_obj);
+        if (sobj == NULL) {
+            __LOG(LOG_CRIT, "[%s][%s:%d] not exist sub_obj : %s", LOG_KEY, _FILE_, __LINE__, sub_obj);
+            return -1;
+        }
         type = json_object_get_type(hobj);
 		if(type != json_type_object) {
 			__LOG(LOG_ERR, "[%s][%s:%d] data not json type[%d]", LOG_KEY, _FILE_, __LINE__, type);
@@ -326,6 +343,7 @@ gint ParserClass::json_parser(const gchar *path, const gchar *header)
             json_object_get_value(sobj, "record", &arg.cap.record_en);
             json_object_get_value(sobj, "rtsp", &arg.cap.rtsp_en);
             json_object_get_value(sobj, "quality", &arg.cap.quality);
+            json_object_get_value(sobj, "response", &arg.cap.res_en);
             arg.stream_en[STREAM_REC] = arg.cap.record_en;
             arg.stream_en[STREAM_RTSP] = arg.cap.rtsp_en;
             arg.ipc_en = TRUE;
@@ -333,9 +351,13 @@ gint ParserClass::json_parser(const gchar *path, const gchar *header)
 
         for(guint8 i=0; i<MAX_CHANNEL; i++)
         {
-            sobj = json_object_object_get(hobj, g_strdup_printf("i2c%d", i/2? 1:2));
+            gchar *i2c_key = g_strdup_printf("i2c%d", i/2? 1:2);
+            sobj = json_object_object_get(hobj, i2c_key);
+            g_free(i2c_key);
             json_object_get_value(sobj, "exp_time", &arg.cam[i].exp_time);
-            vobj = json_object_object_get(sobj, g_strdup_printf("ch%d", i));
+            gchar *ch_key = g_strdup_printf("ch%d", i);
+            vobj = json_object_object_get(sobj, ch_key);
+            g_free(ch_key);
             json_object_get_value(vobj, "enable", &arg.cam[i].enable);
             json_object_get_value(vobj, "hflip", &arg.cam[i].hflip);
             json_object_get_value(vobj, "vflip", &arg.cam[i].vflip);
@@ -389,7 +411,7 @@ gint ParserClass::arg_parser(int *argc, char **argv[])
         {"audio", 's', 0, G_OPTION_ARG_INT, &arg.audio_en, "audio recording enable, default(FALSE)", "INT"},
         {"padding", 'J', 0, G_OPTION_ARG_INT, &arg.cap.padding, "padding enable, default(TRUE)", "INT"},
         {"capenc", 'N', 0, G_OPTION_ARG_STRING, &arg.cap.encoder, "video capture encoder(jpeg, turbo/turbojpeg, raw/rgb), default(jpeg)", "STRING"},
-        {"capres", 'R', 0, G_OPTION_ARG_INT, &arg.cap.res_en, "video capture response enable, default(FALSE)", "INT"},
+        {"capres", 'R', 0, G_OPTION_ARG_INT, &arg.cap.res_en, "video capture response enable, default(TRUE)", "INT"},
         {"capmax", 'x', 0, G_OPTION_ARG_INT, &arg.cap.maxCnt, "capture max count, default(3)", "INT"},
         {"capdelay", 'A', 0, G_OPTION_ARG_INT, &arg.cap.delay, "video capture delay(msec), default(0)", "INT"},
         {"capquality", 'q', 0, G_OPTION_ARG_INT, &arg.cap.quality, "video capture quality, default(85)", "INT"},
@@ -403,6 +425,7 @@ gint ParserClass::arg_parser(int *argc, char **argv[])
         {"split_diff", 'D', 0, G_OPTION_ARG_INT, &arg.split_diff_msec, "split diff msec, default(100)", "INT"},
         {"split_max", 'X', 0, G_OPTION_ARG_INT, &arg.split_max_msec, "split max msec, default(2000)", "INT"},
         {"split_sec", 'S', 0, G_OPTION_ARG_INT, &arg.split_sec, "split sec, default(0)", "INT"},
+        {"muxer", 'Q', 0, G_OPTION_ARG_INT, &arg.muxer, "muxer(mp4, qt, ts), default(mp4)", "STRING"},
         {"eipc", 'f', 0, G_OPTION_ARG_INT, &arg.ipc_en, "ipc enable, default(FALSE)", "INT"},
         {"ipc_mid", 'F', 0, G_OPTION_ARG_INT, &arg.ipc_mid, "ipc message id, default(0x65)", "INT"},
         {"dual_enc", 'U', 0, G_OPTION_ARG_INT, &arg.dual_enc, "dual encoder, default(FALSE)", "INT"},
@@ -629,15 +652,16 @@ gint ParserClass::cfi_parser(gchar* buffer, gint len, gpointer data)
     guint8 fps;
     //GThread *resThread[4];
     //memset(_TCfiData.byte, 0, CFI_DATA_LEN);
+
+	if(len != CFI_DATA_LEN) {
+		__LOG(LOG_ERR, "[%s][%s:%d] recv byte %d != %d", CAP_LOG_KEY, _FILE_, __LINE__, len, CFI_DATA_LEN);
+		return -1;
+	}
+
     memcpy(_TCfiData.byte, buffer, len);
 
 	if(_TCfiData.data.len != len) {
 		__LOG(LOG_ERR, "[%s][%s:%d] header len %d != %d", CAP_LOG_KEY, _FILE_, __LINE__, _TCfiData.data.len, len);
-		return -1;
-	}
-
-	if(len != CFI_DATA_LEN) {
-		__LOG(LOG_ERR, "[%s][%s:%d] recv byte %d != %d", CAP_LOG_KEY, _FILE_, __LINE__, len, CFI_DATA_LEN);
 		return -1;
 	}
 
@@ -712,7 +736,7 @@ gint ParserClass::cfi_parser(gchar* buffer, gint len, gpointer data)
 
                 if (captureBin[i].getCaptureCnt_() == capMaxCnt)
                 {
-                    __LOG(LOG_INFO, "[%s][%s:%d] ch%d(%d) OK(%lu)", CAP_LOG_KEY, _FILE_, __LINE__, i, _TCfiData.data.tx_id, chk_cnt);
+                    __LOG(LOG_INFO, "[%s][%s:%d] res : ch%d(%d) OK(%lu)", CAP_LOG_KEY, _FILE_, __LINE__, i, _TCfiData.data.tx_id, chk_cnt);
                     _TCfiData.data.cap_cnt = capMaxCnt;
                     ipcInstance->sendData((char *)_TCfiData.byte, CFI_DATA_LEN);
                     ch_en &= ~(1 << i);
@@ -720,7 +744,7 @@ gint ParserClass::cfi_parser(gchar* buffer, gint len, gpointer data)
                 else if (chk_cnt > timeout_msec[i])
                 {
                     gint done_cnt = captureBin[i].getCaptureCnt_();
-                    __LOG(LOG_ERR, "[%s][%s:%d] ch%d(%d) NG(%lu>%lu) cnt(%d>%d)", CAP_LOG_KEY, _FILE_, __LINE__, i, _TCfiData.data.tx_id, chk_cnt, timeout_msec[i], capMaxCnt, done_cnt);
+                    __LOG(LOG_ERR, "[%s][%s:%d] res : ch%d(%d) NG(%lu>%lu) cnt(%d>%d)", CAP_LOG_KEY, _FILE_, __LINE__, i, _TCfiData.data.tx_id, chk_cnt, timeout_msec[i], capMaxCnt, done_cnt);
                     _TCfiData.data.cap_cnt = (done_cnt < capMaxCnt) ? (capMaxCnt - done_cnt) : 0;
                     ipcInstance->sendData((char *)_TCfiData.byte, CFI_DATA_LEN);
                     captureBin[i].stopCapture();
