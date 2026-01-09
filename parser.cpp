@@ -72,6 +72,7 @@ void ParserClass::init_arg(gchar *argv)
     arg.cap.timeout = DEFAULT_CAPTURE_TIMEOUT;
     arg.cap.padding = TRUE;
     arg.cap.quality = DEFAULT_CAPTURE_QUALITY;
+    arg.cap.queue_size = DEFAULT_CAPTURE_QUEUE_SIZE;
     arg.tcp_en = FALSE;
     arg.tcp_port = DEFAULT_TCP_PORT;
 
@@ -343,6 +344,7 @@ gint ParserClass::json_parser(const gchar *path, const gchar *header)
             json_object_get_value(sobj, "record", &arg.cap.record_en);
             json_object_get_value(sobj, "rtsp", &arg.cap.rtsp_en);
             json_object_get_value(sobj, "quality", &arg.cap.quality);
+            json_object_get_value(sobj, "queue_size", &arg.cap.queue_size);
             json_object_get_value(sobj, "response", &arg.cap.res_en);
             arg.stream_en[STREAM_REC] = arg.cap.record_en;
             arg.stream_en[STREAM_RTSP] = arg.cap.rtsp_en;
@@ -415,6 +417,7 @@ gint ParserClass::arg_parser(int *argc, char **argv[])
         {"capmax", 'x', 0, G_OPTION_ARG_INT, &arg.cap.maxCnt, "capture max count, default(3)", "INT"},
         {"capdelay", 'A', 0, G_OPTION_ARG_INT, &arg.cap.delay, "video capture delay(msec), default(0)", "INT"},
         {"capquality", 'q', 0, G_OPTION_ARG_INT, &arg.cap.quality, "video capture quality, default(85)", "INT"},
+        {"capqueue", 0, 0, G_OPTION_ARG_INT, &arg.cap.queue_size, "capture async queue size, default(30)", "INT"},
         {"capdir", 'I', 0, G_OPTION_ARG_STRING, &arg.cap.path, "save capture file to directory, default capture", "STRING"},
         {"etcp", 'C', 0, G_OPTION_ARG_INT, &arg.tcp_en, "tcp server enable, default(FALSE)", "INT"},
         {"ein", 'i', 0, G_OPTION_ARG_INT, &arg.input_en, "terminal input enable, default(FALSE)", "INT"},
@@ -425,7 +428,7 @@ gint ParserClass::arg_parser(int *argc, char **argv[])
         {"split_diff", 'D', 0, G_OPTION_ARG_INT, &arg.split_diff_msec, "split diff msec, default(100)", "INT"},
         {"split_max", 'X', 0, G_OPTION_ARG_INT, &arg.split_max_msec, "split max msec, default(2000)", "INT"},
         {"split_sec", 'S', 0, G_OPTION_ARG_INT, &arg.split_sec, "split sec, default(0)", "INT"},
-        {"muxer", 'Q', 0, G_OPTION_ARG_INT, &arg.muxer, "muxer(mp4, qt, ts), default(mp4)", "STRING"},
+        {"muxer", 'Q', 0, G_OPTION_ARG_STRING, &arg.muxer, "muxer(mp4, qt, ts), default(mp4)", "STRING"},
         {"eipc", 'f', 0, G_OPTION_ARG_INT, &arg.ipc_en, "ipc enable, default(FALSE)", "INT"},
         {"ipc_mid", 'F', 0, G_OPTION_ARG_INT, &arg.ipc_mid, "ipc message id, default(0x65)", "INT"},
         {"dual_enc", 'U', 0, G_OPTION_ARG_INT, &arg.dual_enc, "dual encoder, default(FALSE)", "INT"},
@@ -581,13 +584,19 @@ gint ParserClass::check_arg()
 
     if(arg.stream_en[STREAM_CAP])
     {
+        if (arg.cap.queue_size <= 0) {
+            __LOG(LOG_WARNING, "[%s][%s:%d] invalid cap queue size %d, using default %d",
+                  LOG_KEY, _FILE_, __LINE__, arg.cap.queue_size, DEFAULT_CAPTURE_QUEUE_SIZE);
+            arg.cap.queue_size = DEFAULT_CAPTURE_QUEUE_SIZE;
+        }
+
         if(system(g_strdup_printf("mkdir -p %s/%s", cmdArg.mntDir, cmdArg.cap.path)) < 0)
             __LOG(LOG_ERR, "[CFG][%s:%d] err mkdir", __FILE__, __LINE__);
 
         __LOG(LOG_NOTICE, "[%s][%s:%d] capture ch0 fps:%d, ch1 fps:%d, ch2 fps:%d, ch3 fps:%d", LOG_KEY, _FILE_, __LINE__, \
                             arg.fps[STREAM_CAP][0], arg.fps[STREAM_CAP][1], arg.fps[STREAM_CAP][2], arg.fps[STREAM_CAP][3]);  
-        __LOG(LOG_NOTICE, "[%s][%s:%d] capEnc:%s, MaxCnt:%d, res_en:%d, path:%s, delay:%d, timeout:%d, padding:%d, quality:%d", \
-                            LOG_KEY, _FILE_, __LINE__, arg.cap.encoder, arg.cap.maxCnt, arg.cap.res_en, arg.cap.path, arg.cap.delay, arg.cap.timeout, arg.cap.padding, arg.cap.quality);
+        __LOG(LOG_NOTICE, "[%s][%s:%d] capEnc:%s, MaxCnt:%d, res_en:%d, path:%s, delay:%d, timeout:%d, padding:%d, quality:%d, queue_size:%d", \
+                            LOG_KEY, _FILE_, __LINE__, arg.cap.encoder, arg.cap.maxCnt, arg.cap.res_en, arg.cap.path, arg.cap.delay, arg.cap.timeout, arg.cap.padding, arg.cap.quality, arg.cap.queue_size);
     }
 
     gint total_fps = 0;
@@ -630,6 +639,27 @@ gint ParserClass::check_arg()
     return 0;
 }
 
+static void capture_done_callback(guint8 ch, gint completed_count, gpointer user_data) {
+    if (!cmdArg.cap.res_en) return;
+    
+    // user_data stores tx_id directly
+    guint32 tx_id = GPOINTER_TO_UINT(user_data);
+    
+    CIPCInsance* ipcInstance = CIPCInsance::getInstance();
+    
+    TCfiRecvData _TCfiRecvData;
+    memset(_TCfiRecvData.byte, 0, CFI_RECV_DATA_LEN);
+    _TCfiRecvData.data.len = CFI_RECV_DATA_LEN;
+    _TCfiRecvData.data.cmd_id = CFI_CAP_RES_CMD_ID;
+    _TCfiRecvData.data.tx_id = tx_id;
+    _TCfiRecvData.data.channel = 1 << ch;
+    _TCfiRecvData.data.cap_cnt = completed_count;
+    
+    __LOG(LOG_NOTICE, "[%s] Async capture done ch%d tx:%d cnt:%d", CAP_LOG_KEY, ch, tx_id, completed_count);
+    
+    ipcInstance->sendData((char *)_TCfiRecvData.byte, CFI_RECV_DATA_LEN);
+}
+
 gint ParserClass::cfi_parser(gchar* buffer, gint len, gpointer data)
 {
     ThreadArgs *thraedArgs = (ThreadArgs *)data;
@@ -640,42 +670,44 @@ gint ParserClass::cfi_parser(gchar* buffer, gint len, gpointer data)
     CaptureBin *captureBin = (CaptureBin *)(thraedArgs->arg4);
     //CaptureBin *captureBin = (CaptureBin *)(data);
     //ThreadArgs *arg[2];
-    CIPCInsance* ipcInstance = CIPCInsance::getInstance();
+    //CIPCInsance* ipcInstance = CIPCInsance::getInstance();
     
-    TCfiData _TCfiData;
+    TCfiSendData _TCfiSendData;
+    //TCfiRecvData _TCfiRecvData;
     guint i = 0;
     gint ret = 0;
-    guint32 chk_cnt = 0;
+    //guint32 chk_cnt = 0;
     guint8 ch_en = 0;
     guint16 capMaxCnt = 0;
-    guint32 timeout_msec[4];
+    guint32 timeout_msec = 0;
     guint8 fps;
+
     //GThread *resThread[4];
-    //memset(_TCfiData.byte, 0, CFI_DATA_LEN);
+    //memset(_TCfiSendData.byte, 0, CFI_SEND_DATA_LEN);
 
-	if(len != CFI_DATA_LEN) {
-		__LOG(LOG_ERR, "[%s][%s:%d] recv byte %d != %d", CAP_LOG_KEY, _FILE_, __LINE__, len, CFI_DATA_LEN);
+	if(len != CFI_SEND_DATA_LEN) {
+		__LOG(LOG_ERR, "[%s][%s:%d] recv byte %d != %d", CAP_LOG_KEY, _FILE_, __LINE__, len, CFI_SEND_DATA_LEN);
 		return -1;
 	}
 
-    memcpy(_TCfiData.byte, buffer, len);
+    memcpy(_TCfiSendData.byte, buffer, len);
 
-	if(_TCfiData.data.len != len) {
-		__LOG(LOG_ERR, "[%s][%s:%d] header len %d != %d", CAP_LOG_KEY, _FILE_, __LINE__, _TCfiData.data.len, len);
+	if(_TCfiSendData.data.len != len) {
+		__LOG(LOG_ERR, "[%s][%s:%d] header len %d != %d", CAP_LOG_KEY, _FILE_, __LINE__, _TCfiSendData.data.len, len);
 		return -1;
 	}
 
-	if(_TCfiData.data.cmd_id != CFI_CAP_REQ_CMD_ID && _TCfiData.data.cmd_id != CTS_CAP_START_REQ_CMD_ID && _TCfiData.data.cmd_id != CTS_CAP_STOP_REQ_CMD_ID) {
-		__LOG(LOG_ERR, "[%s][%s:%d] header cmd_id 0x%x is invalid", CAP_LOG_KEY, _FILE_, __LINE__, _TCfiData.data.cmd_id);
+	if(_TCfiSendData.data.cmd_id != CFI_CAP_REQ_CMD_ID && _TCfiSendData.data.cmd_id != CTS_CAP_START_REQ_CMD_ID && _TCfiSendData.data.cmd_id != CTS_CAP_STOP_REQ_CMD_ID) {
+		__LOG(LOG_ERR, "[%s][%s:%d] header cmd_id 0x%x is invalid", CAP_LOG_KEY, _FILE_, __LINE__, _TCfiSendData.data.cmd_id);
 		return -1;
 	}
 
-    //__LOG(LOG_INFO, "[CFI][%s:%d] prefix : %s", _FILE_, __LINE__, _TCfiData.data.prefix);
+    //__LOG(LOG_INFO, "[CFI][%s:%d] prefix : %s", _FILE_, __LINE__, _TCfiSendData.data.prefix);
     
-    ch_en = _TCfiData.data.channel;
-    capMaxCnt = _TCfiData.data.cap_cnt;
+    ch_en = _TCfiSendData.data.channel;
+    capMaxCnt = _TCfiSendData.data.cap_cnt;
     //json_sub_object_get_value(cmdArg.json_file, JSON_CAM_OBJ_NAME, JSON_CAP_OBJ_NAME, "delay", &cmdArg.cap.delay);
-    __LOG(LOG_INFO, "[%s][%s:%d] ch:0x%x, tx:%d, cnt:%d, prefix:%s, delay:%d", CAP_LOG_KEY, _FILE_, __LINE__, ch_en, _TCfiData.data.tx_id, capMaxCnt, _TCfiData.data.prefix, cmdArg.cap.delay);
+    __LOG(LOG_INFO, "[%s][%s:%d] ch:0x%x, tx:%d, cnt:%d, prefix:%s, delay:%d", CAP_LOG_KEY, _FILE_, __LINE__, ch_en, _TCfiSendData.data.tx_id, capMaxCnt, _TCfiSendData.data.prefix, cmdArg.cap.delay);
     
     g_usleep(1000*cmdArg.cap.delay);
 
@@ -690,71 +722,45 @@ gint ParserClass::cfi_parser(gchar* buffer, gint len, gpointer data)
             continue;
         }
 
-        if (_TCfiData.data.cmd_id == CFI_CAP_REQ_CMD_ID)
+        if (_TCfiSendData.data.cmd_id == CFI_CAP_REQ_CMD_ID)
         {
-            captureBin[i].setFilePath(_TCfiData.data.prefix);
-            captureBin[i].startCapture(capMaxCnt);
-            captureBin[i].setMode(0);
-
             fps = captureBin[i].getFPS();
             if (fps <= 0) {
                 __LOG(LOG_ERR, "[%s][%s:%d] ch%d has invalid FPS=%d", CAP_LOG_KEY, _FILE_, __LINE__, i ,fps);
                 fps = 1; // fallback
-            } 
+            }
             if (cmdArg.cap.timeout <= 100)
             {
                 __LOG(LOG_ERR, "[%s][%s:%d] ch%d has invalid timeout=%d", CAP_LOG_KEY, _FILE_, __LINE__, i ,cmdArg.cap.timeout);
                 cmdArg.cap.timeout = 200; // fallback
             }
-            timeout_msec[i] = (capMaxCnt * 1000) / fps + cmdArg.cap.timeout;
 
-            __LOG(LOG_INFO, "[%s][%s:%d] ch%d timeout: %lu", CAP_LOG_KEY, _FILE_, __LINE__, i, timeout_msec[i]);
+            // Calculate timeout for async mode
+            timeout_msec = (capMaxCnt * 1000) / fps;
+            guint32 processing_overhead = capMaxCnt * 50; 
+            timeout_msec = timeout_msec + processing_overhead + cmdArg.cap.timeout;
+
+            // Register callback once (safe to call multiple times)
+            captureBin[i].setCompleteCallback(capture_done_callback, NULL);
+            
+            gpointer callback_data = NULL;
+            if(cmdArg.cap.res_en) {
+                 // Pass tx_id directly as pointer
+                 callback_data = GUINT_TO_POINTER(_TCfiSendData.data.tx_id);
+            }
+            
+            // Queue the request with timeout
+            captureBin[i].addCaptureRequest(capMaxCnt, (gchar *)_TCfiSendData.data.prefix, callback_data, 1, (gint)timeout_msec);
         }
-        else if (_TCfiData.data.cmd_id == CTS_CAP_START_REQ_CMD_ID)
+        else if (_TCfiSendData.data.cmd_id == CTS_CAP_START_REQ_CMD_ID)
         {
-            captureBin[i].setFilePath(_TCfiData.data.prefix);
-            captureBin[i].startCapture(capMaxCnt);
-            captureBin[i].setMode(1);
+            // Map to request queue with mode 2
+            captureBin[i].addCaptureRequest(capMaxCnt, (gchar *)_TCfiSendData.data.prefix, NULL, 2, G_MAXINT);
         }
-        else if (_TCfiData.data.cmd_id == CTS_CAP_STOP_REQ_CMD_ID)
+        else if (_TCfiSendData.data.cmd_id == CTS_CAP_STOP_REQ_CMD_ID)
         {
             captureBin[i].stopCapture();
-            captureBin[i].setMode(0);
         }
-    }
-
-    if(cmdArg.cap.res_en && _TCfiData.data.cmd_id == CFI_CAP_REQ_CMD_ID)
-    {
-        //memset(chk_cnt, 0, sizeof(chk_cnt));
-        _TCfiData.data.cmd_id = CFI_CAP_RES_CMD_ID;
-        do
-        {
-            for(i=0; i<MAX_CHANNEL; i++)
-            {
-                if((ch_en>>i & 0x1) != 0x01) continue;
-                _TCfiData.data.channel = 1 << i;
-
-                if (captureBin[i].getCaptureCnt_() == capMaxCnt)
-                {
-                    __LOG(LOG_INFO, "[%s][%s:%d] res : ch%d(%d) OK(%lu)", CAP_LOG_KEY, _FILE_, __LINE__, i, _TCfiData.data.tx_id, chk_cnt);
-                    _TCfiData.data.cap_cnt = capMaxCnt;
-                    ipcInstance->sendData((char *)_TCfiData.byte, CFI_DATA_LEN);
-                    ch_en &= ~(1 << i);
-                }
-                else if (chk_cnt > timeout_msec[i])
-                {
-                    gint done_cnt = captureBin[i].getCaptureCnt_();
-                    __LOG(LOG_ERR, "[%s][%s:%d] res : ch%d(%d) NG(%lu>%lu) cnt(%d>%d)", CAP_LOG_KEY, _FILE_, __LINE__, i, _TCfiData.data.tx_id, chk_cnt, timeout_msec[i], capMaxCnt, done_cnt);
-                    _TCfiData.data.cap_cnt = (done_cnt < capMaxCnt) ? (capMaxCnt - done_cnt) : 0;
-                    ipcInstance->sendData((char *)_TCfiData.byte, CFI_DATA_LEN);
-                    captureBin[i].stopCapture();
-                    ch_en &= ~(1 << i);
-                    ret = -2;
-                }
-            }
-            g_usleep(1000);
-            chk_cnt++;
-        } while(ch_en != 0);
     }
 
     return ret;

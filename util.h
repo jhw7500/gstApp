@@ -128,6 +128,7 @@ typedef struct {
     gint delay;
     gint timeout;
     gint quality;
+    gint queue_size;
     const gchar *path;
     const gchar *encoder;
 } CaptureConfig;
