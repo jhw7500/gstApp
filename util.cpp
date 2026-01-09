@@ -35,18 +35,20 @@ static void term_handler(int signum) {
     //g_print("Received SIGTERM, sending EOS to pipeline...\n");
     __LOG(LOG_EMERG, "[CFG][%s:%d] Received SIGTERM, sending EOS to pipeline...", _FILE_, __LINE__);
     gst_element_send_event(pipeline, gst_event_new_eos());
+    g_main_loop_quit(loop);
 
     //sleep(5);
-    //is_interrupted = TRUE;
+    is_interrupted = TRUE;
 }
 
 static void kill_handler(int signum) {
     //g_print("Received SIGKILL, sending EOS to pipeline...\n");
     __LOG(LOG_EMERG, "[CFG][%s:%d] Received SIGKILL, sending EOS to pipeline...", _FILE_, __LINE__);
     gst_element_send_event(pipeline, gst_event_new_eos());
+    g_main_loop_quit(loop);
 
     //sleep(5);
-    //is_interrupted = TRUE;
+    is_interrupted = TRUE;
 }
 
 static gboolean intr_handler (gpointer user_data)
@@ -55,6 +57,7 @@ static gboolean intr_handler (gpointer user_data)
   g_print("handling interrupt.\n");
   //__LOG(LOG_EMERG, "[CFG][%s:%d] Received SIGINTR, sending EOS to pipeline...", _FILE_, __LINE__);
   gst_element_send_event(pipeline, gst_event_new_eos());
+  g_main_loop_quit(loop);
   /* post an application specific message */
   gst_element_post_message (GST_ELEMENT (pipeline),
       gst_message_new_application (GST_OBJECT (pipeline),
@@ -64,7 +67,7 @@ static gboolean intr_handler (gpointer user_data)
   signal_watch_intr_id = 0;
 
   //sleep(5);
-  //is_interrupted = TRUE;
+  is_interrupted = TRUE;
 
   return G_SOURCE_REMOVE;
 }
@@ -409,7 +412,7 @@ void convert_data_to_hex(const char *data, int len, char *buffer, int buffer_siz
 
     for (int i = 0; i < len; i++) {
         if (offset + 2 >= buffer_size) break; // 버퍼 초과 방지
-        offset += snprintf(buffer + offset, buffer_size - offset, "%02x", data[i]);
+        offset += snprintf(buffer + offset, buffer_size - offset, "%02x", (unsigned char)data[i]);
     }
     buffer[buffer_size - 1] = '\0'; // Null-terminate
 }

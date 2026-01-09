@@ -1,24 +1,18 @@
-/*
- *
- * Cantops captureBin.cpp support
- *
- * Copyright (C)2023 cantops, Inc. All rights reserved.
- *
- * Author:
- *   jhw <hwjo@cantops.biz>, 2023/09/18
- *
- * Description:
- */
-
-
 #ifndef _CAPTRUEBIN_H_
 #define _CAPTUREBIN_H_
 
 #include "util.h"
 #include <turbojpeg.h>
+#include <deque>
+#include <mutex>
+#include <memory>
+#include <atomic>
 
 #define CAP_LOG_KEY "CAP"
 #define TURBO_JPEG
+
+// Forward declaration for async capture task
+typedef struct _AsyncCaptureTask AsyncCaptureTask;
 
 typedef struct {
     void* arg0;
@@ -31,6 +25,26 @@ typedef enum
     CAP_ENC_TURBO =1,
     CAP_ENC_RAW =2
 } CapEncType;
+
+// Completion callback type
+typedef void (*CaptureCompleteCallback)(guint8 ch, gint completed_count, gpointer user_data);
+
+typedef struct _CaptureRequest {
+    gint maxCnt;
+    gchar *filePath;
+    gpointer userData;
+    guint8 mode;
+    gint captureCnt; // Written count (atomic)
+    gint64 startTime;
+    gint timeoutMs;
+    std::atomic<bool> responseSent;  // Atomic for thread-safe callback prevention
+    std::atomic<bool> timed_out;  // Skip pending I/O after timeout
+
+    _CaptureRequest() : maxCnt(0), filePath(NULL), userData(NULL), mode(0),
+                        captureCnt(0), startTime(0), timeoutMs(0), responseSent(false),
+                        timed_out(false) {}
+    ~_CaptureRequest() { if(filePath) g_free(filePath); }
+} CaptureRequest;
 
 typedef struct _CaptureData
 {
@@ -45,9 +59,23 @@ typedef struct _CaptureData
     gboolean debug;
     tjhandle tjCompressor;
     CapEncType enc_type;
-    const gchar *filePath;
+    gchar *filePath; 
     const gchar *extention;
     gint quality;
+    // Async capture support
+    GAsyncQueue *task_queue;
+    GThread *worker_thread;
+    std::atomic<bool> worker_running;
+    std::atomic<gint> push_index;  // Index for pushed frames (incremented at push time)
+    // Completion callback
+    CaptureCompleteCallback complete_callback;
+    gpointer callback_user_data;
+    
+    // Request Queue
+    std::unique_ptr<std::deque<std::shared_ptr<CaptureRequest>>> request_queue;
+    std::shared_ptr<CaptureRequest> current_request;
+    std::unique_ptr<std::mutex> queue_mutex;
+    GstElement *valve;
 } CaptureData;
 
 typedef struct _CaptureElement
@@ -63,7 +91,9 @@ typedef struct _CaptureElement
     GstElement *capsfilter;
     GstElement *queue_sink;
     GstElement *appsrc;
-} CaptureElement;
+    GstElement *valve;  // Valve for zero-CPU buffer dropping when not capturing
+}
+CaptureElement;
 
 class CaptureBin
 {
@@ -72,9 +102,10 @@ public :
     CaptureBin();
     ~CaptureBin();
 	gboolean init(guint8 num);
-    gint setFilePath(guint8 *prefix);
+    gint setFilePath(const gchar *prefix); 
     gint startCapture(gint maxCnt);
     gint stopCapture();
+    void addCaptureRequest(gint maxCnt, const gchar *prefix, gpointer userData, guint8 mode, gint timeoutMs);
     void setMode(guint8 mode);
     guint8 getMode();
     guint8 getFPS();
@@ -89,9 +120,16 @@ public :
     gboolean removeBinToPipe(GstElement *pipe);
     void setTimeStampDebug();
     void setAppsrc(GstElement *appsrc);
+    void setMaxCnt(guint16 maxCnt);
+    void startWorker();
+    void stopWorker();
+    gboolean isQueueEmpty();
+    void setCompleteCallback(CaptureCompleteCallback callback, gpointer user_data);
+    gboolean checkTimeout();
 
 private :
-	
+    void processNextRequest();
+
 public :
 	gboolean m_flagDestroy;
     //GstElement *pipeline[2];
@@ -104,7 +142,7 @@ public :
 private :
     GstPad *sinkPad;
     CaptureData captureData;
-    
+    std::atomic<guint> timeout_source_id;
 };
 
 #endif

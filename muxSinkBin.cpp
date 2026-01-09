@@ -12,14 +12,68 @@
 
 #include "muxSinkBin.h"
 
-static void sink_added(GstElement *sink, guint arg0, gpointer data)
+static void sink_added(GstElement *sink, GstElement *arg0, gpointer data)
 {
     __LOG(LOG_INFO, "[GST][%s:%d] %s", _FILE_, __LINE__, __FUNCTION__);
 }
 
-static void muxer_added(GstElement *sink, guint arg0, gpointer data)
+
+static void muxer_added(GstElement *splitmux, GstElement *muxer, gpointer user_data)
 {
-    __LOG(LOG_INFO, "[GST][%s:%d] %s", _FILE_, __LINE__, __FUNCTION__);
+    const char *mode = (const char *)user_data;   // "mp4" | "qt" | "ts"
+    const char *type = G_OBJECT_TYPE_NAME(muxer);
+
+    __LOG(LOG_NOTICE, "[GST][%s:%d] muxer-added: mode=%s, type=%s, name=%s",
+          _FILE_, __LINE__, mode, type, GST_ELEMENT_NAME(muxer));
+
+    // qtmux(GstQTMux) / mp4mux(GstMP4Mux) / mpegtsmux(GstMpegTsMux)
+    if (!g_strcmp0(mode, "qt")) {
+        // qtmux 기반 fMP4/robust 목적
+        if (g_str_has_suffix(type, "QTMux") || g_strrstr(type, "QTMux")) {
+            g_object_set(muxer,
+                // 1초 단위 fragment (ms)
+                "fragment-duration", 1000,
+
+                // robust muxing (ns) - 필요에 따라 튜닝
+                "reserved-max-duration", (guint64)(60 * GST_MSECOND),
+                "reserved-moov-update-period", (guint64)(1 * GST_MSECOND),
+
+                // streamable은 플레이어/환경 따라 득실 있으니 기본은 false 추천
+                "streamable", FALSE,
+                NULL);
+        } else {
+            __LOG(LOG_WARNING, "[GST] qt mode인데 qtmux가 아닌 muxer가 붙음: %s", type);
+        }
+    }
+    else if (!g_strcmp0(mode, "mp4")) {
+        // mp4mux는 옵션이 적거나 이름이 다를 수 있음. 존재하는 속성만 set.
+        // 속성이 없으면 g_object_set에서 경고가 날 수 있으니, 속성 존재 여부를 검사하는 습관이 좋음.
+        // 여기선 대표적으로 streamable/fragment-duration이 있으면 적용하는 형태로 작성.
+#if 0
+        // fragment-duration이 지원되면 fMP4처럼 동작 가능
+        if (g_object_class_find_property(G_OBJECT_GET_CLASS(muxer), "fragment-duration")) {
+            g_object_set(muxer, "fragment-duration", 1000, NULL);
+        }
+        if (g_object_class_find_property(G_OBJECT_GET_CLASS(muxer), "streamable")) {
+            g_object_set(muxer, "streamable", FALSE, NULL);
+        }
+
+        // robust 관련은 mp4mux가 지원 안 할 수 있음(qtmux에 집중되어 있는 경우가 많음)
+        if (g_object_class_find_property(G_OBJECT_GET_CLASS(muxer), "reserved-max-duration")) {
+            g_object_set(muxer, "reserved-max-duration", (guint64)(60 * GST_SECOND), NULL);
+        }
+        if (g_object_class_find_property(G_OBJECT_GET_CLASS(muxer), "reserved-moov-update-period")) {
+            g_object_set(muxer, "reserved-moov-update-period", (guint64)GST_SECOND, NULL);
+        }
+#endif
+    }
+    else if (!g_strcmp0(mode, "ts")) {
+        // TS는 보통 별도 옵션 적음. 필요시 alignment/PCR 관련 등만.
+        // 여기서는 붙은 것만 확인.
+        if (g_strrstr(type, "MpegTsMux") == NULL && g_strrstr(type, "MPEGTSMux") == NULL) {
+            __LOG(LOG_WARNING, "[GST] ts mode : mpegtsmux? %s", type);
+        }
+    }
 }
 
 static gboolean handle_eos_event(GstPad *pad, GstPadProbeInfo *info, gpointer user_data) 
@@ -280,27 +334,76 @@ gboolean MuxSinkBin::init(guint8 num)
     be.sink = gst_element_factory_make("splitmuxsink", "splitmuxsink");
     be.mp4mux = gst_element_factory_make("mp4mux", "mp4mux");
     be.tsmux = gst_element_factory_make("mpegtsmux", "mpegtsmux");
+    be.qtmux = gst_element_factory_make("qtmux", "qtmux");
     be.queue = gst_element_factory_make(QUEUE_TYPE, "queue");
     be.parse = gst_element_factory_make("h264parse", "h264parse");
+    be.capsfilter = gst_element_factory_make("capsfilter", "capsfilter");
 
-    if (!be.bin || !be.sink || !be.mp4mux || !be.tsmux || !be.queue || !be.parse) {
+    if (!be.bin || !be.sink || !be.mp4mux || !be.tsmux || !be.qtmux || !be.queue || !be.parse || !be.capsfilter) {
         __LOG(LOG_CRIT, "[GST][%s:%d] element create error", _FILE_, __LINE__);
         return ret;
     }
-    gst_bin_add_many(GST_BIN(be.bin), be.parse, be.sink, NULL);
+    gst_bin_add_many(GST_BIN(be.bin), be.parse, be.sink, be.capsfilter, NULL);
     ret =gst_bin_add(GST_BIN(pipeline), be.bin);
     if(!ret) {
         __LOG(LOG_CRIT, "[GST][%s:%d] bin add error in pipeline", _FILE_, __LINE__);
         return ret;
     }
+
 #if 1
-    ret = gst_element_link_many(be.parse, be.sink, NULL);
+#define MUX_PROPERTIES "muxer"
+
+    GstCaps *caps;
+    g_object_set(be.sink, "async-finalize", FALSE, NULL);
+    if(g_strcmp0(cmdArg.muxer, "ts") == 0) {
+        g_object_set(be.sink, MUX_PROPERTIES, be.tsmux, NULL);
+        caps = gst_caps_from_string("video/x-h264,stream-format=byte-stream,alignment=au");
+    }
+    else if(g_strcmp0(cmdArg.muxer, "qt") == 0)
+    {
+        g_object_set(be.sink, MUX_PROPERTIES, be.qtmux, NULL);
+        caps = gst_caps_from_string("video/x-h264,stream-format=avc,alignment=au");
+    }
+    else {
+        g_object_set(be.sink, MUX_PROPERTIES, be.mp4mux, NULL);
+        caps = gst_caps_from_string("video/x-h264,stream-format=avc,alignment=au");
+    }
+    g_object_set(be.capsfilter, "caps", caps, NULL);
+    gst_caps_unref(caps);
+
+    const char *mode = cmdArg.muxer; 
+    g_signal_connect(be.sink, "muxer-added", G_CALLBACK(muxer_added), (gpointer)mode);
+
+    ret = gst_element_link_many(be.parse, be.capsfilter, NULL);
     if(!ret) {
         __LOG(LOG_CRIT, "[GST][%s:%d] bin link error in pipeline", _FILE_, __LINE__);
         return ret;
     }
-#endif
 
+    GstPad *muxsrcpad = gst_element_get_static_pad(be.capsfilter, "src");
+
+    // splitmuxsink가 제공하는 pad 템플릿 이름이 환경마다 다를 수 있어서
+    // 보통은 아래 중 하나가 맞음: "video" 또는 "video_%u"
+    GstPad *muxsinkpad = gst_element_get_request_pad(be.sink, "video_aux_%u");
+    // 만약 NULL이면 "video_%u"로 재시도
+    if (!muxsinkpad) muxsinkpad = gst_element_get_request_pad(be.sink, "video");
+
+    if (!muxsinkpad) {
+        __LOG(LOG_CRIT, "[GST] splitmuxsink has no request pad video/video_aux_%%u");
+        gst_object_unref(muxsrcpad);
+        return FALSE;
+    }
+
+    if (gst_pad_link(muxsrcpad, muxsinkpad) != GST_PAD_LINK_OK) {
+        __LOG(LOG_CRIT, "[GST] pad link capsfilter->splitmuxsink(video) failed");
+        gst_object_unref(muxsrcpad);
+        gst_object_unref(muxsinkpad);
+        return FALSE;
+    }
+
+    gst_object_unref(muxsrcpad);
+    gst_object_unref(muxsinkpad);
+#endif
 
     guint64 duration;
     //duration = ((615)*GST_SECOND*cmdArg.duration)/10;
@@ -312,7 +415,7 @@ gboolean MuxSinkBin::init(guint8 num)
     //g_object_set(be.sink, "reserved-moov-update-period", 1000000000, NULL);
     //g_object_set(be.sink, "use-robust-muxing", TRUE, NULL);
     g_object_set(be.queue, "max-size-time", GST_SECOND/2, "max-size-buffers", cmdArg.fps[STREAM_REC][muxSinkData.ch]/2, "leaky", LEAKY_DOWNSTREAM, NULL);
-
+    g_object_set(be.parse, "config-interval", 1, NULL);
 #if 0
     GstStructure *muxer_properties = gst_structure_new("application/x-gst-mp4mux",
                                          "reserved-moov-update-period", G_TYPE_UINT64, 1000000000,
@@ -329,7 +432,6 @@ gboolean MuxSinkBin::init(guint8 num)
     gst_structure_free(muxer_properties);
 #endif
 
-    g_object_set(be.mp4mux, "reserved-moov-update-period", 10000000000, NULL);
     //g_object_set(be.mp4mux, "latency", 100000, NULL);
     //g_object_set(be.mp4mux, "min-upstream-latency", 1000, NULL);
     //g_object_set(be.mp4mux, "fragment-duration", 1000, NULL);
@@ -361,13 +463,9 @@ gboolean MuxSinkBin::init(guint8 num)
     g_object_set(be.mp4mux, "streamable", 0, NULL);
     g_object_set(be.mp4mux, "trak-timescale", 0, NULL);
 #endif
-    if(g_strcmp0(cmdArg.muxer, "ts") == 0)
-        g_object_set(be.sink, "muxer", be.tsmux, NULL);
-    else
-        g_object_set(be.sink, "muxer", be.mp4mux, NULL);
+
     
     g_signal_connect(be.sink, "format-location", G_CALLBACK(format_location), &muxSinkData);
-    g_signal_connect(be.sink, "muxer-added", G_CALLBACK(muxer_added), NULL);
     g_signal_connect(be.sink, "sink-added", G_CALLBACK(sink_added), NULL);
 
     //if(!gst_element_add_pad(me.bin, gst_ghost_pad_new(g_strdup_printf("muxBinSink_audio_ch%d", ch), gst_element_get_request_pad(me.sink, "audio_%u"))))

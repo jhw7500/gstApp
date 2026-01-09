@@ -1,16 +1,17 @@
 /*
- *
+ * 
  * Cantops captureBin.cpp support
- *
+ * 
  * Copyright (C)2023 Cantops, Inc. All rights reserved.
- *
+ * 
  * Author:
  *   jhw <hwjo@cantops.biz>, 2023/09/18
- *
+ * 
  * Description:
  */
 
 #include "captureBin.h"
+#include "parser.h"
 #include "tcpServer.h"
 #include <gst/app/gstappsink.h>
 #include <gst/app/gstappsrc.h>
@@ -21,6 +22,7 @@
 #include <openssl/md5.h>
 #include <unistd.h>
 #include <fcntl.h>
+#include <string.h>
 
 static gboolean init_compressor(CaptureData *info) {
     if (!info->tjCompressor) {
@@ -95,35 +97,164 @@ unsigned char *compress_frame_to_jpeg(GstSample *sample, long *jpeg_size, Captur
     return jpeg_buf;
 }
 
+// Async capture task structure
+struct _AsyncCaptureTask {
+    GstSample *sample;
+    CaptureData *info;
+    gchar *file_path;
+    gint capture_index;
+    
+    // Linked Request
+    std::shared_ptr<CaptureRequest> request;
+};
+
+// Callback data for idle handler
+typedef struct {
+    CaptureCompleteCallback callback;
+    guint8 ch;
+    gint completed_count;
+    gpointer user_data;
+} CallbackIdleData;
+
+// Idle callback to invoke completion callback in main thread
+static gboolean invoke_complete_callback_idle(gpointer user_data)
+{
+    CallbackIdleData *data = (CallbackIdleData *)user_data;
+    if(data && data->callback) {
+        data->callback(data->ch, data->completed_count, data->user_data);
+    }
+    g_free(data);
+    return G_SOURCE_REMOVE;  // One-time callback
+}
+
+// Global timeout callback wrapper
+static gboolean timeout_check_func(gpointer user_data)
+{
+    CaptureBin *bin = (CaptureBin *)user_data;
+    return bin->checkTimeout();
+}
+
+// Worker thread for async file I/O
+static gpointer capture_worker_thread(gpointer user_data)
+{
+    CaptureData *info = (CaptureData *)user_data;
+
+    __LOG(LOG_NOTICE, "[%s][%s:%d] ch%d worker thread started", CAP_LOG_KEY, _FILE_, __LINE__, info->ch);
+
+    while(info->worker_running.load() || g_async_queue_length(info->task_queue) > 0)
+    {
+        // Wait for task with 100ms timeout
+        AsyncCaptureTask *task = (AsyncCaptureTask *)g_async_queue_timeout_pop(info->task_queue, 100000);
+        if(!task) continue;
+
+        if (task->request && task->request->timed_out.load()) {
+            if (task->sample) gst_sample_unref(task->sample);
+            if (task->file_path) g_free(task->file_path);
+            g_free(task);
+            continue;
+        }
+
+        GstBuffer *buffer = NULL;
+        FILE *fp = NULL;
+        GstMapInfo map;
+        gboolean success = FALSE;
+
+        do {
+            if(task->info->enc_type == CAP_ENC_TURBO)
+            {
+                long jpeg_size = 0;
+                unsigned char *jpeg_buf = compress_frame_to_jpeg(task->sample, &jpeg_size, task->info);
+                if(jpeg_buf && jpeg_size > 0) {
+                    fp = fopen(task->file_path, "wb");
+                    if(fp) {
+                        fwrite(jpeg_buf, 1, jpeg_size, fp);
+                        fclose(fp);
+                        __LOG(LOG_INFO, "[%s][%s:%d] ch%d Saved JPEG to %s (%ld bytes)", CAP_LOG_KEY, _FILE_, __LINE__, task->info->ch, task->file_path, jpeg_size);
+                        success = TRUE;
+                    }
+                    else {
+                        __LOG(LOG_ERR, "[%s][%s:%d] ch%d Failed to open file %s for writing", CAP_LOG_KEY, _FILE_, __LINE__, task->info->ch, task->file_path);
+                    }
+                    tjFree(jpeg_buf);
+                }
+                else {
+                    __LOG(LOG_ERR, "[%s][%s:%d] ch%d Failed jpeg_size : %ld", CAP_LOG_KEY, _FILE_, __LINE__, task->info->ch, jpeg_size);
+                }
+            }
+            else
+            {
+                buffer = gst_sample_get_buffer(task->sample);
+                if(!buffer) {
+                    __LOG(LOG_ERR, "[%s][%s:%d] ch%d buffer cannot get from sample", CAP_LOG_KEY, _FILE_, __LINE__, task->info->ch);
+                    break;
+                }
+
+                if(!gst_buffer_map(buffer, &map, GST_MAP_READ)) {
+                    __LOG(LOG_ERR, "[%s][%s:%d] ch%d Failed to map buffer", CAP_LOG_KEY, _FILE_, __LINE__, task->info->ch);
+                    break;
+                }
+
+                fp = fopen(task->file_path, "wb");
+                if(fp) {
+                    fwrite(map.data, 1, map.size, fp);
+                    fclose(fp);
+                    success = TRUE;
+                }
+                else {
+                    __LOG(LOG_ERR, "[%s][%s:%d] ch%d Failed to open file %s for writing", CAP_LOG_KEY, _FILE_, __LINE__, task->info->ch, task->file_path);
+                }
+                gst_buffer_unmap(buffer, &map);
+            }
+        } while(0);
+
+        // Increment counter only after successful write (atomic operation)
+        if(success && task->request) {
+            // Increment WRITTEN count in request
+            gint new_count = g_atomic_int_add(&task->request->captureCnt, 1) + 1;
+
+            // Check if all captures for this request are complete
+            if(new_count >= task->request->maxCnt) {
+                // Atomic compare-and-swap to prevent double callback (timeout vs completion race)
+                bool expected = false;
+                if (task->request->responseSent.compare_exchange_strong(expected, true) &&
+                    task->info->complete_callback) {
+                    CallbackIdleData *cb_data = g_new0(CallbackIdleData, 1);
+                    cb_data->callback = task->info->complete_callback;
+                    cb_data->ch = task->info->ch;
+                    cb_data->completed_count = new_count;
+                    cb_data->user_data = task->request->userData; // Pass request context
+
+                    g_idle_add(invoke_complete_callback_idle, cb_data);
+                    __LOG(LOG_INFO, "[%s][%s:%d] ch%d capture complete callback triggered (%d/%d)",
+                          CAP_LOG_KEY, _FILE_, __LINE__, task->info->ch, new_count, task->request->maxCnt);
+                }
+
+                // Request object managed by shared_ptr, will be deleted when last reference gone
+            }
+        }
+
+        // Cleanup
+        if(task->sample) gst_sample_unref(task->sample);
+        if(task->file_path) g_free(task->file_path);
+        g_free(task);
+    }
+
+    __LOG(LOG_NOTICE, "[%s][%s:%d] ch%d worker thread stopped", CAP_LOG_KEY, _FILE_, __LINE__, info->ch);
+    return NULL;
+}
+
 static inline void tiny_sleep_ns(long ns) {
     struct timespec ts; ts.tv_sec = ns / 1000000000L; ts.tv_nsec = ns % 1000000000L;
     nanosleep(&ts, NULL);
 }
 
-#if 0
-static ssize_t write_all_with_retry(int fd, const void *buf, size_t len,
-                                    int max_retries /* e.g., 4 */) {
-    const unsigned char *p = (const unsigned char *)buf;
-    size_t left = len;
-    int attempt = 0;
-    while (left > 0) {
-        ssize_t wr = write(fd, p, left);
-        if (wr > 0) { p += wr; left -= (size_t)wr; continue; }
-
-        // wr <= 0
-        if (wr < 0 && errno == EINTR) continue; // 즉시 재시도
-
-        // 일시적 오류(네트워크/파이프 등) → 짧은 백오프 후 재시도
-        if (wr < 0 && (errno == EAGAIN || errno == EWOULDBLOCK ||
-                       errno == ETIMEDOUT /* 가능성 */)) {
-            if (attempt++ < max_retries) { tiny_sleep_ns( (1L<<attempt) * 1000000L ); continue; } // 1/2/4/8 ms
-        }
-        // 재시도 무의미한 에러
-        return -1;
-    }
-    return (ssize_t)len;
+static bool is_safe_prefix(const gchar *prefix)
+{
+    if (!prefix) return true;
+    if (strstr(prefix, "..") != NULL) return false;
+    if (strchr(prefix, '/') != NULL || strchr(prefix, '\\') != NULL) return false;
+    return true;
 }
-#endif
 
 static void eos_callback(GstAppSink *appsink, gpointer user_data) 
 {
@@ -132,34 +263,6 @@ static void eos_callback(GstAppSink *appsink, gpointer user_data)
     __LOG(LOG_NOTICE, "[%s][%s:%d] ch%d %s", CAP_LOG_KEY, _FILE_, __LINE__, info->ch, __FUNCTION__);
     is_interrupted = TRUE;
 }
-
-#if 0
-static GstFlowReturn new_preroll_handler(GstElement *sink, gpointer data) 
-{
-    __LOG(LOG_INFO, "[%s][%s:%d] %s", CAP_LOG_KEY, _FILE_, __LINE__, __FUNCTION__);
-
-    return GST_FLOW_OK;
-}
-
-static GstPadProbeReturn queue_probe_callback(GstPad *pad, GstPadProbeInfo *info, gpointer userData)
-{
-    CaptureData *arg = (CaptureData *)userData;
-
-#if 0
-    if(arg->appsrc == NULL || GST_STATE(GST_ELEMENT(arg->appsrc)) != GST_STATE_PLAYING)
-    {
-        g_print("appsrc null return!\n");
-        return GST_PAD_PROBE_OK;
-    }
-#endif
-
-    GstBuffer *buffer = GST_PAD_PROBE_INFO_BUFFER(info);
-
-    if(buffer) gst_app_src_push_buffer(GST_APP_SRC(arg->appsrc), gst_buffer_copy(buffer));
-
-    return GST_PAD_PROBE_OK;
-}
-#endif
 
 static GstFlowReturn on_new_sample_from_sink(GstElement *sink, gpointer userData)
 {
@@ -174,31 +277,8 @@ static GstFlowReturn on_new_sample_from_sink(GstElement *sink, gpointer userData
         return GST_FLOW_ERROR;
     }
     
-    //g_print("pull\n");
-#if 1
-    if(info->captureCnt++ >= info->captureMaxCnt)
-    {
-        if(info->mode == 1)
-        {
-            info->captureCnt = 0;
-            __LOG(LOG_NOTICE, "[%s][%s:%d] ch%d capture cnt reset(fromsink)", CAP_LOG_KEY, _FILE_, __LINE__, info->ch);
-        }
-        else
-        {
-            gst_sample_unref(sample);
-            return GST_FLOW_OK;
-        }
-    }
-#endif
-    
-#if 0
-    if(info->appsrc == NULL || GST_STATE(GST_ELEMENT(info->appsrc)) != GST_STATE_PLAYING)
-    {
-        //g_print("appsrc null return!\n");
-        gst_sample_unref(sample);
-        return GST_FLOW_OK;
-    }
-#endif
+    // We trust the valve. If we got a sample, we forward it.
+    // Removed legacy mode and count check.
 
     buffer = gst_sample_get_buffer(sample);
     if (!buffer) {
@@ -206,6 +286,8 @@ static GstFlowReturn on_new_sample_from_sink(GstElement *sink, gpointer userData
         gst_sample_unref(sample);
         return GST_FLOW_ERROR;
     }
+    
+    //__LOG(LOG_DEBUG, "[%s] Forwarding frame to appsrc ch%d", CAP_LOG_KEY, info->ch);
 
     g_signal_emit_by_name(info->appsrc, "push-buffer", buffer, &ret);
     if (ret != GST_FLOW_OK)
@@ -220,238 +302,96 @@ static GstFlowReturn on_new_sample_from_sink(GstElement *sink, gpointer userData
     return GST_FLOW_OK;
 }
 
-#if 0
-static GstFlowReturn on_new_sample_to_file(GstElement *sink, gpointer userData) 
+static GstFlowReturn on_new_sample_to_file(GstElement *sink, gpointer userData)
 {
-    GstSample *sample;
-    GstBuffer *buffer;
     CaptureData *info = (CaptureData *)userData;
-    //guint8 mode;
-    GstMapInfo map;
-    FILE *file;
-    gchar *path = NULL;
-    gchar *extention = NULL;
-
-    //g_print("%s\n", __FUNCTION__);
-    //__LOG(LOG_NOTICE, "[GST][%s:%d] %s", _FILE_, __LINE__, __FUNCTION__);
-
-    sample = gst_app_sink_pull_sample(GST_APP_SINK(sink));
-    if (!sample) {
-        //__LOG(LOG_CRIT, "[GST][%s:%d] sample cannot get from sink", _FILE_, __LINE__);
-        return GST_FLOW_ERROR;
-    }
-
-#if 1
-    if(info->captureCnt_ >= info->captureMaxCnt)
-    {
-        if(info->mode == 1)
-        {
-            info->captureCnt_ = 0;
-            __LOG(LOG_NOTICE, "[%s][%s:%d] ch%d capture cnt reset(tofile)", CAP_LOG_KEY, _FILE_, __LINE__, info->ch);
-        }
-        else
-        {
-            gst_sample_unref(sample);
-            return GST_FLOW_OK;
-        }
-    }
-#endif
-
-    //gst_sample_unref(sample);
-#if 0
-    if(info->appsrc == NULL || GST_STATE(GST_ELEMENT(info->appsrc)) != GST_STATE_PLAYING)
-    {
-        //g_print("appsrc null return!\n");
-        gst_sample_unref(sample);
-        return GST_FLOW_OK;
-    }
-#endif
-
-    buffer = gst_sample_get_buffer(sample);
-    if (!buffer) {
-        __LOG(LOG_ERR, "[%s][%s:%d] ch%d buffer cannot get from sample", CAP_LOG_KEY, _FILE_, __LINE__, info->ch);
-        gst_sample_unref(sample);
-        return GST_FLOW_ERROR;
-    }
-
-    //GstBuffer *copied_buffer = gst_buffer_copy(buffer);
-    if (!gst_buffer_map(buffer, &map, GST_MAP_READ)){
-        //g_printerr("Failed to map buffer\n");
-        __LOG(LOG_ERR, "[%s][%s:%d] ch%d Failed to map buffer", CAP_LOG_KEY, _FILE_, __LINE__, info->ch);
-        gst_sample_unref(sample);
-        return GST_FLOW_ERROR;
-    }
-
-#if 0
-    info->buf = gst_buffer_new_and_alloc(map.size);
-    gst_buffer_fill(info->buf, 0, map.data, map.size);
-    gst_app_src_push_buffer(GST_APP_SRC(info->appsrc), info->buf);
-#endif
-
-    //gst_sample_unref(sample);
-
-    if(info->debug)
-    {
-        //if(info->ch == 0)
-        {
-            //g_message("ch%d Timestamp: %" GST_TIME_FORMAT "\n", info->ch, GST_TIME_ARGS(timestamp));
-            unsigned char md5_result[MD5_DIGEST_LENGTH];
-            MD5(map.data, map.size, md5_result);
-
-            // MD5 해시 값을 로그로 출력
-            char md5_string[MD5_DIGEST_LENGTH * 2 + 1] = {0};
-            for (int i = 0; i < MD5_DIGEST_LENGTH; ++i) {
-                sprintf(&md5_string[i * 2], "%02x", md5_result[i]);
-            }
-            GstClockTime timestamp = GST_BUFFER_PTS(buffer);
-            g_message("ch%d Timestamp: %" GST_TIME_FORMAT " MD5 Hash: %s\n", info->ch, GST_TIME_ARGS(timestamp), md5_string);
-        }
-    }
-
-    //g_print("captureCnt %d, captureMax %d\n", info->captureCnt, info->captureMaxCnt);
-    if(cmdArg.cap_encoder_en) extention = g_strdup_printf("%s", "jpg");
-    else extention = g_strdup_printf("%s", "rgb");
-
-    //if(info->captureMaxCnt > 1 && info->captureMaxCnt <= cmdArg.fps[STREAM_CAP][info->ch]) 
-    {
-        path = g_strdup_printf("%s_%d.%s", info->filePath, info->captureCnt_++, extention);
-        //__LOG(LOG_DEBUG, "[GST][%s:%d] path : %s, cnt : %d, max : %d", _FILE_, __LINE__, info->filePath, info->captureCnt, info->captureMaxCnt);
-    }
-    //else path = g_strdup_printf("%s.%s", info->filePath, extention);
-
-    file = fopen(path, "wb");   //fopen(path, "ab");
-    if (file) {
-        fwrite(map.data, 1, map.size, file);
-        fclose(file);
-    } else {
-        __LOG(LOG_ERR, "[%s][%s:%d] %s file open error", CAP_LOG_KEY, _FILE_, __LINE__, path);
-    }
-
-    if(path != NULL) g_free(path);
-    if(extention != NULL) g_free(extention);
-    gst_buffer_unmap(buffer, &map);
-    gst_sample_unref(sample);
-
-    return GST_FLOW_OK;
-}
-#endif
-
-static GstFlowReturn on_new_sample_to_file(GstElement *sink, gpointer userData) 
-{
     GstSample *sample = NULL;
-    CaptureData *info = (CaptureData *)userData;
-    gchar *path = NULL;
-    GstBuffer *buffer = NULL;
-    FILE *fp = NULL;
-    GstMapInfo map;
-
-    //g_print("%s\n", __FUNCTION__);
-    //__LOG(LOG_NOTICE, "[GST][%s:%d] %s", _FILE_, __LINE__, __FUNCTION__);
+    const gint queue_limit = (cmdArg.cap.queue_size > 0) ? cmdArg.cap.queue_size : DEFAULT_CAPTURE_QUEUE_SIZE;
 
     sample = gst_app_sink_pull_sample(GST_APP_SINK(sink));
     if(!sample) {
-        //__LOG(LOG_CRIT, "[GST][%s:%d] sample cannot get from sink", _FILE_, __LINE__);
-        goto flow_err;
+        return GST_FLOW_ERROR;
     }
 
-#if 1
-    if(info->captureCnt_ >= info->captureMaxCnt)
+    bool should_drop = false;
+    std::shared_ptr<CaptureRequest> req;
+    AsyncCaptureTask *task = NULL;
+
     {
-        if(info->mode == 1)
-        {
-            info->captureCnt_ = 0;
-            __LOG(LOG_NOTICE, "[%s][%s:%d] ch%d capture cnt reset(tofile)", CAP_LOG_KEY, _FILE_, __LINE__, info->ch);
+        // Use lock_guard for exception safety (RAII pattern)
+        std::lock_guard<std::mutex> lock(*info->queue_mutex);
+
+        // If no current request, try to pop one
+        if (!info->current_request) {
+            if (!info->request_queue->empty()) {
+                info->current_request = info->request_queue->front();
+                info->request_queue->pop_front();
+
+                // Reset pushed count for new request
+                g_atomic_int_set(&info->captureCnt_, 0);
+                info->push_index.store(0);
+
+                __LOG(LOG_INFO, "[%s][%s:%d] ch%d Starting new request: %s (max: %d)",
+                      CAP_LOG_KEY, _FILE_, __LINE__, info->ch, info->current_request->filePath, info->current_request->maxCnt);
+            }
         }
-        else
-            goto flow_ok;
+
+        if (!info->current_request) {
+            // Double check if queue is truly empty and close valve if open
+            if (info->valve) {
+                 g_object_set(info->valve, "drop", TRUE, NULL);
+            }
+            should_drop = true;
+        } else {
+            req = info->current_request;
+
+            // Check queue size limit (prevent memory overflow)
+            gint queue_length = g_async_queue_length(info->task_queue);
+            if(queue_length > queue_limit) {
+                __LOG(LOG_WARNING, "[%s][%s:%d] ch%d queue full (%d > %d), dropping frame", CAP_LOG_KEY, _FILE_, __LINE__, info->ch, queue_length, queue_limit);
+                should_drop = true;
+            } else {
+                // Create async task (transfer ownership of sample to task)
+                task = g_new0(AsyncCaptureTask, 1);
+                task->sample = sample;
+                task->info = info;
+                task->request = req; // Link to request
+
+                // Use push_index which is incremented atomically at push time
+                task->capture_index = info->push_index.fetch_add(1);
+
+                // Generate file path for this specific frame
+                task->file_path = g_strdup_printf("%s_%d.%s", req->filePath, task->capture_index, info->extention);
+
+                // Push to async queue (non-blocking, fast return)
+                g_async_queue_push(info->task_queue, task);
+
+                // Increment pushed count
+                gint new_pushed_cnt = g_atomic_int_add(&info->captureCnt_, 1) + 1;
+
+                // Check if we have pushed enough frames for the current request
+                if (new_pushed_cnt >= req->maxCnt) {
+                    // Current request pushed completely. Release ownership.
+                    info->current_request = nullptr;
+
+                    // If no more requests in queue, close the valve to save CPU
+                    if (info->request_queue->empty() && info->valve) {
+                         g_object_set(info->valve, "drop", TRUE, NULL);
+                         __LOG(LOG_INFO, "[%s][%s:%d] ch%d Queue empty, closing valve", CAP_LOG_KEY, _FILE_, __LINE__, info->ch);
+                    }
+
+                    __LOG(LOG_INFO, "[%s][%s:%d] ch%d Request pushed completely: %s",
+                          CAP_LOG_KEY, _FILE_, __LINE__, info->ch, req->filePath);
+                }
+            }
+        }
+    } // lock_guard automatically releases mutex here
+
+    if (should_drop) {
+        gst_sample_unref(sample);
     }
-#endif
-    
-    do
-    {
-        if(info->enc_type == CAP_ENC_TURBO)
-        {
-            long jpeg_size = 0;
-            unsigned char *jpeg_buf = compress_frame_to_jpeg(sample, &jpeg_size, info);
-            if(jpeg_buf && jpeg_size > 0) {
-                path = g_strdup_printf("%s_%d.%s", info->filePath, info->captureCnt_, info->extention);
-                fp = fopen(path, "wb");
-                if(fp) {
-                    fwrite(jpeg_buf, 1, jpeg_size, fp);
-                    fclose(fp);
-                    __LOG(LOG_INFO, "[%s][%s:%d] ch%d Saved JPEG to %s (%ld bytes)", CAP_LOG_KEY, _FILE_, __LINE__, info->ch, path, jpeg_size);
-                }
-                else{
-                    __LOG(LOG_ERR, "[%s][%s:%d] ch%d Failed to open file %s for writing", CAP_LOG_KEY, _FILE_, __LINE__, info->ch, path);
-                }
-                tjFree(jpeg_buf);
-            }
-            else{
-                __LOG(LOG_ERR, "[%s][%s:%d] ch%d Failed jpeg_size : %ld", CAP_LOG_KEY, _FILE_, __LINE__, info->ch, jpeg_size);
-                goto flow_err;
-            }
-        }
-        else
-        {
-            path = g_strdup_printf("%s_%d.%s", info->filePath, info->captureCnt_, info->extention);
-
-            buffer = gst_sample_get_buffer(sample);
-            if(!buffer)
-            {
-                __LOG(LOG_ERR, "[%s][%s:%d] ch%d buffer cannot get from sample", CAP_LOG_KEY, _FILE_, __LINE__, info->ch);
-                goto flow_err;
-            }
-
-            if(!gst_buffer_map(buffer, &map, GST_MAP_READ))
-            {
-                __LOG(LOG_ERR, "[%s][%s:%d] ch%d Failed to map buffer", CAP_LOG_KEY, _FILE_, __LINE__, info->ch);
-                goto flow_err;
-            }
-#if 1
-            fp = fopen(path, "wb");
-            if(fp)
-            {
-                fwrite(map.data, 1, map.size, fp);
-                fclose(fp);
-            }
-#else
-            int fd = ::open(path, O_WRONLY | O_CREAT | O_TRUNC
-#ifdef O_CLOEXEC
-                            | O_CLOEXEC
-#endif
-                            , 0644);
-            if(fd >= 0)
-            {
-                if (write_all_with_retry(fd, map.data, map.size, /*max_retries=*/4) < 0) {
-                    __LOG(LOG_ERR, "[%s] write fail: %s", CAP_LOG_KEY, strerror(errno));
-                    ::close(fd);
-                    gst_buffer_unmap(buffer, &map);
-                    goto flow_err;
-                }
-            }
-#endif
-            else
-            {
-                __LOG(LOG_ERR, "[%s][%s:%d] ch%d Failed to open file %s for writing", CAP_LOG_KEY, _FILE_, __LINE__, info->ch, path);
-                gst_buffer_unmap(buffer, &map);
-                goto flow_err;
-            }
-            gst_buffer_unmap(buffer, &map);
-        }
-    } while(0);
-
-flow_ok:
-    info->captureCnt_++;
-    if(path) g_free(path);
-    if(sample) gst_sample_unref(sample);
 
     return GST_FLOW_OK;
-
-flow_err:
-    if(path) g_free(path);
-    if(sample) gst_sample_unref(sample);
-
-    return GST_FLOW_ERROR;
 }
 
 void CaptureBin::setAppsrc(GstElement *appsrc)
@@ -502,40 +442,273 @@ CaptureBin::CaptureBin()
     captureData.debug = FALSE;
     captureData.tjCompressor = NULL;
     captureData.enc_type = CAP_ENC_TURBO;
+
+    // Initialize async queue and worker thread
+    captureData.task_queue = g_async_queue_new();
+    captureData.worker_thread = NULL;
+    captureData.worker_running.store(false);
+    captureData.push_index.store(0);
+    captureData.filePath = NULL;
+
+    // Initialize completion callback
+    captureData.complete_callback = NULL;
+    captureData.callback_user_data = NULL;
+    
+    // Initialize Request Queue
+    captureData.request_queue = std::unique_ptr<std::deque<std::shared_ptr<CaptureRequest>>>(new std::deque<std::shared_ptr<CaptureRequest>>());
+    captureData.queue_mutex = std::unique_ptr<std::mutex>(new std::mutex());
+    captureData.current_request = nullptr;
+    
+    timeout_source_id.store(0);
+    captureData.valve = NULL;
 }
 
 CaptureBin::~CaptureBin()
 {
     __LOG(LOG_INFO, "[%s][%s:%d] %s[%d]", CAP_LOG_KEY, _FILE_, __LINE__, __FUNCTION__, captureData.ch);
+
+    // Stop timeout source (must be done from main thread context)
+    // Use atomic load/store pattern for thread safety
+    guint id = timeout_source_id.load();
+    if(id > 0) {
+        g_source_remove(id);
+        timeout_source_id.store(0);
+    }
+
+    // Stop worker thread and wait for completion
+    stopWorker();
+
+    // Clear remaining tasks in queue
+    if(captureData.task_queue) {
+        AsyncCaptureTask *task;
+        while((task = (AsyncCaptureTask *)g_async_queue_try_pop(captureData.task_queue)) != NULL) {
+            if(task->sample) gst_sample_unref(task->sample);
+            if(task->file_path) g_free(task->file_path);
+            g_free(task);
+        }
+        g_async_queue_unref(captureData.task_queue);
+        captureData.task_queue = NULL;
+    }
+    
+    // Clear Request Queue
+    if (captureData.queue_mutex) {
+        std::lock_guard<std::mutex> lock(*captureData.queue_mutex);
+        if (captureData.current_request) {
+            captureData.current_request = nullptr;
+        }
+        if (captureData.request_queue) {
+            captureData.request_queue->clear();
+        }
+    }
+    
+    if(captureData.filePath) g_free(captureData.filePath);
+
     destroy_compressor(&captureData);
 }
 
+void CaptureBin::addCaptureRequest(gint maxCnt, const gchar *prefix, gpointer userData, guint8 mode, gint timeoutMs)
+{
+    std::lock_guard<std::mutex> lock(*captureData.queue_mutex);
+    
+    std::shared_ptr<CaptureRequest> req = std::make_shared<CaptureRequest>();
+    req->maxCnt = maxCnt;
+    req->userData = userData;
+    req->mode = mode;
+    req->captureCnt = 0; // Written count
+    req->startTime = g_get_monotonic_time(); // microseconds
+    req->timeoutMs = timeoutMs;
+    
+    if(prefix != NULL && !is_safe_prefix(prefix)) {
+        __LOG(LOG_WARNING, "[%s][%s:%d] ch%d invalid prefix '%s', using default", CAP_LOG_KEY, _FILE_, __LINE__, captureData.ch, prefix);
+        prefix = NULL;
+    }
+
+    if(prefix == NULL)
+    {
+        GDateTime *datetime = g_date_time_new_now_local();
+        gchar *date_str = g_date_time_format(datetime, "%Y%m%d_%H%M%S");
+        req->filePath = g_strdup_printf("%s/%s/%s_%s-ch%d", cmdArg.mntDir, cmdArg.cap.path, cmdArg.ohtName, date_str, captureData.ch);
+        g_date_time_unref(datetime);
+        g_free(date_str);
+    }
+    else
+    {
+        req->filePath = g_strdup_printf("%s/%s/%s-ch%d", cmdArg.mntDir, cmdArg.cap.path, prefix, captureData.ch);
+    }
+    
+    captureData.request_queue->push_back(req);
+    
+    __LOG(LOG_INFO, "[%s][%s:%d] ch%d Added capture request: %s, Queue Size: %ld, Timeout: %d ms", 
+          CAP_LOG_KEY, _FILE_, __LINE__, captureData.ch, req->filePath, captureData.request_queue->size(), timeoutMs);
+          
+    // If not capturing, open valve
+    if (captureData.valve) {
+        g_object_set(captureData.valve, "drop", FALSE, NULL);
+    }
+}
+
+gboolean CaptureBin::checkTimeout()
+{
+    gint64 now = g_get_monotonic_time();
+    std::lock_guard<std::mutex> lock(*captureData.queue_mutex);
+    
+    // Check current request
+    if (captureData.current_request) {
+        gint64 elapsed_ms = (now - captureData.current_request->startTime) / 1000;
+        if (elapsed_ms > captureData.current_request->timeoutMs) {
+            __LOG(LOG_WARNING, "[%s][%s:%d] ch%d Request TIMEOUT: %s (Elapsed: %ld ms, Limit: %d ms, Cnt: %d/%d)", 
+                  CAP_LOG_KEY, _FILE_, __LINE__, captureData.ch, captureData.current_request->filePath, 
+                  elapsed_ms, captureData.current_request->timeoutMs, 
+                  g_atomic_int_get(&captureData.current_request->captureCnt), 
+                  captureData.current_request->maxCnt);
+
+            captureData.current_request->timed_out.store(true);
+
+            // Atomic compare-and-swap to prevent double callback
+            bool expected = false;
+            if (captureData.current_request->responseSent.compare_exchange_strong(expected, true) &&
+                captureData.complete_callback) {
+                CallbackIdleData *cb_data = g_new0(CallbackIdleData, 1);
+                cb_data->callback = captureData.complete_callback;
+                cb_data->ch = captureData.ch;
+                cb_data->completed_count = g_atomic_int_get(&captureData.current_request->captureCnt);
+                cb_data->user_data = captureData.current_request->userData;
+                g_idle_add(invoke_complete_callback_idle, cb_data);
+            }
+            
+            // Force move to next request
+            captureData.current_request = nullptr;
+            
+            // If queue is empty, close valve
+            if (captureData.request_queue->empty() && captureData.valve) {
+                 g_object_set(captureData.valve, "drop", TRUE, NULL);
+                 __LOG(LOG_INFO, "[%s][%s:%d] ch%d Timeout cleared queue, closing valve", CAP_LOG_KEY, _FILE_, __LINE__, captureData.ch);
+            }
+        }
+    }
+    
+    // Check pending queue for expired requests (they haven't even started yet)
+    // We iterate safely
+    auto it = captureData.request_queue->begin();
+    while (it != captureData.request_queue->end()) {
+        std::shared_ptr<CaptureRequest> req = *it;
+        gint64 elapsed_ms = (now - req->startTime) / 1000;
+        
+        if (elapsed_ms > req->timeoutMs) {
+             __LOG(LOG_WARNING, "[%s][%s:%d] ch%d Pending Request TIMEOUT: %s (Elapsed: %ld ms)", 
+                  CAP_LOG_KEY, _FILE_, __LINE__, captureData.ch, req->filePath, elapsed_ms);
+             
+             req->timed_out.store(true);
+
+             // Atomic compare-and-swap to prevent double callback
+             bool expected = false;
+             if (req->responseSent.compare_exchange_strong(expected, true) &&
+                 captureData.complete_callback) {
+                CallbackIdleData *cb_data = g_new0(CallbackIdleData, 1);
+                cb_data->callback = captureData.complete_callback;
+                cb_data->ch = captureData.ch;
+                cb_data->completed_count = 0; // Not started
+                cb_data->user_data = req->userData;
+                g_idle_add(invoke_complete_callback_idle, cb_data);
+            }
+            
+            it = captureData.request_queue->erase(it);
+        } else {
+            ++it;
+        }
+    }
+    
+    return G_SOURCE_CONTINUE;
+}
+
+// Kept for backward compatibility but modified logic
 gint CaptureBin::startCapture(gint maxCnt)
 {
-    //if (getBinSinkPad() == NULL) return 0;
-    //setFilePath();
-    //captureData.mode = mode;
-    captureData.captureMaxCnt = maxCnt;
-    captureData.captureCnt = 0;
-    captureData.captureCnt_ = 0;
-    __LOG(LOG_INFO, "[%s][%s:%d] %s cnt:%d, maxCnt:%d", CAP_LOG_KEY, _FILE_, __LINE__, __FUNCTION__, captureData.captureCnt, captureData.captureMaxCnt);
-
+    // Redirect to addCaptureRequest with NULL userData and current filePath
+    // Note: This legacy method assumes filePath was set by setFilePath
+    addCaptureRequest(maxCnt, NULL, NULL, 1, 5000); // Default 5s timeout
+    
+    // Override the filePath in the request we just added if setFilePath was called before
+    // (This is messy, better to fix caller, but for safety:)
+    if (captureData.filePath) {
+        // Find the last request
+        std::lock_guard<std::mutex> lock(*captureData.queue_mutex);
+        if (!captureData.request_queue->empty()) {
+            std::shared_ptr<CaptureRequest> req = captureData.request_queue->back();
+            if (req->filePath) g_free(req->filePath);
+            req->filePath = g_strdup(captureData.filePath);
+        }
+    }
     return 1;
 }
 
 gint CaptureBin::stopCapture()
 {
-    __LOG(LOG_NOTICE, "[%s][%s:%d] %s", CAP_LOG_KEY, _FILE_, __LINE__, __FUNCTION__);
-    captureData.captureCnt = cmdArg.cap.maxCnt;
-    captureData.captureCnt_ = cmdArg.cap.maxCnt;
-    captureData.mode = 0;
+    __LOG(LOG_NOTICE, "[%s][%s:%d] ch%d %s", CAP_LOG_KEY, _FILE_, __LINE__, captureData.ch, __FUNCTION__);
+
+    // Close valve first
+    if(captureData.valve) {
+        g_object_set(captureData.valve, "drop", TRUE, NULL);
+        __LOG(LOG_INFO, "[%s][%s:%d] ch%d valve closed", CAP_LOG_KEY, _FILE_, __LINE__, captureData.ch);
+    }
+    
+    std::lock_guard<std::mutex> lock(*captureData.queue_mutex);
+
+    // Clear current request first
+    if (captureData.current_request) {
+        captureData.current_request = nullptr;
+    }
+
+    // Clear pending requests
+    if (captureData.request_queue) {
+         captureData.request_queue->clear();
+    }
 
     return 1;
 }
 
+void CaptureBin::setMaxCnt(guint16 maxCnt)
+{
+    __LOG(LOG_INFO, "[%s][%s:%d] ch%d setMaxCnt %d", CAP_LOG_KEY, _FILE_, __LINE__, captureData.ch, maxCnt);
+    captureData.captureMaxCnt = maxCnt;
+}
+
+void CaptureBin::startWorker()
+{
+    if(!captureData.worker_thread) {
+        captureData.worker_running.store(true);
+        captureData.worker_thread = g_thread_new("capture_worker", capture_worker_thread, &captureData);
+        __LOG(LOG_NOTICE, "[%s][%s:%d] ch%d worker thread created", CAP_LOG_KEY, _FILE_, __LINE__, captureData.ch);
+    }
+}
+
+void CaptureBin::stopWorker()
+{
+    if(captureData.worker_thread) {
+        captureData.worker_running.store(false);
+        g_thread_join(captureData.worker_thread);
+        captureData.worker_thread = NULL;
+        __LOG(LOG_NOTICE, "[%s][%s:%d] ch%d worker thread joined", CAP_LOG_KEY, _FILE_, __LINE__, captureData.ch);
+    }
+}
+
+gboolean CaptureBin::isQueueEmpty()
+{
+    if(!captureData.task_queue) return TRUE;
+    return (g_async_queue_length(captureData.task_queue) == 0);
+}
+
+void CaptureBin::setCompleteCallback(CaptureCompleteCallback callback, gpointer user_data)
+{
+    captureData.complete_callback = callback;
+    captureData.callback_user_data = user_data;
+    __LOG(LOG_INFO, "[%s][%s:%d] ch%d completion callback %s",
+          CAP_LOG_KEY, _FILE_, __LINE__, captureData.ch, callback ? "registered" : "cleared");
+}
+
 void CaptureBin::setMode(guint8 mode)
 {
-    __LOG(LOG_INFO, "[%s][%s:%d] ch%d setMode %d", CAP_LOG_KEY, _FILE_, __LINE__, mode);
+    __LOG(LOG_INFO, "[%s][%s:%d] ch%d setMode %d", CAP_LOG_KEY, _FILE_, __LINE__, captureData.ch, mode);
     captureData.mode = mode;
 }
 
@@ -608,8 +781,10 @@ GstPad* CaptureBin::getBinSinkPad()
     return sinkPad;
 }
 
-gint CaptureBin::setFilePath(guint8 *prefix)
+gint CaptureBin::setFilePath(const gchar *prefix)
 {
+    if(captureData.filePath) g_free(captureData.filePath);
+    
     if(prefix == NULL)
     {
         GDateTime *datetime = g_date_time_new_now_local();
@@ -642,10 +817,11 @@ gboolean CaptureBin::init(guint8 ch)
     captureData.fps = cmdArg.fps[STREAM_CAP][captureData.ch];
     captureData.quality = cmdArg.cap.quality;
     //sinkPad = NULL;
-    __LOG(LOG_NOTICE, "[%s][%s:%d] %s ch : %d, crop : %s", CAP_LOG_KEY, _FILE_, __LINE__, __FUNCTION__, captureData.ch, crop_en? "enable":"disable");
+    __LOG(LOG_INFO, "[%s][%s:%d] %s ch : %d, crop : %s", CAP_LOG_KEY, _FILE_, __LINE__, __FUNCTION__, captureData.ch, crop_en? "enable":"disable");
 
     be.bin = gst_bin_new(g_strdup_printf("captureBin%d", captureData.ch));
     be.queue = gst_element_factory_make(QUEUE_TYPE, g_strdup_printf("queue_%d", captureData.ch));
+    be.valve = gst_element_factory_make("valve", g_strdup_printf("valve_%d", captureData.ch));
     be.queue2 = gst_element_factory_make(QUEUE_TYPE, g_strdup_printf("queue2_%d", captureData.ch));
     be.imx_convert = gst_element_factory_make("imxvideoconvert_g2d", g_strdup_printf("imx_convert%d", captureData.ch));
     be.enc = gst_element_factory_make("jpegenc", g_strdup_printf("jpegenc%d", captureData.ch));
@@ -658,13 +834,13 @@ gboolean CaptureBin::init(guint8 ch)
 
     //GstElement *imx_convert = gst_element_factory_make("imxvideoconvert_g2d", g_strdup_printf("imxconvert%d", captureData.ch));
 
-    if (!be.bin || !be.queue || !be.queue2 || !be.enc || !be.appsink || !be.imx_convert || !be.crop || !be.overlay || \
+    if (!be.bin || !be.queue || !be.valve || !be.queue2 || !be.enc || !be.appsink || !be.imx_convert || !be.crop || !be.overlay || \
         !be.capsfilter || !be.appsrc || !be.queue_sink) {
         __LOG(LOG_CRIT, "[%s][%s:%d] capture element create error", CAP_LOG_KEY, _FILE_, __LINE__);
         return ret;
     }
 
-    gst_bin_add_many(GST_BIN(be.bin), be.queue, be.queue2, be.imx_convert, be.enc, be.appsink, be.crop, be.overlay, \
+    gst_bin_add_many(GST_BIN(be.bin), be.queue, be.valve, be.queue2, be.imx_convert, be.enc, be.appsink, be.crop, be.overlay, \
                     be.capsfilter, be.queue_sink, be.appsrc, NULL);
     //gst_bin_add_many(GST_BIN(be.bin), be.queue_src, be.queue3, be.queue_sink, NULL);
     //gst_bin_add_many(GST_BIN(be.bin), imx_convert, , NULL);
@@ -678,11 +854,15 @@ gboolean CaptureBin::init(guint8 ch)
 #endif
 
     //ret = gst_element_link_many(be.queue, be.crop, be.convert, be.enc, be.queue2, be.sink, NULL);
-    ret = gst_element_link(be.queue, be.queue_sink);
+    ret = gst_element_link_many(be.queue, be.valve, be.queue_sink, NULL);
     if (!ret) {
-        __LOG(LOG_CRIT, "[%s][%s:%d] capture queue_sink link err", CAP_LOG_KEY, _FILE_, __LINE__);
+        __LOG(LOG_CRIT, "[%s][%s:%d] capture queue->valve->queue_sink link err", CAP_LOG_KEY, _FILE_, __LINE__);
         return ret;
     }
+
+    // Set valve to drop buffers by default (when not capturing) for zero CPU usage
+    g_object_set(be.valve, "drop", TRUE, NULL);
+    captureData.valve = be.valve;
 
     if(g_strcmp0(cmdArg.cap.encoder, "jpeg") == 0 || g_strcmp0(cmdArg.cap.encoder, "jpg") == 0) {
         captureData.enc_type = CAP_ENC_JPEG;
@@ -786,8 +966,9 @@ gboolean CaptureBin::init(guint8 ch)
     gst_pad_add_probe(queue_src_pad, GST_PAD_PROBE_TYPE_BUFFER, queue_probe_callback, &captureData, NULL);
     gst_object_unref(queue_src_pad);
 #endif
-    g_object_set(be.queue_sink, "drop", TRUE, NULL);
-    g_object_set(be.queue_sink, "emit-signals", TRUE, "sync", TRUE, "async", FALSE, NULL);
+    // queue_sink properties: no drop (valve handles dropping), no sync for max speed
+    g_object_set(be.queue_sink, "drop", FALSE, NULL);
+    g_object_set(be.queue_sink, "emit-signals", TRUE, "sync", FALSE, "async", FALSE, NULL);
     //g_signal_connect(be.queue_sink, "eos", G_CALLBACK(eos_callback2), &captureData);
     g_signal_connect(be.queue_sink, "new-sample", G_CALLBACK(on_new_sample_from_sink), &captureData);
     //g_signal_connect(be.queue_sink, "new-preroll", G_CALLBACK(new_preroll_handler), NULL );
@@ -816,16 +997,18 @@ gboolean CaptureBin::init(guint8 ch)
     //probe_id = gst_pad_add_probe(queue_src_pad, GST_PAD_PROBE_TYPE_BLOCK_DOWNSTREAM, NULL, NULL, NULL);
     //g_object_set(re.enc, "bitrate", cmdArg.rtsp_bitrate, NULL);
     
-    g_object_set(be.queue, "max-size-time", GST_SECOND/2, "leaky", LEAKY_DOWNSTREAM, NULL);
-    g_object_set(be.queue2, "max-size-time", GST_SECOND/2, "leaky", LEAKY_DOWNSTREAM, NULL);
+    // Queue properties: increased buffer time (2s), no leaky during capture
+    g_object_set(be.queue, "max-size-time", 2*GST_SECOND, "leaky", 0, NULL);
+    g_object_set(be.queue2, "max-size-time", 2*GST_SECOND, "leaky", 0, NULL);
     //g_object_set(re.capsfilter, "max-size-time", 5*GST_SECOND, "max-size-buffers", 60, "leaky", 1, NULL);
     //g_object_set(pipe->sink, "max-lateness", 1*GST_SECOND, NULL);
     //g_object_set(pipe->sink, "render-delay", 100*GST_MSECOND, NULL);
     //g_object_set(be.sink, "emit-signals", TRUE, "sync", FALSE, NULL);
     //g_object_set(be.sink, "async", TRUE, NULL);
     //g_object_set(be.appsink, "max-buffers", captureData.fps/2, NULL);
-    g_object_set(be.appsink, "drop", TRUE, NULL);
-    g_object_set(be.appsink, "emit-signals", TRUE, "sync", TRUE, "async", FALSE, NULL);
+    // appsink properties: no drop (valve handles dropping), no sync for max speed
+    g_object_set(be.appsink, "drop", FALSE, NULL);
+    g_object_set(be.appsink, "emit-signals", TRUE, "sync", FALSE, "async", FALSE, NULL);
     g_signal_connect(be.appsink, "eos", G_CALLBACK(eos_callback), &captureData);
     g_signal_connect(be.appsink, "new-sample", G_CALLBACK(on_new_sample_to_file), &captureData);
 
@@ -843,6 +1026,12 @@ gboolean CaptureBin::init(guint8 ch)
     //g_strdup_printf(captureData.filePath, "/mnt/sd_cam/capture/default-ch%d", captureData.ch);
 
     gst_object_unref(staticPad);
+
+    // Start async worker thread for background file I/O
+    startWorker();
+    
+    // Start timeout monitor
+    timeout_source_id.store(g_timeout_add(100, timeout_check_func, this));
 
     return ret;
 }

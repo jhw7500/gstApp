@@ -21,8 +21,10 @@ typedef struct _MuxSinkElement
     GstElement *bin;
     GstElement *mp4mux;
     GstElement *tsmux;
+    GstElement *qtmux;
     GstElement *queue;
     GstElement *parse;
+    GstElement *capsfilter;
 } MuxSinkElement;
 
 typedef struct _MuxSinkData

@@ -27,7 +27,7 @@
 #include <unistd.h>
 //#include <signal.h>
 
-#define APP_VERSION "1.1"
+#define APP_VERSION "1.2"
 
 #define SEGFAULT_DEBUG
 #define RECORDBIN_ENABLE
@@ -117,11 +117,13 @@ gboolean bus_message_parse(GstBus *bus, GstMessage *message, gpointer data)
             if(is_interrupted)
             {
                 cam_cnt++;
+                g_main_loop_quit(loop);
                 //if(cam_cnt >= MAX_PIPELINE) destroy();
             }
             else
             {
                 is_interrupted = TRUE;
+                g_main_loop_quit(loop);
                 //gst_element_set_state(pipeline, GST_STATE_READY);
                 //gst_element_set_state(pipeline, GST_STATE_PLAYING);
                 //gst_element_get_state(pipeline[info->index], NULL, NULL, GST_CLOCK_TIME_NONE);
@@ -494,31 +496,13 @@ static void splitCheck(gpointer data, guint8 startSec)
     return;
 } 
 
-static void splitLoop(gpointer data)
+static gboolean split_timer_callback(gpointer data)
 {
-    __LOG(LOG_INFO, "[GST][%s:%d] %s start", _FILE_, __LINE__, __FUNCTION__);
-    while(1)
-    {
-        if(is_interrupted)
-            break;
+    if(is_interrupted)
+        return G_SOURCE_REMOVE;
 
-        //if(splitCheck(data, 0))
-            //break;
-        splitCheck(data, cmdArg.split_sec);
-
-        g_usleep(1000);
-    }
-    __LOG(LOG_INFO, "[GST][%s:%d] %s break", _FILE_, __LINE__, __FUNCTION__);
-}
-
-static void taskLoop(gpointer arg)
-{
-    //splitCheck(data, 0);
-    //splitTimerStart(data);
-    //if(cmdArg.input_en) check_terminal_input(arg0, arg1, arg2);
-    g_usleep(10000);
-
-    return;
+    splitCheck(data, cmdArg.split_sec);
+    return G_SOURCE_CONTINUE;
 }
 
 static gboolean setSRT(gpointer arg) 
@@ -769,7 +753,7 @@ gint main(gint argc, gchar *argv[])
     MuxSinkBin muxSinkBin[MAX_CHANNEL];
     CaptureBin captureBin[MAX_CHANNEL];
     EncoderBin encoderBin[MAX_CHANNEL];
-    GThread *splitThread = NULL, *terminalThread = NULL;
+    GThread *terminalThread = NULL;
     GstStateChangeReturn ret;
     guint8 i = 0;
     guint srtTimer_id = 0;
@@ -1117,7 +1101,8 @@ gint main(gint argc, gchar *argv[])
     }
 
     if(cmdArg.stream_en[STREAM_REC] || cmdArg.audio_en) {
-        splitThread = g_thread_new("split-thread", (GThreadFunc)splitLoop, muxSinkBin);
+        __LOG(LOG_INFO, "[GST][%s:%d] split timer start (1 second interval)", _FILE_, __LINE__);
+        g_timeout_add_seconds(1, split_timer_callback, muxSinkBin);
     }
     
     if(cmdArg.overlay_en) {
@@ -1135,19 +1120,11 @@ gint main(gint argc, gchar *argv[])
 
     loop = g_main_loop_new(NULL, FALSE);
 
-	if(!loop) {
+    if(!loop) {
         __LOG(LOG_CRIT, "[GST][%s:%d] mainLoop create error", _FILE_, __LINE__);
     } else {
         __LOG(LOG_INFO, "[GST][%s:%d] mainLoop start", _FILE_, __LINE__);
-#if 0
         g_main_loop_run(loop);
-#else
-        while (!is_interrupted)
-        {
-            g_main_context_iteration(g_main_loop_get_context(loop), FALSE);
-            taskLoop(NULL);
-        }
-#endif
     }
     __LOG(LOG_INFO, "[GST][%s:%d] Main loop exit", _FILE_, __LINE__);
 
@@ -1189,10 +1166,6 @@ main_end:
     if(terminalThread) {
         g_thread_join(terminalThread);
         g_thread_unref(terminalThread);
-    }
-    if(splitThread) {
-        g_thread_join(splitThread);
-        g_thread_unref(splitThread);
     }
     if(srtTimer_id) {
         g_source_remove(srtTimer_id);
