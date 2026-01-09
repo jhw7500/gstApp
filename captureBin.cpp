@@ -11,6 +11,7 @@
  */
 
 #include "captureBin.h"
+#include "parser.h"
 #include "tcpServer.h"
 #include <gst/app/gstappsink.h>
 #include <gst/app/gstappsrc.h>
@@ -21,6 +22,7 @@
 #include <openssl/md5.h>
 #include <unistd.h>
 #include <fcntl.h>
+#include <string.h>
 
 static gboolean init_compressor(CaptureData *info) {
     if (!info->tjCompressor) {
@@ -139,11 +141,18 @@ static gpointer capture_worker_thread(gpointer user_data)
 
     __LOG(LOG_NOTICE, "[%s][%s:%d] ch%d worker thread started", CAP_LOG_KEY, _FILE_, __LINE__, info->ch);
 
-    while(info->worker_running || g_async_queue_length(info->task_queue) > 0)
+    while(info->worker_running.load() || g_async_queue_length(info->task_queue) > 0)
     {
         // Wait for task with 100ms timeout
         AsyncCaptureTask *task = (AsyncCaptureTask *)g_async_queue_timeout_pop(info->task_queue, 100000);
         if(!task) continue;
+
+        if (task->request && task->request->timed_out.load()) {
+            if (task->sample) gst_sample_unref(task->sample);
+            if (task->file_path) g_free(task->file_path);
+            g_free(task);
+            continue;
+        }
 
         GstBuffer *buffer = NULL;
         FILE *fp = NULL;
@@ -239,6 +248,14 @@ static inline void tiny_sleep_ns(long ns) {
     nanosleep(&ts, NULL);
 }
 
+static bool is_safe_prefix(const gchar *prefix)
+{
+    if (!prefix) return true;
+    if (strstr(prefix, "..") != NULL) return false;
+    if (strchr(prefix, '/') != NULL || strchr(prefix, '\\') != NULL) return false;
+    return true;
+}
+
 static void eos_callback(GstAppSink *appsink, gpointer user_data) 
 {
     CaptureData *info = (CaptureData *)user_data;
@@ -289,86 +306,90 @@ static GstFlowReturn on_new_sample_to_file(GstElement *sink, gpointer userData)
 {
     CaptureData *info = (CaptureData *)userData;
     GstSample *sample = NULL;
+    const gint queue_limit = (cmdArg.cap.queue_size > 0) ? cmdArg.cap.queue_size : DEFAULT_CAPTURE_QUEUE_SIZE;
 
     sample = gst_app_sink_pull_sample(GST_APP_SINK(sink));
     if(!sample) {
         return GST_FLOW_ERROR;
     }
-    
-    // Protect Request Queue Transition
-    info->queue_mutex->lock();
 
-    // If no current request, try to pop one
-    if (!info->current_request) {
-        if (!info->request_queue->empty()) {
-            info->current_request = info->request_queue->front();
-            info->request_queue->pop_front();
-            
-            // Reset pushed count for new request
-            g_atomic_int_set(&info->captureCnt_, 0);
-            g_atomic_int_set(&info->push_index, 0);
-            
-            __LOG(LOG_INFO, "[%s][%s:%d] ch%d Starting new request: %s (max: %d)", 
-                  CAP_LOG_KEY, _FILE_, __LINE__, info->ch, info->current_request->filePath, info->current_request->maxCnt);
-        }
-    }
+    bool should_drop = false;
+    std::shared_ptr<CaptureRequest> req;
+    AsyncCaptureTask *task = NULL;
 
-    if (!info->current_request) {
-        // Double check if queue is truly empty and close valve if open
-        if (info->valve) {
-             g_object_set(info->valve, "drop", TRUE, NULL);
+    {
+        // Use lock_guard for exception safety (RAII pattern)
+        std::lock_guard<std::mutex> lock(*info->queue_mutex);
+
+        // If no current request, try to pop one
+        if (!info->current_request) {
+            if (!info->request_queue->empty()) {
+                info->current_request = info->request_queue->front();
+                info->request_queue->pop_front();
+
+                // Reset pushed count for new request
+                g_atomic_int_set(&info->captureCnt_, 0);
+                info->push_index.store(0);
+
+                __LOG(LOG_INFO, "[%s][%s:%d] ch%d Starting new request: %s (max: %d)",
+                      CAP_LOG_KEY, _FILE_, __LINE__, info->ch, info->current_request->filePath, info->current_request->maxCnt);
+            }
         }
-        info->queue_mutex->unlock();
-        // No request active or pending, drop frame
+
+        if (!info->current_request) {
+            // Double check if queue is truly empty and close valve if open
+            if (info->valve) {
+                 g_object_set(info->valve, "drop", TRUE, NULL);
+            }
+            should_drop = true;
+        } else {
+            req = info->current_request;
+
+            // Check queue size limit (prevent memory overflow)
+            gint queue_length = g_async_queue_length(info->task_queue);
+            if(queue_length > queue_limit) {
+                __LOG(LOG_WARNING, "[%s][%s:%d] ch%d queue full (%d > %d), dropping frame", CAP_LOG_KEY, _FILE_, __LINE__, info->ch, queue_length, queue_limit);
+                should_drop = true;
+            } else {
+                // Create async task (transfer ownership of sample to task)
+                task = g_new0(AsyncCaptureTask, 1);
+                task->sample = sample;
+                task->info = info;
+                task->request = req; // Link to request
+
+                // Use push_index which is incremented atomically at push time
+                task->capture_index = info->push_index.fetch_add(1);
+
+                // Generate file path for this specific frame
+                task->file_path = g_strdup_printf("%s_%d.%s", req->filePath, task->capture_index, info->extention);
+
+                // Push to async queue (non-blocking, fast return)
+                g_async_queue_push(info->task_queue, task);
+
+                // Increment pushed count
+                gint new_pushed_cnt = g_atomic_int_add(&info->captureCnt_, 1) + 1;
+
+                // Check if we have pushed enough frames for the current request
+                if (new_pushed_cnt >= req->maxCnt) {
+                    // Current request pushed completely. Release ownership.
+                    info->current_request = nullptr;
+
+                    // If no more requests in queue, close the valve to save CPU
+                    if (info->request_queue->empty() && info->valve) {
+                         g_object_set(info->valve, "drop", TRUE, NULL);
+                         __LOG(LOG_INFO, "[%s][%s:%d] ch%d Queue empty, closing valve", CAP_LOG_KEY, _FILE_, __LINE__, info->ch);
+                    }
+
+                    __LOG(LOG_INFO, "[%s][%s:%d] ch%d Request pushed completely: %s",
+                          CAP_LOG_KEY, _FILE_, __LINE__, info->ch, req->filePath);
+                }
+            }
+        }
+    } // lock_guard automatically releases mutex here
+
+    if (should_drop) {
         gst_sample_unref(sample);
-        return GST_FLOW_OK;
     }
-    
-    std::shared_ptr<CaptureRequest> req = info->current_request;
-    
-    // Check queue size limit (prevent memory overflow)
-    gint queue_length = g_async_queue_length(info->task_queue);
-    if(queue_length > 30) {
-        __LOG(LOG_WARNING, "[%s][%s:%d] ch%d queue full (%d), dropping frame", CAP_LOG_KEY, _FILE_, __LINE__, info->ch, queue_length);
-        info->queue_mutex->unlock();
-        gst_sample_unref(sample);
-        return GST_FLOW_OK;
-    }
-
-    // Create async task (transfer ownership of sample to task)
-    AsyncCaptureTask *task = g_new0(AsyncCaptureTask, 1);
-    task->sample = sample;
-    task->info = info;
-    task->request = req; // Link to request
-    
-    // Use push_index which is incremented atomically at push time
-    task->capture_index = g_atomic_int_add(&info->push_index, 1);
-    
-    // Generate file path for this specific frame
-    task->file_path = g_strdup_printf("%s_%d.%s", req->filePath, task->capture_index, info->extention);
-    
-    // Push to async queue (non-blocking, fast return)
-    g_async_queue_push(info->task_queue, task);
-
-    // Increment pushed count
-    gint new_pushed_cnt = g_atomic_int_add(&info->captureCnt_, 1) + 1;
-    
-    // Check if we have pushed enough frames for the current request
-    if (new_pushed_cnt >= req->maxCnt) {
-        // Current request pushed completely. Release ownership.
-        info->current_request = nullptr; 
-        
-        // If no more requests in queue, close the valve to save CPU
-        if (info->request_queue->empty() && info->valve) {
-             g_object_set(info->valve, "drop", TRUE, NULL);
-             __LOG(LOG_INFO, "[%s][%s:%d] ch%d Queue empty, closing valve", CAP_LOG_KEY, _FILE_, __LINE__, info->ch);
-        }
-        
-        __LOG(LOG_INFO, "[%s][%s:%d] ch%d Request pushed completely: %s", 
-              CAP_LOG_KEY, _FILE_, __LINE__, info->ch, req->filePath);
-    }
-    
-    info->queue_mutex->unlock();
 
     return GST_FLOW_OK;
 }
@@ -425,8 +446,8 @@ CaptureBin::CaptureBin()
     // Initialize async queue and worker thread
     captureData.task_queue = g_async_queue_new();
     captureData.worker_thread = NULL;
-    captureData.worker_running = FALSE;
-    captureData.push_index = 0;
+    captureData.worker_running.store(false);
+    captureData.push_index.store(0);
     captureData.filePath = NULL;
 
     // Initialize completion callback
@@ -434,11 +455,11 @@ CaptureBin::CaptureBin()
     captureData.callback_user_data = NULL;
     
     // Initialize Request Queue
-    captureData.request_queue = new std::deque<std::shared_ptr<CaptureRequest>>();
-    captureData.queue_mutex = new std::mutex();
-    captureData.current_request = NULL;
+    captureData.request_queue = std::unique_ptr<std::deque<std::shared_ptr<CaptureRequest>>>(new std::deque<std::shared_ptr<CaptureRequest>>());
+    captureData.queue_mutex = std::unique_ptr<std::mutex>(new std::mutex());
+    captureData.current_request = nullptr;
     
-    timeout_source_id = 0;
+    timeout_source_id.store(0);
     captureData.valve = NULL;
 }
 
@@ -446,10 +467,12 @@ CaptureBin::~CaptureBin()
 {
     __LOG(LOG_INFO, "[%s][%s:%d] %s[%d]", CAP_LOG_KEY, _FILE_, __LINE__, __FUNCTION__, captureData.ch);
 
-    // Stop timeout source
-    if(timeout_source_id > 0) {
-        g_source_remove(timeout_source_id);
-        timeout_source_id = 0;
+    // Stop timeout source (must be done from main thread context)
+    // Use atomic load/store pattern for thread safety
+    guint id = timeout_source_id.load();
+    if(id > 0) {
+        g_source_remove(id);
+        timeout_source_id.store(0);
     }
 
     // Stop worker thread and wait for completion
@@ -475,10 +498,8 @@ CaptureBin::~CaptureBin()
         }
         if (captureData.request_queue) {
             captureData.request_queue->clear();
-            delete captureData.request_queue;
         }
     }
-    if (captureData.queue_mutex) delete captureData.queue_mutex;
     
     if(captureData.filePath) g_free(captureData.filePath);
 
@@ -497,6 +518,11 @@ void CaptureBin::addCaptureRequest(gint maxCnt, const gchar *prefix, gpointer us
     req->startTime = g_get_monotonic_time(); // microseconds
     req->timeoutMs = timeoutMs;
     
+    if(prefix != NULL && !is_safe_prefix(prefix)) {
+        __LOG(LOG_WARNING, "[%s][%s:%d] ch%d invalid prefix '%s', using default", CAP_LOG_KEY, _FILE_, __LINE__, captureData.ch, prefix);
+        prefix = NULL;
+    }
+
     if(prefix == NULL)
     {
         GDateTime *datetime = g_date_time_new_now_local();
@@ -516,8 +542,8 @@ void CaptureBin::addCaptureRequest(gint maxCnt, const gchar *prefix, gpointer us
           CAP_LOG_KEY, _FILE_, __LINE__, captureData.ch, req->filePath, captureData.request_queue->size(), timeoutMs);
           
     // If not capturing, open valve
-    if (be.valve) {
-        g_object_set(be.valve, "drop", FALSE, NULL);
+    if (captureData.valve) {
+        g_object_set(captureData.valve, "drop", FALSE, NULL);
     }
 }
 
@@ -535,7 +561,9 @@ gboolean CaptureBin::checkTimeout()
                   elapsed_ms, captureData.current_request->timeoutMs, 
                   g_atomic_int_get(&captureData.current_request->captureCnt), 
                   captureData.current_request->maxCnt);
-            
+
+            captureData.current_request->timed_out.store(true);
+
             // Atomic compare-and-swap to prevent double callback
             bool expected = false;
             if (captureData.current_request->responseSent.compare_exchange_strong(expected, true) &&
@@ -570,6 +598,8 @@ gboolean CaptureBin::checkTimeout()
              __LOG(LOG_WARNING, "[%s][%s:%d] ch%d Pending Request TIMEOUT: %s (Elapsed: %ld ms)", 
                   CAP_LOG_KEY, _FILE_, __LINE__, captureData.ch, req->filePath, elapsed_ms);
              
+             req->timed_out.store(true);
+
              // Atomic compare-and-swap to prevent double callback
              bool expected = false;
              if (req->responseSent.compare_exchange_strong(expected, true) &&
@@ -617,18 +647,23 @@ gint CaptureBin::stopCapture()
     __LOG(LOG_NOTICE, "[%s][%s:%d] ch%d %s", CAP_LOG_KEY, _FILE_, __LINE__, captureData.ch, __FUNCTION__);
 
     // Close valve first
-    if(be.valve) {
-        g_object_set(be.valve, "drop", TRUE, NULL);
+    if(captureData.valve) {
+        g_object_set(captureData.valve, "drop", TRUE, NULL);
         __LOG(LOG_INFO, "[%s][%s:%d] ch%d valve closed", CAP_LOG_KEY, _FILE_, __LINE__, captureData.ch);
     }
     
     std::lock_guard<std::mutex> lock(*captureData.queue_mutex);
-    
+
+    // Clear current request first
+    if (captureData.current_request) {
+        captureData.current_request = nullptr;
+    }
+
     // Clear pending requests
     if (captureData.request_queue) {
          captureData.request_queue->clear();
     }
-    
+
     return 1;
 }
 
@@ -641,7 +676,7 @@ void CaptureBin::setMaxCnt(guint16 maxCnt)
 void CaptureBin::startWorker()
 {
     if(!captureData.worker_thread) {
-        captureData.worker_running = TRUE;
+        captureData.worker_running.store(true);
         captureData.worker_thread = g_thread_new("capture_worker", capture_worker_thread, &captureData);
         __LOG(LOG_NOTICE, "[%s][%s:%d] ch%d worker thread created", CAP_LOG_KEY, _FILE_, __LINE__, captureData.ch);
     }
@@ -650,7 +685,7 @@ void CaptureBin::startWorker()
 void CaptureBin::stopWorker()
 {
     if(captureData.worker_thread) {
-        captureData.worker_running = FALSE;
+        captureData.worker_running.store(false);
         g_thread_join(captureData.worker_thread);
         captureData.worker_thread = NULL;
         __LOG(LOG_NOTICE, "[%s][%s:%d] ch%d worker thread joined", CAP_LOG_KEY, _FILE_, __LINE__, captureData.ch);
@@ -996,7 +1031,7 @@ gboolean CaptureBin::init(guint8 ch)
     startWorker();
     
     // Start timeout monitor
-    timeout_source_id = g_timeout_add(100, timeout_check_func, this);
+    timeout_source_id.store(g_timeout_add(100, timeout_check_func, this));
 
     return ret;
 }

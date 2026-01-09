@@ -1120,18 +1120,11 @@ gint main(gint argc, gchar *argv[])
 
     loop = g_main_loop_new(NULL, FALSE);
 
-	if(!loop) {
+    if(!loop) {
         __LOG(LOG_CRIT, "[GST][%s:%d] mainLoop create error", _FILE_, __LINE__);
     } else {
         __LOG(LOG_INFO, "[GST][%s:%d] mainLoop start", _FILE_, __LINE__);
-        // Use iteration with timeout instead of blocking run
-        // This allows periodic processing needed by RTSP appsrc
-        GMainContext *context = g_main_loop_get_context(loop);
-        while (!is_interrupted) {
-            // Block for max 10ms, then return to allow periodic processing
-            g_main_context_iteration(context, TRUE);
-            g_usleep(10000);  // 10ms sleep (same as original taskLoop)
-        }
+        g_main_loop_run(loop);
     }
     __LOG(LOG_INFO, "[GST][%s:%d] Main loop exit", _FILE_, __LINE__);
 

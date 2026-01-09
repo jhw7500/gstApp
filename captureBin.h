@@ -38,9 +38,11 @@ typedef struct _CaptureRequest {
     gint64 startTime;
     gint timeoutMs;
     std::atomic<bool> responseSent;  // Atomic for thread-safe callback prevention
+    std::atomic<bool> timed_out;  // Skip pending I/O after timeout
 
     _CaptureRequest() : maxCnt(0), filePath(NULL), userData(NULL), mode(0),
-                        captureCnt(0), startTime(0), timeoutMs(0), responseSent(false) {}
+                        captureCnt(0), startTime(0), timeoutMs(0), responseSent(false),
+                        timed_out(false) {}
     ~_CaptureRequest() { if(filePath) g_free(filePath); }
 } CaptureRequest;
 
@@ -63,16 +65,16 @@ typedef struct _CaptureData
     // Async capture support
     GAsyncQueue *task_queue;
     GThread *worker_thread;
-    volatile gboolean worker_running;
-    volatile gint push_index;  // Index for pushed frames (incremented at push time)
+    std::atomic<bool> worker_running;
+    std::atomic<gint> push_index;  // Index for pushed frames (incremented at push time)
     // Completion callback
     CaptureCompleteCallback complete_callback;
     gpointer callback_user_data;
     
     // Request Queue
-    std::deque<std::shared_ptr<CaptureRequest>> *request_queue;
+    std::unique_ptr<std::deque<std::shared_ptr<CaptureRequest>>> request_queue;
     std::shared_ptr<CaptureRequest> current_request;
-    std::mutex *queue_mutex;
+    std::unique_ptr<std::mutex> queue_mutex;
     GstElement *valve;
 } CaptureData;
 
@@ -140,7 +142,7 @@ public :
 private :
     GstPad *sinkPad;
     CaptureData captureData;
-    guint timeout_source_id;
+    std::atomic<guint> timeout_source_id;
 };
 
 #endif

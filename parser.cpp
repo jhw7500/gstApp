@@ -72,6 +72,7 @@ void ParserClass::init_arg(gchar *argv)
     arg.cap.timeout = DEFAULT_CAPTURE_TIMEOUT;
     arg.cap.padding = TRUE;
     arg.cap.quality = DEFAULT_CAPTURE_QUALITY;
+    arg.cap.queue_size = DEFAULT_CAPTURE_QUEUE_SIZE;
     arg.tcp_en = FALSE;
     arg.tcp_port = DEFAULT_TCP_PORT;
 
@@ -343,6 +344,7 @@ gint ParserClass::json_parser(const gchar *path, const gchar *header)
             json_object_get_value(sobj, "record", &arg.cap.record_en);
             json_object_get_value(sobj, "rtsp", &arg.cap.rtsp_en);
             json_object_get_value(sobj, "quality", &arg.cap.quality);
+            json_object_get_value(sobj, "queue_size", &arg.cap.queue_size);
             json_object_get_value(sobj, "response", &arg.cap.res_en);
             arg.stream_en[STREAM_REC] = arg.cap.record_en;
             arg.stream_en[STREAM_RTSP] = arg.cap.rtsp_en;
@@ -415,6 +417,7 @@ gint ParserClass::arg_parser(int *argc, char **argv[])
         {"capmax", 'x', 0, G_OPTION_ARG_INT, &arg.cap.maxCnt, "capture max count, default(3)", "INT"},
         {"capdelay", 'A', 0, G_OPTION_ARG_INT, &arg.cap.delay, "video capture delay(msec), default(0)", "INT"},
         {"capquality", 'q', 0, G_OPTION_ARG_INT, &arg.cap.quality, "video capture quality, default(85)", "INT"},
+        {"capqueue", 0, 0, G_OPTION_ARG_INT, &arg.cap.queue_size, "capture async queue size, default(30)", "INT"},
         {"capdir", 'I', 0, G_OPTION_ARG_STRING, &arg.cap.path, "save capture file to directory, default capture", "STRING"},
         {"etcp", 'C', 0, G_OPTION_ARG_INT, &arg.tcp_en, "tcp server enable, default(FALSE)", "INT"},
         {"ein", 'i', 0, G_OPTION_ARG_INT, &arg.input_en, "terminal input enable, default(FALSE)", "INT"},
@@ -425,7 +428,7 @@ gint ParserClass::arg_parser(int *argc, char **argv[])
         {"split_diff", 'D', 0, G_OPTION_ARG_INT, &arg.split_diff_msec, "split diff msec, default(100)", "INT"},
         {"split_max", 'X', 0, G_OPTION_ARG_INT, &arg.split_max_msec, "split max msec, default(2000)", "INT"},
         {"split_sec", 'S', 0, G_OPTION_ARG_INT, &arg.split_sec, "split sec, default(0)", "INT"},
-        {"muxer", 'Q', 0, G_OPTION_ARG_INT, &arg.muxer, "muxer(mp4, qt, ts), default(mp4)", "STRING"},
+        {"muxer", 'Q', 0, G_OPTION_ARG_STRING, &arg.muxer, "muxer(mp4, qt, ts), default(mp4)", "STRING"},
         {"eipc", 'f', 0, G_OPTION_ARG_INT, &arg.ipc_en, "ipc enable, default(FALSE)", "INT"},
         {"ipc_mid", 'F', 0, G_OPTION_ARG_INT, &arg.ipc_mid, "ipc message id, default(0x65)", "INT"},
         {"dual_enc", 'U', 0, G_OPTION_ARG_INT, &arg.dual_enc, "dual encoder, default(FALSE)", "INT"},
@@ -581,13 +584,19 @@ gint ParserClass::check_arg()
 
     if(arg.stream_en[STREAM_CAP])
     {
+        if (arg.cap.queue_size <= 0) {
+            __LOG(LOG_WARNING, "[%s][%s:%d] invalid cap queue size %d, using default %d",
+                  LOG_KEY, _FILE_, __LINE__, arg.cap.queue_size, DEFAULT_CAPTURE_QUEUE_SIZE);
+            arg.cap.queue_size = DEFAULT_CAPTURE_QUEUE_SIZE;
+        }
+
         if(system(g_strdup_printf("mkdir -p %s/%s", cmdArg.mntDir, cmdArg.cap.path)) < 0)
             __LOG(LOG_ERR, "[CFG][%s:%d] err mkdir", __FILE__, __LINE__);
 
         __LOG(LOG_NOTICE, "[%s][%s:%d] capture ch0 fps:%d, ch1 fps:%d, ch2 fps:%d, ch3 fps:%d", LOG_KEY, _FILE_, __LINE__, \
                             arg.fps[STREAM_CAP][0], arg.fps[STREAM_CAP][1], arg.fps[STREAM_CAP][2], arg.fps[STREAM_CAP][3]);  
-        __LOG(LOG_NOTICE, "[%s][%s:%d] capEnc:%s, MaxCnt:%d, res_en:%d, path:%s, delay:%d, timeout:%d, padding:%d, quality:%d", \
-                            LOG_KEY, _FILE_, __LINE__, arg.cap.encoder, arg.cap.maxCnt, arg.cap.res_en, arg.cap.path, arg.cap.delay, arg.cap.timeout, arg.cap.padding, arg.cap.quality);
+        __LOG(LOG_NOTICE, "[%s][%s:%d] capEnc:%s, MaxCnt:%d, res_en:%d, path:%s, delay:%d, timeout:%d, padding:%d, quality:%d, queue_size:%d", \
+                            LOG_KEY, _FILE_, __LINE__, arg.cap.encoder, arg.cap.maxCnt, arg.cap.res_en, arg.cap.path, arg.cap.delay, arg.cap.timeout, arg.cap.padding, arg.cap.quality, arg.cap.queue_size);
     }
 
     gint total_fps = 0;

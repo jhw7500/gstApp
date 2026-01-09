@@ -138,8 +138,8 @@ int CIPCInsance::sendData(char* data, int len)
     memset(&sendMsg, 0, sizeof(sendMsg));               // ✅ 잔여 쓰레기 제거
     sendMsg.type = PMSG_TYPE_IPC_CFI;
 
-    if (len < 0 || len > (int)sizeof(sendMsg.data)) {   // ✅ 오버플로 방지
-        __LOG(LOG_ERR, "[IPC][%s:%d] invalid len=%d (max=%zu)", _FILE_, __LINE__, len, sizeof(sendMsg.data));
+    if (!data || len < 0 || len > (int)sizeof(sendMsg.data)) {   // ✅ NULL 체크 + 오버플로 방지
+        __LOG(LOG_ERR, "[IPC][%s:%d] invalid parameters: data=%p, len=%d (max=%zu)", _FILE_, __LINE__, data, len, sizeof(sendMsg.data));
         return -1;
     }
 
