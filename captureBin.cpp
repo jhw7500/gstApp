@@ -95,6 +95,95 @@ unsigned char *compress_frame_to_jpeg(GstSample *sample, long *jpeg_size, Captur
     return jpeg_buf;
 }
 
+// Async capture task structure
+struct _AsyncCaptureTask {
+    GstSample *sample;
+    CaptureData *info;
+    gchar *file_path;
+    gint capture_index;
+};
+
+// Worker thread for async file I/O
+static gpointer capture_worker_thread(gpointer user_data)
+{
+    CaptureData *info = (CaptureData *)user_data;
+
+    __LOG(LOG_NOTICE, "[%s][%s:%d] ch%d worker thread started", CAP_LOG_KEY, _FILE_, __LINE__, info->ch);
+
+    while(info->worker_running || g_async_queue_length(info->task_queue) > 0)
+    {
+        // Wait for task with 100ms timeout
+        AsyncCaptureTask *task = (AsyncCaptureTask *)g_async_queue_timeout_pop(info->task_queue, 100000);
+        if(!task) continue;
+
+        GstBuffer *buffer = NULL;
+        FILE *fp = NULL;
+        GstMapInfo map;
+        gboolean success = FALSE;
+
+        do {
+            if(task->info->enc_type == CAP_ENC_TURBO)
+            {
+                long jpeg_size = 0;
+                unsigned char *jpeg_buf = compress_frame_to_jpeg(task->sample, &jpeg_size, task->info);
+                if(jpeg_buf && jpeg_size > 0) {
+                    fp = fopen(task->file_path, "wb");
+                    if(fp) {
+                        fwrite(jpeg_buf, 1, jpeg_size, fp);
+                        fclose(fp);
+                        __LOG(LOG_INFO, "[%s][%s:%d] ch%d Saved JPEG to %s (%ld bytes)", CAP_LOG_KEY, _FILE_, __LINE__, task->info->ch, task->file_path, jpeg_size);
+                        success = TRUE;
+                    }
+                    else {
+                        __LOG(LOG_ERR, "[%s][%s:%d] ch%d Failed to open file %s for writing", CAP_LOG_KEY, _FILE_, __LINE__, task->info->ch, task->file_path);
+                    }
+                    tjFree(jpeg_buf);
+                }
+                else {
+                    __LOG(LOG_ERR, "[%s][%s:%d] ch%d Failed jpeg_size : %ld", CAP_LOG_KEY, _FILE_, __LINE__, task->info->ch, jpeg_size);
+                }
+            }
+            else
+            {
+                buffer = gst_sample_get_buffer(task->sample);
+                if(!buffer) {
+                    __LOG(LOG_ERR, "[%s][%s:%d] ch%d buffer cannot get from sample", CAP_LOG_KEY, _FILE_, __LINE__, task->info->ch);
+                    break;
+                }
+
+                if(!gst_buffer_map(buffer, &map, GST_MAP_READ)) {
+                    __LOG(LOG_ERR, "[%s][%s:%d] ch%d Failed to map buffer", CAP_LOG_KEY, _FILE_, __LINE__, task->info->ch);
+                    break;
+                }
+
+                fp = fopen(task->file_path, "wb");
+                if(fp) {
+                    fwrite(map.data, 1, map.size, fp);
+                    fclose(fp);
+                    success = TRUE;
+                }
+                else {
+                    __LOG(LOG_ERR, "[%s][%s:%d] ch%d Failed to open file %s for writing", CAP_LOG_KEY, _FILE_, __LINE__, task->info->ch, task->file_path);
+                }
+                gst_buffer_unmap(buffer, &map);
+            }
+        } while(0);
+
+        // Increment counter only after successful write (atomic operation)
+        if(success) {
+            g_atomic_int_inc(&task->info->captureCnt_);
+        }
+
+        // Cleanup
+        if(task->sample) gst_sample_unref(task->sample);
+        if(task->file_path) g_free(task->file_path);
+        g_free(task);
+    }
+
+    __LOG(LOG_NOTICE, "[%s][%s:%d] ch%d worker thread stopped", CAP_LOG_KEY, _FILE_, __LINE__, info->ch);
+    return NULL;
+}
+
 static inline void tiny_sleep_ns(long ns) {
     struct timespec ts; ts.tv_sec = ns / 1000000000L; ts.tv_nsec = ns % 1000000000L;
     nanosleep(&ts, NULL);
@@ -344,30 +433,23 @@ static GstFlowReturn on_new_sample_to_file(GstElement *sink, gpointer userData)
 }
 #endif
 
-static GstFlowReturn on_new_sample_to_file(GstElement *sink, gpointer userData) 
+static GstFlowReturn on_new_sample_to_file(GstElement *sink, gpointer userData)
 {
-    GstSample *sample = NULL;
     CaptureData *info = (CaptureData *)userData;
-    gchar *path = NULL;
-    GstBuffer *buffer = NULL;
-    FILE *fp = NULL;
-    GstMapInfo map;
-
-    //g_print("%s\n", __FUNCTION__);
-    //__LOG(LOG_NOTICE, "[GST][%s:%d] %s", _FILE_, __LINE__, __FUNCTION__);
+    GstSample *sample = NULL;
 
     sample = gst_app_sink_pull_sample(GST_APP_SINK(sink));
     if(!sample) {
-        //__LOG(LOG_CRIT, "[GST][%s:%d] sample cannot get from sink", _FILE_, __LINE__);
         return GST_FLOW_ERROR;
     }
 
-#if 1
-    if(info->captureCnt_ >= info->captureMaxCnt)
+    // Check if capture is complete
+    gint current_cnt = g_atomic_int_get(&info->captureCnt_);
+    if(current_cnt >= info->captureMaxCnt)
     {
         if(info->mode == 2)
         {
-            info->captureCnt_ = 0;
+            g_atomic_int_set(&info->captureCnt_, 0);
             __LOG(LOG_NOTICE, "[%s][%s:%d] ch%d capture cnt reset(tofile)", CAP_LOG_KEY, _FILE_, __LINE__, info->ch);
         }
         else
@@ -376,94 +458,26 @@ static GstFlowReturn on_new_sample_to_file(GstElement *sink, gpointer userData)
             return GST_FLOW_OK;
         }
     }
-#endif
-    
-    do
-    {
-        if(info->enc_type == CAP_ENC_TURBO)
-        {
-            long jpeg_size = 0;
-            unsigned char *jpeg_buf = compress_frame_to_jpeg(sample, &jpeg_size, info);
-            if(jpeg_buf && jpeg_size > 0) {
-                path = g_strdup_printf("%s_%d.%s", info->filePath, info->captureCnt_, info->extention);
-                fp = fopen(path, "wb");
-                if(fp) {
-                    fwrite(jpeg_buf, 1, jpeg_size, fp);
-                    fclose(fp);
-                    __LOG(LOG_INFO, "[%s][%s:%d] ch%d Saved JPEG to %s (%ld bytes)", CAP_LOG_KEY, _FILE_, __LINE__, info->ch, path, jpeg_size);
-                }
-                else{
-                    __LOG(LOG_ERR, "[%s][%s:%d] ch%d Failed to open file %s for writing", CAP_LOG_KEY, _FILE_, __LINE__, info->ch, path);
-                }
-                tjFree(jpeg_buf);
-            }
-            else{
-                __LOG(LOG_ERR, "[%s][%s:%d] ch%d Failed jpeg_size : %ld", CAP_LOG_KEY, _FILE_, __LINE__, info->ch, jpeg_size);
-                goto flow_err;
-            }
-        }
-        else
-        {
-            path = g_strdup_printf("%s_%d.%s", info->filePath, info->captureCnt_, info->extention);
 
-            buffer = gst_sample_get_buffer(sample);
-            if(!buffer)
-            {
-                __LOG(LOG_ERR, "[%s][%s:%d] ch%d buffer cannot get from sample", CAP_LOG_KEY, _FILE_, __LINE__, info->ch);
-                goto flow_err;
-            }
+    // Check queue size limit (prevent memory overflow)
+    gint queue_length = g_async_queue_length(info->task_queue);
+    if(queue_length > 30) {
+        __LOG(LOG_WARNING, "[%s][%s:%d] ch%d queue full (%d), dropping frame", CAP_LOG_KEY, _FILE_, __LINE__, info->ch, queue_length);
+        gst_sample_unref(sample);
+        return GST_FLOW_OK;
+    }
 
-            if(!gst_buffer_map(buffer, &map, GST_MAP_READ))
-            {
-                __LOG(LOG_ERR, "[%s][%s:%d] ch%d Failed to map buffer", CAP_LOG_KEY, _FILE_, __LINE__, info->ch);
-                goto flow_err;
-            }
-#if 1
-            fp = fopen(path, "wb");
-            if(fp)
-            {
-                fwrite(map.data, 1, map.size, fp);
-                fclose(fp);
-            }
-#else
-            int fd = ::open(path, O_WRONLY | O_CREAT | O_TRUNC
-#ifdef O_CLOEXEC
-                            | O_CLOEXEC
-#endif
-                            , 0644);
-            if(fd >= 0)
-            {
-                if (write_all_with_retry(fd, map.data, map.size, /*max_retries=*/4) < 0) {
-                    __LOG(LOG_ERR, "[%s] write fail: %s", CAP_LOG_KEY, strerror(errno));
-                    ::close(fd);
-                    gst_buffer_unmap(buffer, &map);
-                    goto flow_err;
-                }
-            }
-#endif
-            else
-            {
-                __LOG(LOG_ERR, "[%s][%s:%d] ch%d Failed to open file %s for writing", CAP_LOG_KEY, _FILE_, __LINE__, info->ch, path);
-                gst_buffer_unmap(buffer, &map);
-                goto flow_err;
-            }
-            gst_buffer_unmap(buffer, &map);
-        }
-    } while(0);
-    
-//flow_ok:
-    info->captureCnt_++;
-    //__LOG(LOG_NOTICE, "[%s][%s:%d] ch%d captureCnt_ : %d", CAP_LOG_KEY, _FILE_, __LINE__, info->ch, info->captureCnt_);
-    if(path) g_free(path);
-    if(sample) gst_sample_unref(sample);
+    // Create async task (transfer ownership of sample to task)
+    AsyncCaptureTask *task = g_new0(AsyncCaptureTask, 1);
+    task->sample = sample;
+    task->info = info;
+    task->capture_index = g_atomic_int_get(&info->captureCnt_);
+    task->file_path = g_strdup_printf("%s_%d.%s", info->filePath, task->capture_index, info->extention);
+
+    // Push to async queue (non-blocking, fast return)
+    g_async_queue_push(info->task_queue, task);
 
     return GST_FLOW_OK;
-
-flow_err:
-    if(path) g_free(path);
-    if(sample) gst_sample_unref(sample);
-
-    return GST_FLOW_ERROR;
 }
 
 void CaptureBin::setAppsrc(GstElement *appsrc)
@@ -514,11 +528,32 @@ CaptureBin::CaptureBin()
     captureData.debug = FALSE;
     captureData.tjCompressor = NULL;
     captureData.enc_type = CAP_ENC_TURBO;
+
+    // Initialize async queue and worker thread
+    captureData.task_queue = g_async_queue_new();
+    captureData.worker_thread = NULL;
+    captureData.worker_running = FALSE;
 }
 
 CaptureBin::~CaptureBin()
 {
     __LOG(LOG_INFO, "[%s][%s:%d] %s[%d]", CAP_LOG_KEY, _FILE_, __LINE__, __FUNCTION__, captureData.ch);
+
+    // Stop worker thread and wait for completion
+    stopWorker();
+
+    // Clear remaining tasks in queue
+    if(captureData.task_queue) {
+        AsyncCaptureTask *task;
+        while((task = (AsyncCaptureTask *)g_async_queue_try_pop(captureData.task_queue)) != NULL) {
+            if(task->sample) gst_sample_unref(task->sample);
+            if(task->file_path) g_free(task->file_path);
+            g_free(task);
+        }
+        g_async_queue_unref(captureData.task_queue);
+        captureData.task_queue = NULL;
+    }
+
     destroy_compressor(&captureData);
 }
 
@@ -550,6 +585,31 @@ void CaptureBin::setMaxCnt(guint16 maxCnt)
 {
     __LOG(LOG_INFO, "[%s][%s:%d] ch%d setMaxCnt %d", CAP_LOG_KEY, _FILE_, __LINE__, captureData.ch, maxCnt);
     captureData.captureMaxCnt = maxCnt;
+}
+
+void CaptureBin::startWorker()
+{
+    if(!captureData.worker_thread) {
+        captureData.worker_running = TRUE;
+        captureData.worker_thread = g_thread_new("capture_worker", capture_worker_thread, &captureData);
+        __LOG(LOG_NOTICE, "[%s][%s:%d] ch%d worker thread created", CAP_LOG_KEY, _FILE_, __LINE__, captureData.ch);
+    }
+}
+
+void CaptureBin::stopWorker()
+{
+    if(captureData.worker_thread) {
+        captureData.worker_running = FALSE;
+        g_thread_join(captureData.worker_thread);
+        captureData.worker_thread = NULL;
+        __LOG(LOG_NOTICE, "[%s][%s:%d] ch%d worker thread joined", CAP_LOG_KEY, _FILE_, __LINE__, captureData.ch);
+    }
+}
+
+gboolean CaptureBin::isQueueEmpty()
+{
+    if(!captureData.task_queue) return TRUE;
+    return (g_async_queue_length(captureData.task_queue) == 0);
 }
 
 void CaptureBin::setMode(guint8 mode)
@@ -862,6 +922,9 @@ gboolean CaptureBin::init(guint8 ch)
     //g_strdup_printf(captureData.filePath, "/mnt/sd_cam/capture/default-ch%d", captureData.ch);
 
     gst_object_unref(staticPad);
+
+    // Start async worker thread for background file I/O
+    startWorker();
 
     return ret;
 }

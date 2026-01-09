@@ -20,6 +20,9 @@
 #define CAP_LOG_KEY "CAP"
 #define TURBO_JPEG
 
+// Forward declaration for async capture task
+typedef struct _AsyncCaptureTask AsyncCaptureTask;
+
 typedef struct {
     void* arg0;
     void* arg1;
@@ -48,6 +51,10 @@ typedef struct _CaptureData
     const gchar *filePath;
     const gchar *extention;
     gint quality;
+    // Async capture support
+    GAsyncQueue *task_queue;
+    GThread *worker_thread;
+    volatile gboolean worker_running;
 } CaptureData;
 
 typedef struct _CaptureElement
@@ -90,7 +97,10 @@ public :
     void setTimeStampDebug();
     void setAppsrc(GstElement *appsrc);
     void setMaxCnt(guint16 maxCnt);
-    
+    void startWorker();
+    void stopWorker();
+    gboolean isQueueEmpty();
+
 private :
 	
 public :

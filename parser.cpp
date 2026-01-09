@@ -702,15 +702,25 @@ gint ParserClass::cfi_parser(gchar* buffer, gint len, gpointer data)
             if (fps <= 0) {
                 __LOG(LOG_ERR, "[%s][%s:%d] ch%d has invalid FPS=%d", CAP_LOG_KEY, _FILE_, __LINE__, i ,fps);
                 fps = 1; // fallback
-            } 
+            }
             if (cmdArg.cap.timeout <= 100)
             {
                 __LOG(LOG_ERR, "[%s][%s:%d] ch%d has invalid timeout=%d", CAP_LOG_KEY, _FILE_, __LINE__, i ,cmdArg.cap.timeout);
                 cmdArg.cap.timeout = 200; // fallback
             }
+
+            // Calculate timeout for async mode
+            // Base time: time to receive all frames
             timeout_msec[i] = (capMaxCnt * 1000) / fps;
-            timeout_msec[i] = timeout_msec[i]*2 + cmdArg.cap.timeout; // consider multi channel delay
-            __LOG(LOG_INFO, "[%s][%s:%d] ch%d timeout: %lu", CAP_LOG_KEY, _FILE_, __LINE__, i, timeout_msec[i]);
+
+            // Add processing time overhead (compression + file I/O happens in worker thread)
+            // But we still need to account for worst case where worker falls behind
+            guint32 processing_overhead = capMaxCnt * 50; // 50ms per frame (worst case)
+
+            // Add buffer for multi-channel scenarios and system latency
+            timeout_msec[i] = timeout_msec[i] + processing_overhead + cmdArg.cap.timeout;
+
+            __LOG(LOG_INFO, "[%s][%s:%d] ch%d timeout: %lu ms (async mode)", CAP_LOG_KEY, _FILE_, __LINE__, i, timeout_msec[i]);
         }
         else if (_TCfiSendData.data.cmd_id == CTS_CAP_START_REQ_CMD_ID)
         {
@@ -741,10 +751,15 @@ gint ParserClass::cfi_parser(gchar* buffer, gint len, gpointer data)
                 done_cnt = captureBin[i].getCaptureCnt_();
                 if (done_cnt == capMaxCnt)
                 {
-                    __LOG(LOG_NOTICE, "[%s][%s:%d] res : ch%d(%d) OK(%lu) cnt(%d)", CAP_LOG_KEY, _FILE_, __LINE__, i, _TCfiSendData.data.tx_id, chk_cnt, done_cnt);
-                    _TCfiRecvData.data.cap_cnt = done_cnt;
-                    ipcInstance->sendData((char *)_TCfiRecvData.byte, CFI_RECV_DATA_LEN);
-                    ch_en &= ~(1 << i);
+                    // In async mode, also check if worker queue is empty
+                    // to ensure all files are actually written
+                    if(captureBin[i].isQueueEmpty()) {
+                        __LOG(LOG_NOTICE, "[%s][%s:%d] res : ch%d(%d) OK(%lu) cnt(%d)", CAP_LOG_KEY, _FILE_, __LINE__, i, _TCfiSendData.data.tx_id, chk_cnt, done_cnt);
+                        _TCfiRecvData.data.cap_cnt = done_cnt;
+                        ipcInstance->sendData((char *)_TCfiRecvData.byte, CFI_RECV_DATA_LEN);
+                        ch_en &= ~(1 << i);
+                    }
+                    // else: wait for queue to be empty
                 }
                 else if (chk_cnt > timeout_msec[i])
                 {
