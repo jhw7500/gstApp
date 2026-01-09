@@ -630,6 +630,27 @@ gint ParserClass::check_arg()
     return 0;
 }
 
+static void capture_done_callback(guint8 ch, gint completed_count, gpointer user_data) {
+    if (!cmdArg.cap.res_en) return;
+    
+    // user_data stores tx_id directly
+    guint32 tx_id = GPOINTER_TO_UINT(user_data);
+    
+    CIPCInsance* ipcInstance = CIPCInsance::getInstance();
+    
+    TCfiRecvData _TCfiRecvData;
+    memset(_TCfiRecvData.byte, 0, CFI_RECV_DATA_LEN);
+    _TCfiRecvData.data.len = CFI_RECV_DATA_LEN;
+    _TCfiRecvData.data.cmd_id = CFI_CAP_RES_CMD_ID;
+    _TCfiRecvData.data.tx_id = tx_id;
+    _TCfiRecvData.data.channel = 1 << ch;
+    _TCfiRecvData.data.cap_cnt = completed_count;
+    
+    __LOG(LOG_NOTICE, "[%s] Async capture done ch%d tx:%d cnt:%d", CAP_LOG_KEY, ch, tx_id, completed_count);
+    
+    ipcInstance->sendData((char *)_TCfiRecvData.byte, CFI_RECV_DATA_LEN);
+}
+
 gint ParserClass::cfi_parser(gchar* buffer, gint len, gpointer data)
 {
     ThreadArgs *thraedArgs = (ThreadArgs *)data;
@@ -640,16 +661,16 @@ gint ParserClass::cfi_parser(gchar* buffer, gint len, gpointer data)
     CaptureBin *captureBin = (CaptureBin *)(thraedArgs->arg4);
     //CaptureBin *captureBin = (CaptureBin *)(data);
     //ThreadArgs *arg[2];
-    CIPCInsance* ipcInstance = CIPCInsance::getInstance();
+    //CIPCInsance* ipcInstance = CIPCInsance::getInstance();
     
     TCfiSendData _TCfiSendData;
-    TCfiRecvData _TCfiRecvData;
+    //TCfiRecvData _TCfiRecvData;
     guint i = 0;
     gint ret = 0;
-    guint32 chk_cnt = 0;
+    //guint32 chk_cnt = 0;
     guint8 ch_en = 0;
     guint16 capMaxCnt = 0;
-    guint32 timeout_msec[4];
+    guint32 timeout_msec = 0;
     guint8 fps;
 
     //GThread *resThread[4];
@@ -694,10 +715,6 @@ gint ParserClass::cfi_parser(gchar* buffer, gint len, gpointer data)
 
         if (_TCfiSendData.data.cmd_id == CFI_CAP_REQ_CMD_ID)
         {
-            captureBin[i].setFilePath(_TCfiSendData.data.prefix);
-            captureBin[i].startCapture(capMaxCnt);
-            captureBin[i].setMode(1);
-
             fps = captureBin[i].getFPS();
             if (fps <= 0) {
                 __LOG(LOG_ERR, "[%s][%s:%d] ch%d has invalid FPS=%d", CAP_LOG_KEY, _FILE_, __LINE__, i ,fps);
@@ -710,73 +727,33 @@ gint ParserClass::cfi_parser(gchar* buffer, gint len, gpointer data)
             }
 
             // Calculate timeout for async mode
-            // Base time: time to receive all frames
-            timeout_msec[i] = (capMaxCnt * 1000) / fps;
+            timeout_msec = (capMaxCnt * 1000) / fps;
+            guint32 processing_overhead = capMaxCnt * 50; 
+            timeout_msec = timeout_msec + processing_overhead + cmdArg.cap.timeout;
 
-            // Add processing time overhead (compression + file I/O happens in worker thread)
-            // But we still need to account for worst case where worker falls behind
-            guint32 processing_overhead = capMaxCnt * 50; // 50ms per frame (worst case)
-
-            // Add buffer for multi-channel scenarios and system latency
-            timeout_msec[i] = timeout_msec[i] + processing_overhead + cmdArg.cap.timeout;
-
-            __LOG(LOG_INFO, "[%s][%s:%d] ch%d timeout: %lu ms (async mode)", CAP_LOG_KEY, _FILE_, __LINE__, i, timeout_msec[i]);
+            // Register callback once (safe to call multiple times)
+            captureBin[i].setCompleteCallback(capture_done_callback, NULL);
+            
+            gpointer callback_data = NULL;
+            if(cmdArg.cap.res_en) {
+                 // Pass tx_id directly as pointer
+                 callback_data = GUINT_TO_POINTER(_TCfiSendData.data.tx_id);
+            }
+            
+            // Queue the request with timeout
+            captureBin[i].addCaptureRequest(capMaxCnt, (gchar *)_TCfiSendData.data.prefix, callback_data, 1, (gint)timeout_msec);
         }
         else if (_TCfiSendData.data.cmd_id == CTS_CAP_START_REQ_CMD_ID)
         {
-            captureBin[i].setFilePath(_TCfiSendData.data.prefix);
-            captureBin[i].startCapture(capMaxCnt);
-            captureBin[i].setMode(2);
+            // Map to request queue with mode 2
+            captureBin[i].addCaptureRequest(capMaxCnt, (gchar *)_TCfiSendData.data.prefix, NULL, 2, G_MAXINT);
         }
         else if (_TCfiSendData.data.cmd_id == CTS_CAP_STOP_REQ_CMD_ID)
         {
             captureBin[i].stopCapture();
-            captureBin[i].setMode(0);
         }
     }
 
-    if(cmdArg.cap.res_en && _TCfiSendData.data.cmd_id == CFI_CAP_REQ_CMD_ID)
-    {
-        //memset(chk_cnt, 0, sizeof(chk_cnt));
-        gint done_cnt = 0;
-        memcpy(_TCfiRecvData.byte, _TCfiSendData.byte, CFI_RECV_DATA_LEN);
-        _TCfiRecvData.data.len = CFI_RECV_DATA_LEN;
-        _TCfiRecvData.data.cmd_id = CFI_CAP_RES_CMD_ID;
-        do
-        {
-            for(i=0; i<MAX_CHANNEL; i++)
-            {
-                if((ch_en>>i & 0x1) != 0x01) continue;
-                _TCfiRecvData.data.channel = 1 << i;
-                done_cnt = captureBin[i].getCaptureCnt_();
-                if (done_cnt == capMaxCnt)
-                {
-                    // In async mode, also check if worker queue is empty
-                    // to ensure all files are actually written
-                    if(captureBin[i].isQueueEmpty()) {
-                        __LOG(LOG_NOTICE, "[%s][%s:%d] res : ch%d(%d) OK(%lu) cnt(%d)", CAP_LOG_KEY, _FILE_, __LINE__, i, _TCfiSendData.data.tx_id, chk_cnt, done_cnt);
-                        _TCfiRecvData.data.cap_cnt = done_cnt;
-                        ipcInstance->sendData((char *)_TCfiRecvData.byte, CFI_RECV_DATA_LEN);
-                        ch_en &= ~(1 << i);
-                    }
-                    // else: wait for queue to be empty
-                }
-                else if (chk_cnt > timeout_msec[i])
-                {
-                    __LOG(LOG_ERR, "[%s][%s:%d] res : ch%d(%d) NG(%u<%u) cnt(%d<%d)", CAP_LOG_KEY, _FILE_, __LINE__, i, _TCfiSendData.data.tx_id, timeout_msec[i], chk_cnt, done_cnt, capMaxCnt);
-                    //_TCfiSendData.data.cap_cnt = (done_cnt < capMaxCnt) ? (capMaxCnt - done_cnt) : 0;
-                    _TCfiRecvData.data.cap_cnt = done_cnt;
-                    ipcInstance->sendData((char *)_TCfiRecvData.byte, CFI_RECV_DATA_LEN);
-                    captureBin[i].stopCapture();
-                    ch_en &= ~(1 << i);
-                    ret = -2;
-                }
-            }
-            g_usleep(1000);
-            chk_cnt++;
-        } while(ch_en != 0);
-    }
-    //__LOG(LOG_NOTICE, "[%s][%s:%d] chk_cnt : %d, %u, %lu", CAP_LOG_KEY, _FILE_, __LINE__, chk_cnt, chk_cnt, chk_cnt);
     return ret;
 }
 
