@@ -86,7 +86,8 @@
 #define MAX_FPS_HD  240
 #define MAX_FPS_FHD 180
 
-#define CFI_DATA_LEN        50
+#define CFI_SEND_DATA_LEN   50
+#define CFI_RECV_DATA_LEN   18
 #define CFI_VERSION         0x300
 #define CFI_CAP_REQ_CMD_ID  0x300
 #define CFI_CAP_RES_CMD_ID  0x301
@@ -94,8 +95,8 @@
 #define CTS_CAP_STOP_REQ_CMD_ID 0x901
 
 #pragma pack(push, 1)
-union TCfiData {
-  guint8 byte[CFI_DATA_LEN];
+union TCfiSendData {
+  guint8 byte[CFI_SEND_DATA_LEN];
   struct THeader {
     guint16 len;
 	  guint16 ver;
@@ -106,6 +107,20 @@ union TCfiData {
     guint8 reserved;
     guint16 cap_cnt;
     guint8 prefix[32];
+  } data;
+};
+
+union TCfiRecvData {
+  guint8 byte[CFI_RECV_DATA_LEN];
+  struct THeader {
+    guint16 len;
+	  guint16 ver;
+    guint8 sid[6];
+    guint16 cmd_id;
+    guint16 tx_id;
+    guint8 channel;
+    guint8 reserved;
+    guint16 cap_cnt;
   } data;
 };
 #pragma pack(pop)

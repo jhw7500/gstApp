@@ -97,41 +97,75 @@ int CIPCInsance::destroy()
     return ret;
 }
 
-int CIPCInsance::sendData(char* data, int len)
+static guint16 rd_le16(const guint8 *p)
 {
-	int ret = 0;
-	int msg_id = msgget((key_t)MSG_Q_RES_KEY, IPC_CREAT | 0666);
-	
-	if (msg_id == -1) {
-		ret = -1;
-		perror("msgget fail");
-		__LOG(LOG_ERR, "[IPC][%s:%d] ret:%d", _FILE_, __LINE__, ret);
-		return ret;
-	}
+    return (guint16)p[0] | ((guint16 )p[1] << 8);
+}
 
-	IpcBuffer sendMsg;
-	sendMsg.type = PMSG_TYPE_IPC_CFI;
-
-	memcpy(sendMsg.data, data, len);
-	ret = msgsnd(msg_id, &sendMsg, len, IPC_NOWAIT);
-
-	if (ret < 0) {
-		perror("msgsnd fail");
-		__LOG(LOG_ERR, "[IPC][%s:%d] ret:%d", _FILE_, __LINE__, ret);
-		return ret;
-	} else {
-		__LOG(LOG_INFO, "[IPC][%s:%d] send data msg_id(%d) byte  %d", _FILE_, __LINE__, msg_id, len);
-	}
-
-    if(cmdArg.log_level > LOG_INFO)
-    {
-        len = sizeof(sendMsg.data) / sizeof(sendMsg.data[0]);
-        char buffer[256];
-        convert_data_to_hex(sendMsg.data, len, buffer, sizeof(buffer));
-        __LOG(LOG_DEBUG, "[IPC][%s:%d] data : %s", _FILE_, __LINE__, buffer);
+static void dump_cfi_header(const guint8 *buf, size_t len)
+{
+    if (len < 18) {
+        printf("CFI hdr: too short (%zu)\n", len);
+        return;
     }
 
-	return 0;
+    guint16 LEN   = rd_le16(buf + 0);
+    guint16 VER   = rd_le16(buf + 2);
+
+    char SID[7];
+    memcpy(SID, buf + 4, 6);
+    SID[6] = '\0';
+
+    guint16 CMD   = rd_le16(buf + 10);
+    guint16 TXID  = rd_le16(buf + 12);
+    guint8  CH    = buf[14];
+    guint8  RSV   = buf[15];
+    guint16 REQ   = rd_le16(buf + 16);
+
+    __LOG(LOG_NOTICE, "[CFG][%s:%d] CFI hdr: LEN=%u (0x%04x) VER=0x%04x SID='%s' CMD=0x%04x TXID=%u CH=0x%02x RSV=0x%02x REQ=%u", _FILE_, __LINE__, LEN, LEN, VER, SID, CMD, TXID, CH, RSV, REQ);
+}
+
+int CIPCInsance::sendData(char* data, int len)
+{
+    int msg_id = msgget((key_t)MSG_Q_RES_KEY, IPC_CREAT | 0666);
+    if (msg_id == -1) {
+        perror("msgget fail");
+        __LOG(LOG_ERR, "[IPC][%s:%d] msgget fail", _FILE_, __LINE__);
+        return -1;
+    }
+
+    IpcBuffer sendMsg;
+    memset(&sendMsg, 0, sizeof(sendMsg));               // ✅ 잔여 쓰레기 제거
+    sendMsg.type = PMSG_TYPE_IPC_CFI;
+
+    if (len < 0 || len > (int)sizeof(sendMsg.data)) {   // ✅ 오버플로 방지
+        __LOG(LOG_ERR, "[IPC][%s:%d] invalid len=%d (max=%zu)", _FILE_, __LINE__, len, sizeof(sendMsg.data));
+        return -1;
+    }
+
+    memcpy(sendMsg.data, data, len);
+
+    // ✅ 전송 전에 헤더 해석(원하면)
+    //dump_cfi_header((const guint8 *)sendMsg.data, (size_t)len);
+
+    if (cmdArg.log_level > LOG_INFO)
+    {
+        char buffer[256];
+        convert_data_to_hex(sendMsg.data, len, buffer, sizeof(buffer)); // ✅ len만큼만
+        __LOG(LOG_DEBUG, "[IPC][%s:%d] len=%d data=%s", _FILE_, __LINE__, len, buffer);
+    }
+
+    __LOG(LOG_INFO, "[IPC][%s:%d] send msg_id=%d byte=%d", _FILE_, __LINE__, msg_id, len);
+
+    int ret = msgsnd(msg_id, &sendMsg, len, IPC_NOWAIT);
+    if (ret < 0) {
+        perror("msgsnd fail");
+        __LOG(LOG_ERR, "[IPC][%s:%d] msgsnd fail", _FILE_, __LINE__);
+        return -1;
+    }
+
+
+    return 0;
 }
 
 int CIPCInsance::waitingRecv(void* pData)

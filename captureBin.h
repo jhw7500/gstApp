@@ -89,7 +89,8 @@ public :
     gboolean removeBinToPipe(GstElement *pipe);
     void setTimeStampDebug();
     void setAppsrc(GstElement *appsrc);
-
+    void setMaxCnt(guint16 maxCnt);
+    
 private :
 	
 public :

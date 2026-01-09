@@ -176,19 +176,27 @@ static GstFlowReturn on_new_sample_from_sink(GstElement *sink, gpointer userData
     
     //g_print("pull\n");
 #if 1
-    if(info->captureCnt++ >= info->captureMaxCnt)
+    if(info->mode == 0) {
+        gst_sample_unref(sample);
+        return GST_FLOW_OK;
+    }
+
+    if(info->captureCnt > info->captureMaxCnt)
     {
-        if(info->mode == 1)
+        if(info->mode == 2)
         {
             info->captureCnt = 0;
             __LOG(LOG_NOTICE, "[%s][%s:%d] ch%d capture cnt reset(fromsink)", CAP_LOG_KEY, _FILE_, __LINE__, info->ch);
         }
         else
         {
+            //g_usleep(1000000);
             gst_sample_unref(sample);
             return GST_FLOW_OK;
         }
     }
+    info->captureCnt++;
+    __LOG(LOG_INFO, "[%s][%s:%d] ch%d capture cnt : %d", CAP_LOG_KEY, _FILE_, __LINE__, info->ch, info->captureCnt);
 #endif
     
 #if 0
@@ -351,19 +359,22 @@ static GstFlowReturn on_new_sample_to_file(GstElement *sink, gpointer userData)
     sample = gst_app_sink_pull_sample(GST_APP_SINK(sink));
     if(!sample) {
         //__LOG(LOG_CRIT, "[GST][%s:%d] sample cannot get from sink", _FILE_, __LINE__);
-        goto flow_err;
+        return GST_FLOW_ERROR;
     }
 
 #if 1
     if(info->captureCnt_ >= info->captureMaxCnt)
     {
-        if(info->mode == 1)
+        if(info->mode == 2)
         {
             info->captureCnt_ = 0;
             __LOG(LOG_NOTICE, "[%s][%s:%d] ch%d capture cnt reset(tofile)", CAP_LOG_KEY, _FILE_, __LINE__, info->ch);
         }
         else
-            goto flow_ok;
+        {
+            gst_sample_unref(sample);
+            return GST_FLOW_OK;
+        }
     }
 #endif
     
@@ -439,9 +450,10 @@ static GstFlowReturn on_new_sample_to_file(GstElement *sink, gpointer userData)
             gst_buffer_unmap(buffer, &map);
         }
     } while(0);
-
-flow_ok:
+    
+//flow_ok:
     info->captureCnt_++;
+    //__LOG(LOG_NOTICE, "[%s][%s:%d] ch%d captureCnt_ : %d", CAP_LOG_KEY, _FILE_, __LINE__, info->ch, info->captureCnt_);
     if(path) g_free(path);
     if(sample) gst_sample_unref(sample);
 
@@ -526,11 +538,18 @@ gint CaptureBin::startCapture(gint maxCnt)
 gint CaptureBin::stopCapture()
 {
     __LOG(LOG_NOTICE, "[%s][%s:%d] %s", CAP_LOG_KEY, _FILE_, __LINE__, __FUNCTION__);
-    captureData.captureCnt = cmdArg.cap.maxCnt;
-    captureData.captureCnt_ = cmdArg.cap.maxCnt;
+    captureData.captureMaxCnt = cmdArg.cap.maxCnt;
+    captureData.captureCnt = 0;
+    captureData.captureCnt_ = 0;
     captureData.mode = 0;
 
     return 1;
+}
+
+void CaptureBin::setMaxCnt(guint16 maxCnt)
+{
+    __LOG(LOG_INFO, "[%s][%s:%d] ch%d setMaxCnt %d", CAP_LOG_KEY, _FILE_, __LINE__, captureData.ch, maxCnt);
+    captureData.captureMaxCnt = maxCnt;
 }
 
 void CaptureBin::setMode(guint8 mode)
