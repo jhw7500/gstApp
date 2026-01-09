@@ -471,7 +471,9 @@ static GstFlowReturn on_new_sample_to_file(GstElement *sink, gpointer userData)
     AsyncCaptureTask *task = g_new0(AsyncCaptureTask, 1);
     task->sample = sample;
     task->info = info;
-    task->capture_index = g_atomic_int_get(&info->captureCnt_);
+    // Use push_index which is incremented atomically at push time (not after file write)
+    // This ensures sequential file indexing regardless of worker thread processing order
+    task->capture_index = g_atomic_int_add(&info->push_index, 1);
     task->file_path = g_strdup_printf("%s_%d.%s", info->filePath, task->capture_index, info->extention);
 
     // Push to async queue (non-blocking, fast return)
@@ -533,6 +535,7 @@ CaptureBin::CaptureBin()
     captureData.task_queue = g_async_queue_new();
     captureData.worker_thread = NULL;
     captureData.worker_running = FALSE;
+    captureData.push_index = 0;
 }
 
 CaptureBin::~CaptureBin()
@@ -565,6 +568,7 @@ gint CaptureBin::startCapture(gint maxCnt)
     captureData.captureMaxCnt = maxCnt;
     captureData.captureCnt = 0;
     captureData.captureCnt_ = 0;
+    g_atomic_int_set(&captureData.push_index, 0);  // Reset push index for new capture
     __LOG(LOG_INFO, "[%s][%s:%d] %s cnt:%d, maxCnt:%d", CAP_LOG_KEY, _FILE_, __LINE__, __FUNCTION__, captureData.captureCnt, captureData.captureMaxCnt);
 
     return 1;

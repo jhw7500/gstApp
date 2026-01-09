@@ -55,6 +55,7 @@ typedef struct _CaptureData
     GAsyncQueue *task_queue;
     GThread *worker_thread;
     volatile gboolean worker_running;
+    volatile gint push_index;  // Index for pushed frames (incremented at push time)
 } CaptureData;
 
 typedef struct _CaptureElement
