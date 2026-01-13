@@ -485,6 +485,11 @@ int safe_mkdir_p(const char *path, mode_t mode)
         return -1;
     }
 
+    if (strlen(path) >= sizeof(tmp)) {
+        __LOG(LOG_ERR, "[UTIL][%s:%d] Path too long: %s", _FILE_, __LINE__, path);
+        return -1;
+    }
+
     snprintf(tmp, sizeof(tmp), "%s", path);
     len = strlen(tmp);
 
@@ -532,6 +537,10 @@ int safe_exec_i2c(const char *cmd, int bus, int addr, int reg, int value, char *
     pid = fork();
     if (pid == -1) {
         __LOG(LOG_ERR, "[UTIL][%s:%d] Failed to fork", _FILE_, __LINE__);
+        if (output && output_size > 0) {
+            close(pipefd[0]);
+            close(pipefd[1]);
+        }
         return -1;
     }
 
@@ -541,7 +550,10 @@ int safe_exec_i2c(const char *cmd, int bus, int addr, int reg, int value, char *
 
         if (output && output_size > 0) {
             close(pipefd[0]);
-            dup2(pipefd[1], STDOUT_FILENO);
+            if (dup2(pipefd[1], STDOUT_FILENO) == -1) {
+                close(pipefd[1]);
+                _exit(126);
+            }
             close(pipefd[1]);
         }
 
@@ -567,12 +579,24 @@ int safe_exec_i2c(const char *cmd, int bus, int addr, int reg, int value, char *
     if (output && output_size > 0) {
         close(pipefd[1]);
         ssize_t n = read(pipefd[0], output, output_size - 1);
-        if (n > 0) output[n] = '\0';
-        else output[0] = '\0';
+        if (n > 0) {
+            output[n] = '\0';
+        } else {
+            output[0] = '\0';
+            if (n < 0) {
+                __LOG(LOG_ERR, "[UTIL][%s:%d] Failed to read pipe", _FILE_, __LINE__);
+            }
+        }
         close(pipefd[0]);
     }
 
-    waitpid(pid, &status, 0);
+    while (waitpid(pid, &status, 0) == -1) {
+        if (errno == EINTR) {
+            continue;
+        }
+        __LOG(LOG_ERR, "[UTIL][%s:%d] Failed to wait for child", _FILE_, __LINE__);
+        return -1;
+    }
 
     if (WIFEXITED(status)) {
         return WEXITSTATUS(status);
