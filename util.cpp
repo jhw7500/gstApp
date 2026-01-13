@@ -479,6 +479,12 @@ int safe_mkdir_p(const char *path, mode_t mode)
     char *p = NULL;
     size_t len;
 
+    // Guard against NULL or empty path
+    if (path == NULL || path[0] == '\0') {
+        __LOG(LOG_ERR, "[UTIL][%s:%d] Invalid path: NULL or empty", _FILE_, __LINE__);
+        return -1;
+    }
+
     snprintf(tmp, sizeof(tmp), "%s", path);
     len = strlen(tmp);
 

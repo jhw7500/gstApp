@@ -303,12 +303,14 @@ gboolean bus_message_parse(GstBus *bus, GstMessage *message, gpointer data)
             if(cmdArg.stream_en[STREAM_REC] || cmdArg.audio_en)
             {
                 // Use safe_write_file instead of system("echo ...")
-                gchar *date_str = g_date_time_format(g_date_time_new_now_local(), "%Y%m%d %H:%M:%S");
+                GDateTime *datetime = g_date_time_new_now_local();
+                gchar *date_str = g_date_time_format(datetime, "%Y%m%d %H:%M:%S");
                 if(safe_write_file(DEFAULT_START_VIDEO_TIME_PATH, date_str) < 0)
                     __LOG(LOG_ERR, "[GST][%s:%d] Failed to write start time to %s in %s", _FILE_, __LINE__, DEFAULT_START_VIDEO_TIME_PATH, __FUNCTION__);
                 else
                     __LOG(LOG_NOTICE, "[GST][%s:%d] Wrote start time to %s in %s", _FILE_, __LINE__, DEFAULT_START_VIDEO_TIME_PATH, __FUNCTION__);
                 g_free(date_str);
+                g_date_time_unref(datetime);
             }
 #if 0
             FILE *fp = NULL;
@@ -466,13 +468,15 @@ static void splitCheck(gpointer data, guint8 startSec)
             __LOG(LOG_ERR, "[GST][%s:%d] split time check error : splitMax : %d, splitMin : %d", _FILE_, __LINE__, splitMax, splitMin);
 
             // Use safe_write_file instead of system("echo ...")
-            gchar *date_str = g_date_time_format(g_date_time_new_now_local(), "%Y%m%d %H:%M:%S");
+            GDateTime *split_datetime = g_date_time_new_now_local();
+            gchar *date_str = g_date_time_format(split_datetime, "%Y%m%d %H:%M:%S");
             if (safe_write_file(DEFAULT_START_VIDEO_TIME_PATH, date_str) < 0)
                 __LOG(LOG_ERR, "[GST][%s:%d] Failed to write split time to %s in %s", _FILE_, __LINE__, DEFAULT_START_VIDEO_TIME_PATH, __FUNCTION__);
             else
                 __LOG(LOG_NOTICE, "[GST][%s:%d] Wrote split time to %s in %s", _FILE_, __LINE__, DEFAULT_START_VIDEO_TIME_PATH, __FUNCTION__);
 
             g_free(date_str);
+            g_date_time_unref(split_datetime);
 
             __LOG(LOG_NOTICE, "[GST][%s:%d] split now", _FILE_, __LINE__);
             for (i = 0; i < MAX_CHANNEL; i++)
@@ -517,13 +521,18 @@ static gboolean setSRT(gpointer arg)
     static gint index = 0;
     guint8 i;
     gchar* text;
-    //GDateTime *datetime = g_date_time_new_now_local();
     //text = g_strdup_printf("2023-01-27 22:40:02 VD3001, M, A, 34049/174014(1000000), 1298.5678mm/s, 300mV, (?)400mA, 80.5%/71.5%, E696, Level 7, Level 4");
 #ifdef TIMEOVERLAY
     text = g_strdup_printf("VD3001, M, A, 34049/174014(1000000), \n1298.5678mm/s, %dmV, (?)400mA, 80.5%/71.5%, E696, Level 7, Level 4", index++);
 #else
-    text = g_strdup_printf("%s VD3001, M, A, 34049/174014(1000000), \n1298.5678mm/s, %dmV, (?)400mA, 80.5%%/71.5%%, E696, Level 7, Level 4", \
-                        g_date_time_format(g_date_time_new_now_local(), "%Y-%m-%d %H:%M:%S"), index++);
+    {
+        GDateTime *overlay_datetime = g_date_time_new_now_local();
+        gchar *overlay_date_str = g_date_time_format(overlay_datetime, "%Y-%m-%d %H:%M:%S");
+        text = g_strdup_printf("%s VD3001, M, A, 34049/174014(1000000), \n1298.5678mm/s, %dmV, (?)400mA, 80.5%%/71.5%%, E696, Level 7, Level 4", \
+                            overlay_date_str, index++);
+        g_free(overlay_date_str);
+        g_date_time_unref(overlay_datetime);
+    }
 #endif
     //__LOG(LOG_DEBUG, "[GST][%s:%d] %s (index : %d, ch : %d)", _FILE_, __LINE__, __FUNCTION__, info->index, info->ch);
     //g_object_set(info->timeoveraly, "text", g_strdup_printf("test srt num(%d)", i++), NULL);
@@ -560,7 +569,7 @@ gint getPasswdWithAES(CmdArg *arg)
 		if(ret < 0) {
 			__LOG(LOG_ERR, "[CFG][%s:%d] Error change passwd .. ", _FILE_, __LINE__);
 		}
-		arg->rtsp_passwd = DEFAULT_RTSP_PASSWD;
+		arg->rtsp_passwd = strdup(DEFAULT_RTSP_PASSWD);
 	}
 	else
 		arg->rtsp_passwd = strdup(passwd);
@@ -754,7 +763,15 @@ gint main(gint argc, gchar *argv[])
     threadArgs->arg5 = encoderBin;
 
     //pipeline = gst_pipeline_new("test-pipeline");
-    pipeline = gst_pipeline_new(g_strdup_printf("%s_%s", cmdArg.appname, g_date_time_format(g_date_time_new_now_local(), "%Y%m%d_%H%M%S")));
+    {
+        GDateTime *pipe_datetime = g_date_time_new_now_local();
+        gchar *pipe_date_str = g_date_time_format(pipe_datetime, "%Y%m%d_%H%M%S");
+        gchar *pipe_name = g_strdup_printf("%s_%s", cmdArg.appname, pipe_date_str);
+        pipeline = gst_pipeline_new(pipe_name);
+        g_free(pipe_name);
+        g_free(pipe_date_str);
+        g_date_time_unref(pipe_datetime);
+    }
     //pipeline2 = gst_pipeline_new(g_strdup_printf("%s2_%s", cmdArg.appname, g_date_time_format(g_date_time_new_now_local(), "%Y%m%d_%H%M%S")));
     //muxBin.init();
     //g_print("width : %d\n", cmdArg.res[cmdArg.resolution_mode].height);

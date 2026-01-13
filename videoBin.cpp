@@ -145,8 +145,12 @@ gboolean VideoBin::addCrop(CropDir dir)
     g_object_set(be.overlay[dir], "font-desc", "Times New Roman Italic, 16", NULL);
     g_object_set(be.overlay[dir], "datetime-format", "%Y-%m-%d %H:%M:%S", NULL);
     g_object_set(be.overlay[dir], "show-times-as-dates", TRUE, NULL);
-    g_object_set(be.overlay[dir], "datetime-epoch", g_date_time_new_now_local(), NULL);
-    g_object_set(be.queue[dir], "max-size-time", GST_SECOND, "max-size-buffers", cmdArg.main_fps[videoData.csi], "leaky", 1, NULL);
+    {
+        GDateTime *epoch_datetime = g_date_time_new_now_local();
+        g_object_set(be.overlay[dir], "datetime-epoch", epoch_datetime, NULL);
+        g_date_time_unref(epoch_datetime);
+    }
+    g_object_set(be.queue[dir], "max-size-time", 300*GST_MSECOND, "max-size-buffers", cmdArg.main_fps[videoData.csi], "leaky", 1, NULL);
 
     GstCaps *caps = gst_caps_new_simple("video/x-raw",
                                         "width", G_TYPE_INT, cmdArg.width,
@@ -230,7 +234,7 @@ gboolean VideoBin::init(guint8 csiNum)
     //g_object_set(be.deinterlace, "mode", 1, NULL);
     //g_object_set(be.src, "pixel-aspect-ratio", "1/1", NULL);
     g_signal_connect(be.src, "prepare-format", G_CALLBACK(prepare_format), &csiNum);
-    g_object_set(be.queue_main, "max-size-time", GST_SECOND, "max-size-buffers", cmdArg.main_fps[csiNum], "leaky", LEAKY_DOWNSTREAM, NULL);
+    g_object_set(be.queue_main, "max-size-time", 300*GST_MSECOND, "max-size-buffers", cmdArg.main_fps[csiNum], "leaky", LEAKY_DOWNSTREAM, NULL);
     g_object_set(be.watchdog, "timeout", wdt_timeout, NULL);
 
     if(cmdArg.levelMode == MODE_TEST)
