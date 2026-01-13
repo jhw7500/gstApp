@@ -206,6 +206,11 @@ void makeDir(const char* path);
 void convert_data_to_hex(const char *data, int len, char *buffer, int buffer_size);
 int check_sd_mount_flag(void);
 
+// Safe alternatives to system() calls
+int safe_write_file(const char *path, const char *content);
+int safe_mkdir_p(const char *path, mode_t mode);
+int safe_exec_i2c(const char *cmd, int bus, int addr, int reg, int value, char *output, size_t output_size);
+
 #define __LOG(opt, fmt, args...) do { mylog(opt, (char*)fmt, ##args); } while(0)
 #define CHARNEXT(x,y)    (strrchr(x,y)? strrchr(x,y)+1:x)
 #define _FILE_  CHARNEXT(__FILE__, '/')

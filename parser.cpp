@@ -20,7 +20,6 @@
 
 #define LOG_KEY "CFG"
 
-
 void ParserClass::init_arg(gchar *argv)
 {
     //g_print("%s\n", __FUNCTION__);
@@ -33,7 +32,7 @@ void ParserClass::init_arg(gchar *argv)
     arg.duration = DEFUALT_DURATION;
     arg.rtsp_port = DEFAULT_RTSP_PORT;
     arg.rtsp_id = DEFAULT_RTSP_ID;
-    arg.rtsp_passwd = DEFAULT_RTSP_PASSWD;
+
     arg.main_fps[CSI_1] = DEFAULT_MAIN_FPS;
     arg.main_fps[CSI_2] = DEFAULT_MAIN_FPS;
 
@@ -506,33 +505,34 @@ gint ParserClass::arg_parser(int *argc, char **argv[])
         arg.cam[i].vflip = (arg.ch_rotate>>(i*2+1))&0x01;
     }
     
-    sprintf(str, "echo %d > %s", arg.ch_enable&0x03, DEFAULT_ENABLE_PATH_01);
-    __LOG(LOG_INFO, "[%s][%s:%d] %s", LOG_KEY, _FILE_, __LINE__, str);
-    ret = system(str);
+    // Use safe_write_file instead of system("echo ... > ...")
+    sprintf(str, "%d", arg.ch_enable&0x03);
+    __LOG(LOG_INFO, "[%s][%s:%d] Writing %s to %s", LOG_KEY, _FILE_, __LINE__, str, DEFAULT_ENABLE_PATH_01);
+    ret = safe_write_file(DEFAULT_ENABLE_PATH_01, str);
     if (ret < 0) {
         __LOG(LOG_CRIT, "[%s][%s:%d] ret:%d", LOG_KEY, _FILE_, __LINE__, ret);
         return ret;
     }
 
-    sprintf(str, "echo %d > %s", (arg.ch_enable>>2)&0x03, DEFAULT_ENABLE_PATH_23);
-    __LOG(LOG_INFO, "[%s][%s:%d] %s", LOG_KEY, _FILE_, __LINE__, str);
-    ret = system(str);
+    sprintf(str, "%d", (arg.ch_enable>>2)&0x03);
+    __LOG(LOG_INFO, "[%s][%s:%d] Writing %s to %s", LOG_KEY, _FILE_, __LINE__, str, DEFAULT_ENABLE_PATH_23);
+    ret = safe_write_file(DEFAULT_ENABLE_PATH_23, str);
     if (ret < 0) {
         __LOG(LOG_CRIT, "[%s][%s:%d] ret:%d", LOG_KEY, _FILE_, __LINE__, ret);
         return ret;
     }
 
-    sprintf(str, "echo %d > %s", arg.ch_rotate&0x0f, DEFAULT_ROTATE_PATH_01);
-    __LOG(LOG_INFO, "[%s][%s:%d] %s", LOG_KEY, _FILE_, __LINE__, str);
-    ret = system(str);
+    sprintf(str, "%d", arg.ch_rotate&0x0f);
+    __LOG(LOG_INFO, "[%s][%s:%d] Writing %s to %s", LOG_KEY, _FILE_, __LINE__, str, DEFAULT_ROTATE_PATH_01);
+    ret = safe_write_file(DEFAULT_ROTATE_PATH_01, str);
     if (ret < 0) {
         __LOG(LOG_CRIT, "[%s][%s:%d] ret:%d", LOG_KEY, _FILE_, __LINE__, ret);
         return ret;
     }
 
-    sprintf(str, "echo %d > %s", (arg.ch_rotate>>4)&0x0f, DEFAULT_ROTATE_PATH_23);
-    __LOG(LOG_INFO, "[%s][%s:%d] %s", LOG_KEY, _FILE_, __LINE__, str);
-    ret = system(str);
+    sprintf(str, "%d", (arg.ch_rotate>>4)&0x0f);
+    __LOG(LOG_INFO, "[%s][%s:%d] Writing %s to %s", LOG_KEY, _FILE_, __LINE__, str, DEFAULT_ROTATE_PATH_23);
+    ret = safe_write_file(DEFAULT_ROTATE_PATH_23, str);
     if (ret < 0) {
         __LOG(LOG_CRIT, "[%s][%s:%d] ret:%d", LOG_KEY, _FILE_, __LINE__, ret);
         return ret;
@@ -590,8 +590,11 @@ gint ParserClass::check_arg()
             arg.cap.queue_size = DEFAULT_CAPTURE_QUEUE_SIZE;
         }
 
-        if(system(g_strdup_printf("mkdir -p %s/%s", cmdArg.mntDir, cmdArg.cap.path)) < 0)
-            __LOG(LOG_ERR, "[CFG][%s:%d] err mkdir", __FILE__, __LINE__);
+        // Use safe_mkdir_p instead of system("mkdir -p ...")
+        gchar *cap_dir = g_strdup_printf("%s/%s", cmdArg.mntDir, cmdArg.cap.path);
+        if(safe_mkdir_p(cap_dir, 0755) < 0)
+            __LOG(LOG_ERR, "[CFG][%s:%d] err mkdir: %s", __FILE__, __LINE__, cap_dir);
+        g_free(cap_dir);
 
         __LOG(LOG_NOTICE, "[%s][%s:%d] capture ch0 fps:%d, ch1 fps:%d, ch2 fps:%d, ch3 fps:%d", LOG_KEY, _FILE_, __LINE__, \
                             arg.fps[STREAM_CAP][0], arg.fps[STREAM_CAP][1], arg.fps[STREAM_CAP][2], arg.fps[STREAM_CAP][3]);  
@@ -655,7 +658,7 @@ static void capture_done_callback(guint8 ch, gint completed_count, gpointer user
     _TCfiRecvData.data.channel = 1 << ch;
     _TCfiRecvData.data.cap_cnt = completed_count;
     
-    __LOG(LOG_NOTICE, "[%s] Async capture done ch%d tx:%d cnt:%d", CAP_LOG_KEY, ch, tx_id, completed_count);
+    __LOG(LOG_NOTICE, "[%s][%s:%d] Async capture done ch%d tx:%d cnt:%d", CAP_LOG_KEY, _FILE_, __LINE__, ch, tx_id, completed_count);
     
     ipcInstance->sendData((char *)_TCfiRecvData.byte, CFI_RECV_DATA_LEN);
 }
@@ -790,17 +793,7 @@ gint ParserClass::cmd_parser(gchar* buffer, gint len, gpointer data)
     //__LOG(LOG_NOTICE, "[TCP][%s:%d] Input: %s", _FILE_, __LINE__, buffer);
 
     token = strtok(buffer, " ");
-    if (compareBuf(token, "cmd", 3))
-    {
-        token = strtok(NULL, "\0");
-        int ret;
-        gchar* str = g_strdup_printf("bash -ic 'source /root/.bashrc; %s'", token);
-        ret = system(str);
-        if(ret) g_print("cmd error ret:%d\n", ret);
 
-        g_free(str);
-        return 0;
-    }
 
 #if 1
     for (i = 0; i < len; i++) {
