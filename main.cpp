@@ -91,18 +91,18 @@ gboolean bus_message_parse(GstBus *bus, GstMessage *message, gpointer data)
             gst_message_parse_error(message, &err, &debug);
             if (err)
             {
-                // g_printerr("err(%d) %s from element(%s)\n", err->code, err->message, GST_MESSAGE_SRC_NAME(message));
                 __LOG(LOG_ERR, "[GST][%s:%d] err(%d) %s from element(%s)", _FILE_, __LINE__, err->code, err->message, GST_MESSAGE_SRC_NAME(message));
-                str = g_strdup_printf("echo '%s' > /tmp/gst_err", err->message);
-                if(system(str) < 0) __LOG(LOG_ERR, "[GST][%s:%d] err %s", _FILE_, __LINE__, str);
+                // Use safe_write_file instead of system("echo ...")
+                if(safe_write_file("/tmp/gst_err", err->message) < 0)
+                    __LOG(LOG_ERR, "[GST][%s:%d] err writing to /tmp/gst_err", _FILE_, __LINE__);
                 g_error_free(err);
             }
             if (debug)
             {
-                // g_printerr("message - %s\n", debug);
                 __LOG(LOG_ERR, "[GST][%s:%d] error debug : %s\n", __FILE__, __LINE__, (debug)? debug : "none");
-                str = g_strdup_printf("echo '%s' > /tmp/gst_err", debug);
-                if(system(str) < 0) __LOG(LOG_ERR, "[GST][%s:%d] err %s", _FILE_, __LINE__, str);
+                // Use safe_write_file instead of system("echo ...")
+                if(safe_write_file("/tmp/gst_err", debug) < 0)
+                    __LOG(LOG_ERR, "[GST][%s:%d] err writing to /tmp/gst_err", _FILE_, __LINE__);
                 g_free(debug);
             }
             //destroy();
@@ -302,11 +302,13 @@ gboolean bus_message_parse(GstBus *bus, GstMessage *message, gpointer data)
         {
             if(cmdArg.stream_en[STREAM_REC] || cmdArg.audio_en)
             {
-                str = g_strdup_printf("echo '%s' > %s &", g_date_time_format(g_date_time_new_now_local(), "%Y%m%d %H:%M:%S"), DEFAULT_START_VIDEO_TIME_PATH);
-                if(system(str) < 0) 
-                    __LOG(LOG_ERR, "[GST][%s:%d] %s error in %s", _FILE_, __LINE__, str, __FUNCTION__);
+                // Use safe_write_file instead of system("echo ...")
+                gchar *date_str = g_date_time_format(g_date_time_new_now_local(), "%Y%m%d %H:%M:%S");
+                if(safe_write_file(DEFAULT_START_VIDEO_TIME_PATH, date_str) < 0)
+                    __LOG(LOG_ERR, "[GST][%s:%d] Failed to write start time to %s in %s", _FILE_, __LINE__, DEFAULT_START_VIDEO_TIME_PATH, __FUNCTION__);
                 else
-                    __LOG(LOG_NOTICE, "[GST][%s:%d] %s in %s", _FILE_, __LINE__, str, __FUNCTION__);
+                    __LOG(LOG_NOTICE, "[GST][%s:%d] Wrote start time to %s in %s", _FILE_, __LINE__, DEFAULT_START_VIDEO_TIME_PATH, __FUNCTION__);
+                g_free(date_str);
             }
 #if 0
             FILE *fp = NULL;
@@ -461,16 +463,16 @@ static void splitCheck(gpointer data, guint8 startSec)
         {
             //if(cmdArg.audio_en && splitMax >= cmdArg.split_audio_min_msec) break;
 
-            gchar *str = g_strdup_printf("echo '%s' > %s &", g_date_time_format(g_date_time_new_now_local(), "%Y%m%d %H:%M:%S"), DEFAULT_START_VIDEO_TIME_PATH);
-
             __LOG(LOG_ERR, "[GST][%s:%d] split time check error : splitMax : %d, splitMin : %d", _FILE_, __LINE__, splitMax, splitMin);
 
-            if (system(str) < 0)
-                __LOG(LOG_ERR, "[GST][%s:%d] %s error in %s", _FILE_, __LINE__, str, __FUNCTION__);
+            // Use safe_write_file instead of system("echo ...")
+            gchar *date_str = g_date_time_format(g_date_time_new_now_local(), "%Y%m%d %H:%M:%S");
+            if (safe_write_file(DEFAULT_START_VIDEO_TIME_PATH, date_str) < 0)
+                __LOG(LOG_ERR, "[GST][%s:%d] Failed to write split time to %s in %s", _FILE_, __LINE__, DEFAULT_START_VIDEO_TIME_PATH, __FUNCTION__);
             else
-                __LOG(LOG_NOTICE, "[GST][%s:%d] %s in %s", _FILE_, __LINE__, str, __FUNCTION__);
+                __LOG(LOG_NOTICE, "[GST][%s:%d] Wrote split time to %s in %s", _FILE_, __LINE__, DEFAULT_START_VIDEO_TIME_PATH, __FUNCTION__);
 
-            g_free(str);
+            g_free(date_str);
 
             __LOG(LOG_NOTICE, "[GST][%s:%d] split now", _FILE_, __LINE__);
             for (i = 0; i < MAX_CHANNEL; i++)
@@ -551,16 +553,14 @@ gint getPasswdWithAES(CmdArg *arg)
 	gchar passwd[1024] = { 0, };
     const gchar *path = DEFAULT_PASSWD_PATH;
     AESClass *aesClass = AESClass::getInstance();
-	//info->encrypt.id = strdup(DEFAULT_ENCRYPT_ID);
 
 	if(aesClass->encrypt_get_passwd(path, passwd) < 0)
 	{
-		/* create */
 		ret = aesClass->encrypt_change_passwd(path, NULL, DEFAULT_RTSP_PASSWD);
 		if(ret < 0) {
 			__LOG(LOG_ERR, "[CFG][%s:%d] Error change passwd .. ", _FILE_, __LINE__);
 		}
-		arg->rtsp_passwd = strdup(DEFAULT_RTSP_PASSWD);
+		arg->rtsp_passwd = DEFAULT_RTSP_PASSWD;
 	}
 	else
 		arg->rtsp_passwd = strdup(passwd);
@@ -572,7 +572,6 @@ gint getPasswdWithAES(CmdArg *arg)
 
 gboolean config_camera(gpointer user_data)
 {
-    gchar *cmd;
     gint i = GPOINTER_TO_INT(user_data);
     guint16 ch_num0 = i*2;
     guint16 ch_num1 = i*2+1;
@@ -580,64 +579,54 @@ gboolean config_camera(gpointer user_data)
     if (cmdArg.cam[ch_num0].enable && cmdArg.cam[ch_num1].enable)
     {
         __LOG(LOG_INFO, "[CFG][%s:%d] ch%d enable, ch%d enable", _FILE_, __LINE__, ch_num0, ch_num1);
+        int bus = i ? 1 : 2;
 
-        cmd = g_strdup_printf("i2cwrite %d 0x11 0x100c 0x%04x", i ? 1 : 2, (cmdArg.ch_rotate >> (i * 4)) & 0x03);
-        __LOG(LOG_INFO, "[CFG][%s:%d] ch%d cmd : %s", _FILE_, __LINE__, ch_num0, cmd);
-        if (system(cmd) < 0)
+        // Use safe_exec_i2c instead of system() for ch_num0 (addr 0x11)
+        __LOG(LOG_INFO, "[CFG][%s:%d] ch%d i2cwrite bus=%d addr=0x11 reg=0x100c value=0x%04x", _FILE_, __LINE__, ch_num0, bus, (cmdArg.ch_rotate >> (i * 4)) & 0x03);
+        if (safe_exec_i2c("i2cwrite", bus, 0x11, 0x100c, (cmdArg.ch_rotate >> (i * 4)) & 0x03, NULL, 0) < 0)
             __LOG(LOG_ERR, "[CFG][%s:%d] ch%d rotation fail", __FILE__, __LINE__, ch_num0);
 
-        cmd = g_strdup_printf("i2cwrite %d 0x11 0x5002 %s", i ? 1 : 2, cmdArg.cam[ch_num0].ae_on? "0x0299":"0x0290");
-        __LOG(LOG_INFO, "[CFG][%s:%d] ch%d cmd : %s", _FILE_, __LINE__, ch_num0, cmd);
-        if (system(cmd) < 0)
+        __LOG(LOG_INFO, "[CFG][%s:%d] ch%d i2cwrite bus=%d addr=0x11 reg=0x5002 value=0x%04x", _FILE_, __LINE__, ch_num0, bus, cmdArg.cam[ch_num0].ae_on ? 0x0299 : 0x0290);
+        if (safe_exec_i2c("i2cwrite", bus, 0x11, 0x5002, cmdArg.cam[ch_num0].ae_on ? 0x0299 : 0x0290, NULL, 0) < 0)
             __LOG(LOG_ERR, "[CFG][%s:%d] ch%d ae_on fail", __FILE__, __LINE__, ch_num0);
 
-        cmd = g_strdup_printf("i2cwrite %d 0x11 0x5006 0x%04x", i ? 1 : 2, cmdArg.cam[ch_num0].ae_gain);
-        __LOG(LOG_INFO, "[CFG][%s:%d] ch%d cmd : %s", _FILE_, __LINE__, ch_num0, cmd);
-        if (system(cmd) < 0)
+        __LOG(LOG_INFO, "[CFG][%s:%d] ch%d i2cwrite bus=%d addr=0x11 reg=0x5006 value=0x%04x", _FILE_, __LINE__, ch_num0, bus, cmdArg.cam[ch_num0].ae_gain);
+        if (safe_exec_i2c("i2cwrite", bus, 0x11, 0x5006, cmdArg.cam[ch_num0].ae_gain, NULL, 0) < 0)
             __LOG(LOG_ERR, "[CFG][%s:%d] ch%d ae_gain fail", __FILE__, __LINE__, ch_num0);
 
-        cmd = g_strdup_printf("i2cwrite %d 0x11 0x500c 0x%08x", i ? 1 : 2, cmdArg.cam[ch_num0].exp_time);
-        __LOG(LOG_INFO, "[CFG][%s:%d] ch%d cmd : %s", _FILE_, __LINE__, ch_num0, cmd);
-        if (system(cmd) < 0)
+        __LOG(LOG_INFO, "[CFG][%s:%d] ch%d i2cwrite bus=%d addr=0x11 reg=0x500c value=0x%08x", _FILE_, __LINE__, ch_num0, bus, cmdArg.cam[ch_num0].exp_time);
+        if (safe_exec_i2c("i2cwrite", bus, 0x11, 0x500c, cmdArg.cam[ch_num0].exp_time, NULL, 0) < 0)
             __LOG(LOG_ERR, "[CFG][%s:%d] ch%d exp_time fail", __FILE__, __LINE__, ch_num0);
 
-        cmd = g_strdup_printf("i2cwrite %d 0x12 0x100c 0x%04x", i ? 1 : 2, (cmdArg.ch_rotate >> (i * 4 + 2)) & 0x03);
-        __LOG(LOG_INFO, "[CFG][%s:%d] ch%d cmd : %s", _FILE_, __LINE__, ch_num1, cmd);
-        if (system(cmd) < 0)
+        // Use safe_exec_i2c instead of system() for ch_num1 (addr 0x12)
+        __LOG(LOG_INFO, "[CFG][%s:%d] ch%d i2cwrite bus=%d addr=0x12 reg=0x100c value=0x%04x", _FILE_, __LINE__, ch_num1, bus, (cmdArg.ch_rotate >> (i * 4 + 2)) & 0x03);
+        if (safe_exec_i2c("i2cwrite", bus, 0x12, 0x100c, (cmdArg.ch_rotate >> (i * 4 + 2)) & 0x03, NULL, 0) < 0)
             __LOG(LOG_ERR, "[CFG][%s:%d] ch%d rotation fail", __FILE__, __LINE__, ch_num1);
 
-        cmd = g_strdup_printf("i2cwrite %d 0x12 0x5002 %s", i ? 1 : 2, cmdArg.cam[ch_num1].ae_on? "0x0299":"0x0290");
-        __LOG(LOG_INFO, "[CFG][%s:%d] ch%d cmd : %s", _FILE_, __LINE__, ch_num1, cmd);
-        if (system(cmd) < 0)
+        __LOG(LOG_INFO, "[CFG][%s:%d] ch%d i2cwrite bus=%d addr=0x12 reg=0x5002 value=0x%04x", _FILE_, __LINE__, ch_num1, bus, cmdArg.cam[ch_num1].ae_on ? 0x0299 : 0x0290);
+        if (safe_exec_i2c("i2cwrite", bus, 0x12, 0x5002, cmdArg.cam[ch_num1].ae_on ? 0x0299 : 0x0290, NULL, 0) < 0)
             __LOG(LOG_ERR, "[CFG][%s:%d] ch%d ae_on fail", __FILE__, __LINE__, ch_num1);
 
-        cmd = g_strdup_printf("i2cwrite %d 0x12 0x5006 0x%04x", i ? 1 : 2, cmdArg.cam[ch_num1].ae_gain);
-        __LOG(LOG_INFO, "[CFG][%s:%d] ch%d cmd : %s", _FILE_, __LINE__, ch_num1, cmd);
-        if (system(cmd) < 0)
+        __LOG(LOG_INFO, "[CFG][%s:%d] ch%d i2cwrite bus=%d addr=0x12 reg=0x5006 value=0x%04x", _FILE_, __LINE__, ch_num1, bus, cmdArg.cam[ch_num1].ae_gain);
+        if (safe_exec_i2c("i2cwrite", bus, 0x12, 0x5006, cmdArg.cam[ch_num1].ae_gain, NULL, 0) < 0)
             __LOG(LOG_ERR, "[CFG][%s:%d] ch%d ae_gain fail", __FILE__, __LINE__, ch_num1);
 
-        cmd = g_strdup_printf("i2cwrite %d 0x12 0x500c 0x%08x", i ? 1 : 2, cmdArg.cam[ch_num1].exp_time);
-        __LOG(LOG_INFO, "[CFG][%s:%d] ch%d cmd : %s", _FILE_, __LINE__, ch_num1, cmd);
-        if (system(cmd) < 0)
+        __LOG(LOG_INFO, "[CFG][%s:%d] ch%d i2cwrite bus=%d addr=0x12 reg=0x500c value=0x%08x", _FILE_, __LINE__, ch_num1, bus, cmdArg.cam[ch_num1].exp_time);
+        if (safe_exec_i2c("i2cwrite", bus, 0x12, 0x500c, cmdArg.cam[ch_num1].exp_time, NULL, 0) < 0)
             __LOG(LOG_ERR, "[CFG][%s:%d] ch%d exp_time fail", __FILE__, __LINE__, ch_num1);
     }
     else
     {
 #define STR_LEN 8
-        FILE *fp;
         gchar str[STR_LEN];
         gchar val[4] = {0, 0, 0, 0};
-        // memset(str, 0, STR_LEN);
-        cmd = g_strdup_printf("i2cread %d 0x48 0x0013 1", i ? 1 : 2);
-        fp = popen(cmd, "r");
-        if (NULL == fp)
+        int bus = i ? 1 : 2;
+
+        // Use safe_exec_i2c for i2cread instead of popen
+        memset(str, 0, STR_LEN);
+        if (safe_exec_i2c("i2cread", bus, 0x48, 0x0013, 1, str, STR_LEN) < 0)
         {
-            __LOG(LOG_CRIT, "[CFG][%s:%d] popen error : %s", _FILE_, __LINE__, cmd);
-        }
-        else
-        {
-            while (fgets(str, STR_LEN, fp));
-            pclose(fp);
+            __LOG(LOG_CRIT, "[CFG][%s:%d] i2cread bus=%d addr=0x48 reg=0x0013 failed", _FILE_, __LINE__, bus);
         }
 
         str[4] = 0;
@@ -653,56 +642,50 @@ gboolean config_camera(gpointer user_data)
         if (cmdArg.cam[ch_num0].enable & 0x01)
         {
             __LOG(LOG_INFO, "[CFG][%s:%d] ch%d enable, ch%d disable", _FILE_, __LINE__, ch_num0, ch_num1);
-            cmd = g_strdup_printf("i2cwrite %d 0x3c 0x100c 0x%04x", i ? 1 : 2, (cmdArg.ch_rotate >> (i * 4)) & 0x03);
-            __LOG(LOG_INFO, "[CFG][%s:%d] ch%d cmd : %s", _FILE_, __LINE__, ch_num0, cmd);
-            if (system(cmd) < 0)
+
+            // Use safe_exec_i2c instead of system() for ch_num0 (addr 0x3c)
+            __LOG(LOG_INFO, "[CFG][%s:%d] ch%d i2cwrite bus=%d addr=0x3c reg=0x100c value=0x%04x", _FILE_, __LINE__, ch_num0, bus, (cmdArg.ch_rotate >> (i * 4)) & 0x03);
+            if (safe_exec_i2c("i2cwrite", bus, 0x3c, 0x100c, (cmdArg.ch_rotate >> (i * 4)) & 0x03, NULL, 0) < 0)
                 __LOG(LOG_ERR, "[CFG][%s:%d] ch%d rotation fail", __FILE__, __LINE__, ch_num0);
             if (val[ch_num0] == 0)
                 __LOG(LOG_ERR, "[CFG][%s:%d] swap : ch%d enable but ch%d display", _FILE_, __LINE__, ch_num0, ch_num1);
 
-            cmd = g_strdup_printf("i2cwrite %d 0x3c 0x5002 %s", i ? 1 : 2, cmdArg.cam[ch_num0].ae_on? "0x0299":"0x0290");
-            __LOG(LOG_INFO, "[CFG][%s:%d] ch%d cmd : %s", _FILE_, __LINE__, ch_num0, cmd);
-            if (system(cmd) < 0)
+            __LOG(LOG_INFO, "[CFG][%s:%d] ch%d i2cwrite bus=%d addr=0x3c reg=0x5002 value=0x%04x", _FILE_, __LINE__, ch_num0, bus, cmdArg.cam[ch_num0].ae_on ? 0x0299 : 0x0290);
+            if (safe_exec_i2c("i2cwrite", bus, 0x3c, 0x5002, cmdArg.cam[ch_num0].ae_on ? 0x0299 : 0x0290, NULL, 0) < 0)
                 __LOG(LOG_ERR, "[CFG][%s:%d] ch%d ae_on fail", __FILE__, __LINE__, ch_num0);
 
-            cmd = g_strdup_printf("i2cwrite %d 0x3c 0x5006 0x%04x", i ? 1 : 2, cmdArg.cam[ch_num0].ae_gain);
-            __LOG(LOG_INFO, "[CFG][%s:%d] ch%d cmd : %s", _FILE_, __LINE__, ch_num0, cmd);
-            if (system(cmd) < 0)
+            __LOG(LOG_INFO, "[CFG][%s:%d] ch%d i2cwrite bus=%d addr=0x3c reg=0x5006 value=0x%04x", _FILE_, __LINE__, ch_num0, bus, cmdArg.cam[ch_num0].ae_gain);
+            if (safe_exec_i2c("i2cwrite", bus, 0x3c, 0x5006, cmdArg.cam[ch_num0].ae_gain, NULL, 0) < 0)
                 __LOG(LOG_ERR, "[CFG][%s:%d] ch%d ae_gain fail", __FILE__, __LINE__, ch_num0);
 
-            cmd = g_strdup_printf("i2cwrite %d 0x3c 0x500c 0x%08x", i ? 1 : 2, cmdArg.cam[ch_num0].exp_time);
-            __LOG(LOG_INFO, "[CFG][%s:%d] ch%d cmd : %s", _FILE_, __LINE__, ch_num0, cmd);
-            if (system(cmd) < 0)
-                __LOG(LOG_ERR, "[CFG][%s:%d] ch%d ae_gain fail", __FILE__, __LINE__, ch_num0);
+            __LOG(LOG_INFO, "[CFG][%s:%d] ch%d i2cwrite bus=%d addr=0x3c reg=0x500c value=0x%08x", _FILE_, __LINE__, ch_num0, bus, cmdArg.cam[ch_num0].exp_time);
+            if (safe_exec_i2c("i2cwrite", bus, 0x3c, 0x500c, cmdArg.cam[ch_num0].exp_time, NULL, 0) < 0)
+                __LOG(LOG_ERR, "[CFG][%s:%d] ch%d exp_time fail", __FILE__, __LINE__, ch_num0);
         }
         else if (cmdArg.cam[ch_num1].enable & 0x01)
         {
             __LOG(LOG_INFO, "[CFG][%s:%d] ch%d disable, ch%d enable", _FILE_, __LINE__, ch_num0, ch_num1);
-            cmd = g_strdup_printf("i2cwrite %d 0x3c 0x100c 0x%04x", i ? 1 : 2, (cmdArg.ch_rotate >> (i * 4 + 2)) & 0x03);
-            __LOG(LOG_INFO, "[CFG][%s:%d] %s", _FILE_, __LINE__, cmd);
-            if (system(cmd) < 0)
+
+            // Use safe_exec_i2c instead of system() for ch_num1 (addr 0x3c)
+            __LOG(LOG_INFO, "[CFG][%s:%d] ch%d i2cwrite bus=%d addr=0x3c reg=0x100c value=0x%04x", _FILE_, __LINE__, ch_num1, bus, (cmdArg.ch_rotate >> (i * 4 + 2)) & 0x03);
+            if (safe_exec_i2c("i2cwrite", bus, 0x3c, 0x100c, (cmdArg.ch_rotate >> (i * 4 + 2)) & 0x03, NULL, 0) < 0)
                 __LOG(LOG_ERR, "[CFG][%s:%d] ch%d rotation fail", __FILE__, __LINE__, ch_num1);
             if (val[ch_num1] == 0)
                 __LOG(LOG_ERR, "[CFG][%s:%d] swap : ch%d enable but ch%d display", _FILE_, __LINE__, ch_num1, ch_num0);
 
-            cmd = g_strdup_printf("i2cwrite %d 0x3c 0x5002 %s", i ? 1 : 2, cmdArg.cam[ch_num1].ae_on? "0x0299":"0x0290");
-            __LOG(LOG_INFO, "[CFG][%s:%d] ch%d cmd : %s", _FILE_, __LINE__, ch_num1, cmd);
-            if (system(cmd) < 0)
+            __LOG(LOG_INFO, "[CFG][%s:%d] ch%d i2cwrite bus=%d addr=0x3c reg=0x5002 value=0x%04x", _FILE_, __LINE__, ch_num1, bus, cmdArg.cam[ch_num1].ae_on ? 0x0299 : 0x0290);
+            if (safe_exec_i2c("i2cwrite", bus, 0x3c, 0x5002, cmdArg.cam[ch_num1].ae_on ? 0x0299 : 0x0290, NULL, 0) < 0)
                 __LOG(LOG_ERR, "[CFG][%s:%d] ch%d ae_on fail", __FILE__, __LINE__, ch_num1);
 
-            cmd = g_strdup_printf("i2cwrite %d 0x3c 0x5006 0x%04x", i ? 1 : 2, cmdArg.cam[ch_num1].ae_gain);
-            __LOG(LOG_INFO, "[CFG][%s:%d] ch%d cmd : %s", _FILE_, __LINE__, ch_num1, cmd);
-            if (system(cmd) < 0)
+            __LOG(LOG_INFO, "[CFG][%s:%d] ch%d i2cwrite bus=%d addr=0x3c reg=0x5006 value=0x%04x", _FILE_, __LINE__, ch_num1, bus, cmdArg.cam[ch_num1].ae_gain);
+            if (safe_exec_i2c("i2cwrite", bus, 0x3c, 0x5006, cmdArg.cam[ch_num1].ae_gain, NULL, 0) < 0)
                 __LOG(LOG_ERR, "[CFG][%s:%d] ch%d ae_gain fail", __FILE__, __LINE__, ch_num1);
 
-            cmd = g_strdup_printf("i2cwrite %d 0x3c 0x500c 0x%08x", i ? 1 : 2, cmdArg.cam[ch_num1].exp_time);
-            __LOG(LOG_INFO, "[CFG][%s:%d] ch%d cmd : %s", _FILE_, __LINE__, ch_num1, cmd);
-            if (system(cmd) < 0)
-                __LOG(LOG_ERR, "[CFG][%s:%d] ch%d ae_gain fail", __FILE__, __LINE__, ch_num1);
+            __LOG(LOG_INFO, "[CFG][%s:%d] ch%d i2cwrite bus=%d addr=0x3c reg=0x500c value=0x%08x", _FILE_, __LINE__, ch_num1, bus, cmdArg.cam[ch_num1].exp_time);
+            if (safe_exec_i2c("i2cwrite", bus, 0x3c, 0x500c, cmdArg.cam[ch_num1].exp_time, NULL, 0) < 0)
+                __LOG(LOG_ERR, "[CFG][%s:%d] ch%d exp_time fail", __FILE__, __LINE__, ch_num1);
         }
     }
-
-    g_free(cmd);
 
     return G_SOURCE_REMOVE;
 }

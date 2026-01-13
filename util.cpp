@@ -13,6 +13,10 @@
 #include "util.h"
 #include <glib-unix.h>
 #include <sys/stat.h>
+#include <sys/wait.h>
+#include <errno.h>
+#include <unistd.h>
+#include <string.h>
 
 GstElement *pipeline = NULL;
 GMainLoop *loop = NULL;
@@ -447,4 +451,125 @@ int check_sd_mount_flag(void)
         return 2;
 
     return 0;   // 그 외 값
+}
+
+//-------------------------------------------------------------------------
+// Safe file write - replaces system("echo value > file")
+int safe_write_file(const char *path, const char *content)
+{
+    FILE *fp = fopen(path, "w");
+    if (fp == NULL) {
+        __LOG(LOG_ERR, "[UTIL][%s:%d] Cannot open file for writing: %s", _FILE_, __LINE__, path);
+        return -1;
+    }
+    if (fprintf(fp, "%s", content) < 0) {
+        __LOG(LOG_ERR, "[UTIL][%s:%d] Failed to write to file: %s", _FILE_, __LINE__, path);
+        fclose(fp);
+        return -1;
+    }
+    fclose(fp);
+    return 0;
+}
+
+//-------------------------------------------------------------------------
+// Safe recursive mkdir - replaces system("mkdir -p path")
+int safe_mkdir_p(const char *path, mode_t mode)
+{
+    char tmp[512];
+    char *p = NULL;
+    size_t len;
+
+    snprintf(tmp, sizeof(tmp), "%s", path);
+    len = strlen(tmp);
+
+    // Remove trailing slash
+    if (tmp[len - 1] == '/')
+        tmp[len - 1] = '\0';
+
+    // Create directories one by one
+    for (p = tmp + 1; *p; p++) {
+        if (*p == '/') {
+            *p = '\0';
+            if (mkdir(tmp, mode) != 0 && errno != EEXIST) {
+                __LOG(LOG_ERR, "[UTIL][%s:%d] Failed to create directory: %s", _FILE_, __LINE__, tmp);
+                return -1;
+            }
+            *p = '/';
+        }
+    }
+
+    // Create final directory
+    if (mkdir(tmp, mode) != 0 && errno != EEXIST) {
+        __LOG(LOG_ERR, "[UTIL][%s:%d] Failed to create directory: %s", _FILE_, __LINE__, tmp);
+        return -1;
+    }
+
+    return 0;
+}
+
+//-------------------------------------------------------------------------
+// Safe I2C command execution - replaces system("i2cwrite/i2cread ...")
+// Uses fork/exec instead of system() to avoid shell injection
+int safe_exec_i2c(const char *cmd, int bus, int addr, int reg, int value, char *output, size_t output_size)
+{
+    int pipefd[2];
+    pid_t pid;
+    int status;
+
+    if (output && output_size > 0) {
+        if (pipe(pipefd) == -1) {
+            __LOG(LOG_ERR, "[UTIL][%s:%d] Failed to create pipe", _FILE_, __LINE__);
+            return -1;
+        }
+    }
+
+    pid = fork();
+    if (pid == -1) {
+        __LOG(LOG_ERR, "[UTIL][%s:%d] Failed to fork", _FILE_, __LINE__);
+        return -1;
+    }
+
+    if (pid == 0) {
+        // Child process
+        char bus_str[16], addr_str[16], reg_str[16], value_str[16];
+
+        if (output && output_size > 0) {
+            close(pipefd[0]);
+            dup2(pipefd[1], STDOUT_FILENO);
+            close(pipefd[1]);
+        }
+
+        snprintf(bus_str, sizeof(bus_str), "%d", bus);
+        snprintf(addr_str, sizeof(addr_str), "0x%02x", addr);
+        snprintf(reg_str, sizeof(reg_str), "0x%04x", reg);
+
+        if (strcmp(cmd, "i2cwrite") == 0) {
+            snprintf(value_str, sizeof(value_str), "0x%04x", value);
+            execlp(cmd, cmd, bus_str, addr_str, reg_str, value_str, (char *)NULL);
+        } else if (strcmp(cmd, "i2cread") == 0) {
+            snprintf(value_str, sizeof(value_str), "%d", value);  // size for read
+            execlp(cmd, cmd, bus_str, addr_str, reg_str, value_str, (char *)NULL);
+        } else {
+            _exit(127);
+        }
+
+        // If execlp fails
+        _exit(127);
+    }
+
+    // Parent process
+    if (output && output_size > 0) {
+        close(pipefd[1]);
+        ssize_t n = read(pipefd[0], output, output_size - 1);
+        if (n > 0) output[n] = '\0';
+        else output[0] = '\0';
+        close(pipefd[0]);
+    }
+
+    waitpid(pid, &status, 0);
+
+    if (WIFEXITED(status)) {
+        return WEXITSTATUS(status);
+    }
+    return -1;
 }
