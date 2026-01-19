@@ -23,7 +23,7 @@ static void muxer_added(GstElement *splitmux, GstElement *muxer, gpointer user_d
     const char *mode = (const char *)user_data;   // "mp4" | "qt" | "ts"
     const char *type = G_OBJECT_TYPE_NAME(muxer);
 
-    __LOG(LOG_NOTICE, "[GST][%s:%d] muxer-added: mode=%s, type=%s, name=%s",
+    __LOG(LOG_INFO, "[GST][%s:%d] muxer-added: mode=%s, type=%s, name=%s",
           _FILE_, __LINE__, mode, type, GST_ELEMENT_NAME(muxer));
 
     // qtmux(GstQTMux) / mp4mux(GstMP4Mux) / mpegtsmux(GstMpegTsMux)

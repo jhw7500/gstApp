@@ -139,7 +139,7 @@ static gpointer capture_worker_thread(gpointer user_data)
 {
     CaptureData *info = (CaptureData *)user_data;
 
-    __LOG(LOG_NOTICE, "[%s][%s:%d] ch%d worker thread started", CAP_LOG_KEY, _FILE_, __LINE__, info->ch);
+    __LOG(LOG_INFO, "[%s][%s:%d] ch%d worker thread started", CAP_LOG_KEY, _FILE_, __LINE__, info->ch);
 
     while(info->worker_running.load() || g_async_queue_length(info->task_queue) > 0)
     {
@@ -678,7 +678,7 @@ void CaptureBin::startWorker()
     if(!captureData.worker_thread) {
         captureData.worker_running.store(true);
         captureData.worker_thread = g_thread_new("capture_worker", capture_worker_thread, &captureData);
-        __LOG(LOG_NOTICE, "[%s][%s:%d] ch%d worker thread created", CAP_LOG_KEY, _FILE_, __LINE__, captureData.ch);
+        __LOG(LOG_INFO, "[%s][%s:%d] ch%d worker thread created", CAP_LOG_KEY, _FILE_, __LINE__, captureData.ch);
     }
 }
 
@@ -688,7 +688,7 @@ void CaptureBin::stopWorker()
         captureData.worker_running.store(false);
         g_thread_join(captureData.worker_thread);
         captureData.worker_thread = NULL;
-        __LOG(LOG_NOTICE, "[%s][%s:%d] ch%d worker thread joined", CAP_LOG_KEY, _FILE_, __LINE__, captureData.ch);
+        __LOG(LOG_INFO, "[%s][%s:%d] ch%d worker thread joined", CAP_LOG_KEY, _FILE_, __LINE__, captureData.ch);
     }
 }
 
@@ -848,7 +848,7 @@ gboolean CaptureBin::init(guint8 ch)
 #if 0
     ret = gst_bin_add(GST_BIN(pipeline), be.bin);
     if(!ret) {
-        __LOG(LOG_CRIT, "[GST][%s:%d] capture bin add error in pipeline", _FILE_, __LINE__);
+        __LOG(LOG_CRIT, "[%s][%s:%d] capture bin add error in pipeline", CAP_LOG_KEY, _FILE_, __LINE__);
         return ret;
     }
 #endif

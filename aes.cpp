@@ -24,7 +24,7 @@
 #include <net/if_arp.h>
 #include <sys/ioctl.h>
 
-#include "aes.h"                                                        
+#include "aes.h"
 
 //-------------------------------------------------------------------------
 #ifdef AES256
@@ -74,19 +74,19 @@ VOID AESClass::GetSBox(LPBYTE TA) {
 void AESClass::KeyExpansion(LPBYTE ExpKey, LPCBYTE Key) {
 	BYTE TA[4];
 	static CONST BYTE Rcon[11]= { 0x8d, 0x01, 0x02, 0x04, 0x08, 0x10, 0x20, 0x40, 0x80, 0x1b, 0x36 };
-	
+
 	memcpy(ExpKey, Key, KEYLEN);
-	
+
 	for (int i = KEYLEN; i < KEYEXPSIZE; i += 4) {
 		memcpy(TA, ExpKey + i - 4, 4);
-	
+
 		if (i % KEYLEN == 0) {
 			int T = TA[0];
 			TA[0] = TA[1];
 			TA[1] = TA[2];
 			TA[2] = TA[3];
 			TA[3] = T;
-	
+
 			GetSBox(TA);
 			TA[0] ^= Rcon[i / KEYLEN];
 		}
@@ -102,7 +102,7 @@ void AESClass::KeyExpansion(LPBYTE ExpKey, LPCBYTE Key) {
 
 VOID AESClass::AddRoundKey(BYTE State[4][4], LPBYTE ExpKey, BYTE Round) {
 	for (int i = 0; i < 4; i++)
-		for (int j = 0; j < 4; j++) 
+		for (int j = 0; j < 4; j++)
 			State[i][j] ^= ExpKey[Round*4*4 + i*4 + j];
 }
 
@@ -112,24 +112,24 @@ VOID AESClass::SubBytes(BYTE State[4][4]) {
 
 VOID AESClass::ShiftRows(BYTE State[4][4]) {
 	BYTE T;
-	
+
 	ROTATE(T, State[0][1], State[1][1], State[2][1], State[3][1]);
-	
+
 	SWAP(T, State[0][2], State[2][2]);
 	SWAP(T, State[1][2], State[3][2]);
-	
+
 	ROTATE(T, State[0][3], State[3][3], State[2][3], State[1][3]);
 }
 
 
 VOID AESClass::InvShiftRows(BYTE State[4][4]) {
 	BYTE T;
-	
+
 	ROTATE(T, State[3][1], State[2][1], State[1][1], State[0][1]);
-	
+
 	SWAP(T, State[0][2], State[2][2]);
 	SWAP(T, State[1][2], State[3][2]);
-	
+
 	ROTATE(T, State[0][3], State[1][3], State[2][3], State[3][3]);
 }
 
@@ -162,7 +162,7 @@ VOID AESClass::InvMixColumns(BYTE State[4][4]) {
 		int B = State[i][1];
 		int C = State[i][2];
 		int D = State[i][3];
-	
+
 		State[i][0] = Multiply(A, 0x0E) ^ Multiply(B, 0x0B) ^ Multiply(C, 0x0D) ^ Multiply(D, 0x09);
 		State[i][1] = Multiply(A, 0x09) ^ Multiply(B, 0x0E) ^ Multiply(C, 0x0B) ^ Multiply(D, 0x0D);
 		State[i][2] = Multiply(A, 0x0D) ^ Multiply(B, 0x09) ^ Multiply(C, 0x0E) ^ Multiply(D, 0x0B);
@@ -189,21 +189,21 @@ VOID AESClass::InvSubBytes(BYTE State[4][4]) {
 		0xa0, 0xe0, 0x3b, 0x4d, 0xae, 0x2a, 0xf5, 0xb0, 0xc8, 0xeb, 0xbb, 0x3c, 0x83, 0x53, 0x99, 0x61,
 		0x17, 0x2b, 0x04, 0x7e, 0xba, 0x77, 0xd6, 0x26, 0xe1, 0x69, 0x14, 0x63, 0x55, 0x21, 0x0c, 0x7d
 	};
-	
+
 	for (int i = 0; i < 4; i++)
 		for (int j = 0; j < 4; j++) State[j][i] = SBoxInvert[State[j][i]];
 }
 
 VOID AESClass::Cipher(BYTE State[4][4], LPBYTE ExpKey) {
 	AddRoundKey(State, ExpKey, 0);
-	
+
 	for (int Round = 1; Round < Nr; Round++) {
 		SubBytes(State);
 		ShiftRows(State);
 		MixColumns(State);
 		AddRoundKey(State, ExpKey, Round);
 	}
-	
+
 	SubBytes(State);
 	ShiftRows(State);
 	AddRoundKey(State, ExpKey, Nr);
@@ -211,14 +211,14 @@ VOID AESClass::Cipher(BYTE State[4][4], LPBYTE ExpKey) {
 
 VOID AESClass::InvCipher(BYTE State[4][4], LPBYTE ExpKey) {
 	AddRoundKey(State, ExpKey, Nr);
-	
+
 	for (int Round = Nr - 1; Round > 0; Round--) {
 		InvShiftRows(State);
 		InvSubBytes(State);
 		AddRoundKey(State, ExpKey, Round);
 		InvMixColumns(State);
 	}
-	
+
 	InvShiftRows(State);
 	InvSubBytes(State);
 	AddRoundKey(State, ExpKey, 0);
@@ -242,7 +242,7 @@ AESClass::~AESClass()
 
 VOID AESClass::AES_ECB_Encrypt(LPCBYTE Input, LPCBYTE Key, LPBYTE Output, int Length) {
 	BYTE ExpKey[KEYEXPSIZE];
-	
+
 	memcpy(Output, Input, Length);
 	KeyExpansion(ExpKey, Key);
 	Cipher((BYTE(*)[4])Output, ExpKey);
@@ -250,7 +250,7 @@ VOID AESClass::AES_ECB_Encrypt(LPCBYTE Input, LPCBYTE Key, LPBYTE Output, int Le
 
 VOID AESClass::AES_ECB_Decrypt(LPCBYTE Input, LPCBYTE Key, LPBYTE Output, int Length) {
 	BYTE ExpKey[KEYEXPSIZE];
-	
+
 	memcpy(Output, Input, Length);
 	KeyExpansion(ExpKey, Key);
 	InvCipher((BYTE(*)[4])Output, ExpKey);
@@ -267,8 +267,6 @@ int AESClass::encrypt_get_passwd(const char *filename, char *passwd)
 	int ret = 0;
 	unsigned int read_size;
 
-	//DBG_LIB_ENCRYPT(2, "In >>>>>\n");
-
 	fp = fopen(filename ? filename : DEFAULT_PASSWD_PATH, "rb");
 	if(fp == NULL)
 	{
@@ -279,7 +277,6 @@ int AESClass::encrypt_get_passwd(const char *filename, char *passwd)
 		if( !feof(fp) )
 		{
 			memset(ENC, 0, sizeof(BYTE) * 1024);
-
 			read_size = fread(ENC, 1, 1024, fp);
 			if(read_size == 0)
 			{
@@ -287,16 +284,12 @@ int AESClass::encrypt_get_passwd(const char *filename, char *passwd)
 				goto err;
 			}
 
-			//ENC[read_size] = '\0';
-			//DBG_LIB_ENCRYPT(1, "ENC : %s, size : %d\n", ENC, read_size + 1);//strlen(ENC));
 			memset(DEC, 0, sizeof(BYTE) * 1024);
-			AES_ECB_Decrypt(ENC, Key, DEC, read_size + 1);//strlen(ENC) + 1);
+			AES_ECB_Decrypt(ENC, Key, DEC, read_size);
 
 			temp = (BYTE *)strchr((char *)DEC, '.');
 			if(temp != NULL)
 				*temp = '\0';
-
-			//DBG_LIB_ENCRYPT(1, "Dec : %s\n", DEC);
 
 			memcpy(passwd, DEC, strlen((char *)DEC));
 		}
@@ -305,8 +298,6 @@ int AESClass::encrypt_get_passwd(const char *filename, char *passwd)
 err:
 	if(fp)
 		fclose(fp);
-
-	//DBG_LIB_ENCRYPT(2, "<<<<< Out\n");
 
 	return ret;
 }
@@ -322,8 +313,7 @@ int AESClass::encrypt_change_passwd(const char *filename, char *cur_passwd, cons
 	int ret = 0;
 	unsigned int read_size;
 	char data[1024] = { 0, };
-
-	//DBG_LIB_ENCRYPT(2, "In >>>>>\n");
+	size_t data_len;
 
 	fp = fopen(filename ? filename : DEFAULT_PASSWD_PATH, "r+b");
 	if(fp == NULL)
@@ -331,21 +321,20 @@ int AESClass::encrypt_change_passwd(const char *filename, char *cur_passwd, cons
 		fp = fopen(filename ? filename : DEFAULT_PASSWD_PATH, "w+b");
 		if(fp == NULL)
 		{
-			printf("failed to open file(%s)\n", 
+			printf("failed to open file(%s)\n",
 					filename ? filename : DEFAULT_PASSWD_PATH);
 			return (-ENOENT);
 		}
 
-		// change
 		memset(data, 0x00, sizeof(char) * 1024);
 		memcpy(data, change_passwd, strlen(change_passwd));
-		memset(ENC, 0x00, sizeof(ENC));
-
 		while(strlen(data) % 16 != 0) data[strlen(data)] = '.';
+		data_len = strlen(data);
 
-		AES_ECB_Encrypt((unsigned char *)data, Key, ENC, strlen(data) + 1);
+		memset(ENC, 0x00, sizeof(ENC));
+		AES_ECB_Encrypt((unsigned char *)data, Key, ENC, data_len);
 
-		fwrite(ENC, 1, strlen((char *)ENC), fp);
+		fwrite(ENC, 1, data_len, fp);
 	}
 	else
 	{
@@ -361,16 +350,12 @@ int AESClass::encrypt_change_passwd(const char *filename, char *cur_passwd, cons
 			}
 
 			memset(DEC, 0x00, sizeof(BYTE) * 1024);
-			//DBG_LIB_ENCRYPT(1, "ENC : %s, size : %d\n", ENC, read_size + 1);//strlen(ENC) + 1);
-			AES_ECB_Decrypt(ENC, Key, DEC, read_size + 1);//strlen(ENC) + 1);
-
-			//DBG_LIB_ENCRYPT(1, "Dec : %s\n", DEC);
+			AES_ECB_Decrypt(ENC, Key, DEC, read_size);
 
 			temp = (BYTE *)strchr((char *)DEC, '.');
 			if(temp != NULL)
 				*temp = '\0';
 
-			//DBG_LIB_ENCRYPT(1, "Dec : %s(%ld), cur_passwd : %s(%ld)\n", DEC, strlen((char *)DEC), cur_passwd, strlen(cur_passwd));
 			if(strncmp((char *)DEC, cur_passwd, strlen(cur_passwd)) != 0)
 			{
 				printf("failed to match current passwd\n");
@@ -396,22 +381,20 @@ int AESClass::encrypt_change_passwd(const char *filename, char *cur_passwd, cons
 			fp = fopen(filename ? filename : DEFAULT_PASSWD_PATH, "w+b");
 			if(fp == NULL)
 			{
-				printf("failed to open file(%s) for write\n", 
+				printf("failed to open file(%s) for write\n",
 						filename ? filename : DEFAULT_PASSWD_PATH);
 				return (-ENOENT);
 			}
 
-			// change
 			memset(data, 0x00, sizeof(char) * 1024);
 			memcpy(data, change_passwd, strlen(change_passwd));
-			memset(ENC, 0x00, sizeof(ENC));
-
 			while(strlen(data) % 16 != 0) data[strlen(data)] = '.';
+			data_len = strlen(data);
 
-			AES_ECB_Encrypt((unsigned char *)data, Key, ENC, strlen(data) + 1);
+			memset(ENC, 0x00, sizeof(ENC));
+			AES_ECB_Encrypt((unsigned char *)data, Key, ENC, data_len);
 
-			//DBG_LIB_ENCRYPT(1, "Enc %ld \n", strlen(data));
-			fwrite(ENC, 1, strlen(data), fp);
+			fwrite(ENC, 1, data_len, fp);
 			sync();
 		}
 	}
@@ -423,8 +406,6 @@ err:
 		fp = NULL;
 	}
 	sync();
-
-	//DBG_LIB_ENCRYPT(2, "<<<<< Out\n");
 
 	return ret;
 }

@@ -8,6 +8,7 @@
 }
 
 . ${SDK_LOC}/environment-setup-${SDK_NAME}
+#. ./environment-setup-${SDK_NAME}
 
 SYSROOT=${SDK_LOC}/sysroots/${SDK_NAME}
 PKG_CONFIG_SYSROOT_DIR=${SYSROOT}
