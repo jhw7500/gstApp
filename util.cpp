@@ -381,9 +381,10 @@ gchar *search_file(const gchar* path, const gchar* prefix, const gchar* suffix)
 		// prefix 및 suffix 확인
 		if (g_str_has_prefix(filename, prefix) && g_str_has_suffix(filename, suffix)) {
 			gchar *fullpath = g_build_filename(path, filename, NULL);
-			struct stat st;
+			GStatBuf st;
 
-			if (stat(fullpath, &st) == 0 && S_ISREG(st.st_mode)) {
+			// GLib의 g_stat() 사용 - glibc 버전 의존성 없음
+			if (g_stat(fullpath, &st) == 0 && S_ISREG(st.st_mode)) {
 				if (st.st_mtime > latest_mtime) {
 					latest_mtime = st.st_mtime;
 					g_free(latest_file);
@@ -401,7 +402,7 @@ gchar *search_file(const gchar* path, const gchar* prefix, const gchar* suffix)
 		__LOG(LOG_INFO, "[CFG][%s:%d] search_file 찾음: %s", _FILE_, __LINE__, str);
 		g_free(latest_file);
 	} else {
-		__LOG(LOG_WARN, "[CFG][%s:%d] 파일을 찾지 못함: %s/%s*%s", _FILE_, __LINE__, path, prefix, suffix);
+		__LOG(LOG_WARNING, "[CFG][%s:%d] 파일을 찾지 못함: %s/%s*%s", _FILE_, __LINE__, path, prefix, suffix);
 	}
 
 	return str;
