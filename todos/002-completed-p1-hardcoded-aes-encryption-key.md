@@ -1,12 +1,14 @@
 # 002: Hardcoded AES Encryption Key Exposes All Passwords
 
 ## Metadata
-- **Status**: pending
+- **Status**: ✅ COMPLETED
 - **Priority**: p1 (CRITICAL - Security)
 - **Issue ID**: 002
 - **Tags**: security, code-review, cryptography, critical
 - **Dependencies**: None
 - **Created**: 2026-01-08
+- **Completed**: 2026-01-19
+- **Commit**: 8413fd5 "security: 하드코딩된 AES 키 교체 및 popen() 제거"
 
 ## Problem Statement
 

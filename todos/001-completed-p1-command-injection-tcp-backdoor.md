@@ -1,12 +1,14 @@
 # 001: Critical Command Injection via TCP Server Backdoor
 
 ## Metadata
-- **Status**: pending
+- **Status**: ✅ COMPLETED
 - **Priority**: p1 (CRITICAL - Blocks Production)
 - **Issue ID**: 001
 - **Tags**: security, code-review, critical, command-injection
 - **Dependencies**: None
 - **Created**: 2026-01-08
+- **Completed**: 2026-01-19
+- **Commit**: 3f01965 "security: Replace system() calls with safe alternatives"
 
 ## Problem Statement
 

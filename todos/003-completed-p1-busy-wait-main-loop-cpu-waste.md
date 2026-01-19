@@ -1,12 +1,14 @@
 # 003: Busy-Wait Main Loop Wastes 10% CPU Constantly
 
 ## Metadata
-- **Status**: pending
+- **Status**: ✅ COMPLETED
 - **Priority**: p1 (CRITICAL - Performance)
 - **Issue ID**: 003
 - **Tags**: performance, code-review, cpu-usage, power-consumption
 - **Dependencies**: None
 - **Created**: 2026-01-08
+- **Completed**: 2026-01-19 (실제로는 이전에 완료됨)
+- **Commit**: 5d28429 "fix: harden i2c exec and mkdir path checks"
 
 ## Problem Statement
 
