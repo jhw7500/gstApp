@@ -1,9 +1,9 @@
 # GitHub Actions Workflow Configuration
-# 각 워크플로우의 enable/disable 및 설정을 중앙에서 관리합니다.
+# This file centralizes the enable/disable state and settings for each workflow.
 #
-# 사용법:
-#   - enabled: false로 설정하면 해당 워크플로우가 skip됩니다.
-#   - workflow_dispatch의 force_run=true로 강제 실행 가능합니다.
+# Usage:
+#   - Set `enabled: false` to skip a workflow.
+#   - A workflow can be force-run via workflow_dispatch with `force_run=true`.
 
 workflows:
   # === CI/CD Workflows ===

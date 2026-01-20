@@ -48,16 +48,21 @@ runs:
         # yq로 설정 읽기 (없으면 grep/sed로 fallback)
         if command -v yq &> /dev/null; then
           ENABLED=$(yq ".workflows.${WORKFLOW_NAME}.enabled // true" "$CONFIG_FILE")
+          CONFIG_JSON=$(yq -o=json ".workflows.${WORKFLOW_NAME} // {}" "$CONFIG_FILE")
         else
           # yq가 없으면 간단한 grep으로 처리
+          echo "::warning::yq command not found. The 'config' output will be empty."
           ENABLED=$(grep -A1 "^  ${WORKFLOW_NAME}:" "$CONFIG_FILE" | grep "enabled:" | sed 's/.*enabled: *//' | tr -d ' ')
           if [[ -z "$ENABLED" ]]; then
             ENABLED="true"
           fi
+          CONFIG_JSON="{}"
         fi
 
         echo "enabled=$ENABLED" >> $GITHUB_OUTPUT
-        echo "config={}" >> $GITHUB_OUTPUT
+        echo "config<<EOF" >> $GITHUB_OUTPUT
+        echo "$CONFIG_JSON" >> $GITHUB_OUTPUT
+        echo "EOF" >> $GITHUB_OUTPUT
 
         if [[ "$ENABLED" == "false" ]]; then
           echo "::notice::Workflow '$WORKFLOW_NAME' is disabled in config"

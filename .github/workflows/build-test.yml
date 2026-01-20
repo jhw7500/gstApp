@@ -5,7 +5,11 @@ on:
     branches: [ main, master ]
     paths:
       - '**.c'
+      - '**.cpp'
+      - '**.cc'
       - '**.h'
+      - '**.hpp'
+      - '**.hh'
       - 'Makefile'
       - 'build.sh'
       - 'dist/**'
@@ -16,7 +20,11 @@ on:
     branches: [ main, master ]
     paths:
       - '**.c'
+      - '**.cpp'
+      - '**.cc'
       - '**.h'
+      - '**.hpp'
+      - '**.hh'
       - 'Makefile'
       - 'build.sh'
       - 'dist/**'

@@ -5,6 +5,9 @@ inputs:
   github-token:
     description: 'GitHub token for MCP server'
     required: true
+  mcp-image:
+    description: 'MCP server Docker image with digest'
+    required: true
   mcp-tools:
     description: 'Comma-separated list of MCP tools to include'
     required: false
@@ -26,9 +29,6 @@ outputs:
   settings:
     description: 'Generated settings JSON'
     value: ${{ steps.generate.outputs.settings }}
-  mcp-image:
-    description: 'MCP server Docker image with digest'
-    value: 'ghcr.io/github/github-mcp-server:v0.18.0@sha256:6aa543f565bc98d96106fdd80a0abdc0c7147c8ca7f4663a814ceecef1ccc6d3'
 
 runs:
   using: 'composite'
@@ -38,14 +38,12 @@ runs:
       shell: bash
       env:
         GITHUB_TOKEN: '${{ inputs.github-token }}'
+        MCP_IMAGE: '${{ inputs.mcp-image }}'
         MCP_TOOLS: '${{ inputs.mcp-tools }}'
         ENABLE_MCP: '${{ inputs.enable-mcp }}'
         MAX_TURNS: '${{ inputs.max-session-turns }}'
         CORE_TOOLS: '${{ inputs.core-tools }}'
       run: |
-        # Docker image with digest pinning
-        MCP_IMAGE="ghcr.io/github/github-mcp-server:v0.18.0@sha256:6aa543f565bc98d96106fdd80a0abdc0c7147c8ca7f4663a814ceecef1ccc6d3"
-
         # Build core tools array
         CORE_TOOLS_JSON="[]"
         if [[ -n "$CORE_TOOLS" ]]; then
@@ -60,22 +58,31 @@ runs:
           MCP_TOOLS_JSON=$(echo "$MCP_TOOLS" | tr ',' '\n' | jq -R . | jq -s '.')
         fi
 
-        # Generate settings JSON
+        # Generate base settings (always present)
+        SETTINGS=$(jq -n \
+          --argjson maxTurns "$MAX_TURNS" \
+          --argjson coreTools "$CORE_TOOLS_JSON" \
+          '{
+            "model": {
+              "maxSessionTurns": $maxTurns
+            },
+            "telemetry": {
+              "enabled": true,
+              "target": "local",
+              "outfile": ".gemini/telemetry.log"
+            },
+            "tools": {
+              "core": $coreTools
+            }
+          }')
+
+        # Conditionally add MCP server settings
         if [[ "$ENABLE_MCP" == "true" && -n "$MCP_TOOLS" ]]; then
-          SETTINGS=$(jq -n \
-            --argjson maxTurns "$MAX_TURNS" \
-            --argjson coreTools "$CORE_TOOLS_JSON" \
+          SETTINGS=$(echo "$SETTINGS" | jq \
             --argjson mcpTools "$MCP_TOOLS_JSON" \
             --arg mcpImage "$MCP_IMAGE" \
-            '{
-              "model": {
-                "maxSessionTurns": $maxTurns
-              },
-              "telemetry": {
-                "enabled": true,
-                "target": "local",
-                "outfile": ".gemini/telemetry.log"
-              },
+            --arg githubToken "$GITHUB_TOKEN" \
+            '. + {
               "mcpServers": {
                 "github": {
                   "command": "docker",
@@ -86,29 +93,9 @@ runs:
                   ],
                   "includeTools": $mcpTools,
                   "env": {
-                    "GITHUB_PERSONAL_ACCESS_TOKEN": "${GITHUB_TOKEN}"
+                    "GITHUB_PERSONAL_ACCESS_TOKEN": $githubToken
                   }
                 }
-              },
-              "tools": {
-                "core": $coreTools
-              }
-            }')
-        else
-          SETTINGS=$(jq -n \
-            --argjson maxTurns "$MAX_TURNS" \
-            --argjson coreTools "$CORE_TOOLS_JSON" \
-            '{
-              "model": {
-                "maxSessionTurns": $maxTurns
-              },
-              "telemetry": {
-                "enabled": true,
-                "target": "local",
-                "outfile": ".gemini/telemetry.log"
-              },
-              "tools": {
-                "core": $coreTools
               }
             }')
         fi
