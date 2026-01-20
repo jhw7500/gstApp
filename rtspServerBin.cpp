@@ -341,58 +341,24 @@ static GstFlowReturn new_sample_handler(GstElement *sink, gpointer userData)
         return GST_FLOW_ERROR;
     }
 
-    if (!gst_buffer_map(buffer, &map, GST_MAP_READ)) {
-        gst_sample_unref(sample);
-        g_printerr("ch%d Failed to map buffer\n", info->ch);
-        return GST_FLOW_ERROR;
-    }
-
     if(info->debug)
     {
         GstClockTime timestamp = GST_BUFFER_PTS(buffer);
-        //g_message("Timestamp: %" GST_TIME_FORMAT "\n", GST_TIME_ARGS(timestamp));
-        //info->debug = 0;
-        //g_message("ch%d curstamp: %" GST_TIME_FORMAT " laststamp : %" GST_TIME_FORMAT "\n", info->ch, GST_TIME_ARGS(timestamp), GST_TIME_ARGS(info->last_timestamp));
-        //if (GST_CLOCK_DIFF(info->last_timestamp, timestamp) >= GST_SECOND)
         if(info->ch == 0)
         {
-            //GDateTime *now = g_date_time_new_now_local();
-            //gchar *formatted_date = g_date_time_format(now, "%Y-%m-%d %H:%M:%S");
-            //gint microsecond = g_date_time_get_microsecond(now);
-            //gchar *full_date = g_strdup_printf("%s.%06d", formatted_date, microsecond);
-            //g_warning("ch%d date: %s, Timestamp: %" GST_TIME_FORMAT "\n", info->ch, full_date, GST_TIME_ARGS(timestamp));
             g_warning("ch%d Timestamp: %" GST_TIME_FORMAT "\n", info->ch, GST_TIME_ARGS(timestamp));
             info->last_timestamp = timestamp;
-            //g_free(formatted_date);
-            //g_free(full_date);
-            //g_date_time_unref(now);
         }
     }
 
-#if 0
-    if(info->ch == 4)
-    {
-        float *data = (float *)map.data;
-        rnnoise_process_frame(den, data, data);
-    }
-#endif
-
-    // Create a new buffer and copy data
-    //info->buf = gst_buffer_new_and_alloc(map.size);
-    //gst_buffer_fill(info->buf, 0, map.data, map.size);
-    GstBuffer *out_buffer = gst_buffer_new_allocate(NULL, map.size, NULL);
-    gst_buffer_fill(out_buffer, 0, map.data, map.size);
-
-    // Unmap the original buffer
-    // gst_buffer_unmap(buffer, &map);
-    // info->buf = newBuffer;
-
-    // Push the new buffer to the appsrc
-    // g_thread_new("data-processing-thread", (GThreadFunc)process_data_thread, info);
-    //gst_app_src_push_buffer(GST_APP_SRC(info->appsrc), info->buf);
+    // Zero-Copy Optimization (Ref instead of Copy)
+    // Use gst_buffer_copy_region with GST_BUFFER_COPY_MEMORY to share memory but strip timestamps/meta.
+    // This ensures appsrc can assign fresh timestamps (do-timestamp=1) avoiding sync issues.
+    GstBuffer *out_buffer = gst_buffer_copy_region(buffer, GST_BUFFER_COPY_MEMORY, 0, -1);
+    
+    // Push the buffer (takes ownership)
     gst_app_src_push_buffer(GST_APP_SRC(info->appsrc), out_buffer);
 
-    gst_buffer_unmap(buffer, &map);
     gst_sample_unref(sample);
 
     return GST_FLOW_OK;
@@ -818,7 +784,7 @@ gboolean RtspServerBin::init(guint8 ch, gboolean crop_en)
                                     GST_RTSP_PERM_MEDIA_FACTORY_ACCESS, G_TYPE_BOOLEAN, TRUE,
                                     GST_RTSP_PERM_MEDIA_FACTORY_CONSTRUCT, G_TYPE_BOOLEAN, TRUE, NULL);
 
-    __LOG(LOG_INFO, "[RTSP][%s:%d]stream ready at rtsp://%s:%s@127.0.0.1:%s%s", _FILE_, __LINE__, cmdArg.rtsp_id, cmdArg.rtsp_passwd, cmdArg.rtsp_port, point);
+    __LOG(LOG_INFO, "[RTSP][%s:%d]stream ready at rtsp://%s:*****@127.0.0.1:%s%s", _FILE_, __LINE__, cmdArg.rtsp_id, cmdArg.rtsp_port, point);
     
     g_free(point);
 
@@ -894,7 +860,7 @@ gboolean RtspServerBin::init(guint8 ch, gboolean crop_en)
 
     g_object_set(re.enc, "bitrate", cmdArg.cam[ch].bps[STREAM_RTSP], NULL);
     g_object_set(re.enc, "gop-size", cmdArg.cam[ch].gop[STREAM_RTSP], NULL);
-    g_object_set(re.queue, "max-size-time", GST_SECOND/2, "leaky", LEAKY_DOWNSTREAM, NULL);
+    g_object_set(re.queue, "max-size-time", 200*GST_MSECOND, "leaky", LEAKY_DOWNSTREAM, NULL);
 
 #ifdef CHANNEL_EACH_CROP
     if(crop_en && cmdArg.overlay_en) ret = gst_element_link_many(re.queue, re.crop, re.overlay, re.convert, re.rate, re.capsfilter, re.enc, re.parse, re.sink, NULL);
@@ -978,7 +944,7 @@ gboolean RtspServerBin::init(guint8 ch, gboolean crop_en)
                                     GST_RTSP_PERM_MEDIA_FACTORY_ACCESS, G_TYPE_BOOLEAN, TRUE,
                                     GST_RTSP_PERM_MEDIA_FACTORY_CONSTRUCT, G_TYPE_BOOLEAN, TRUE, NULL);
 
-    __LOG(LOG_INFO, "[RTSP][%s:%d]stream ready at rtsp://%s:%s@127.0.0.1:%s%s", _FILE_, __LINE__, cmdArg.rtsp_id, cmdArg.rtsp_passwd, cmdArg.rtsp_port, point);
+    __LOG(LOG_INFO, "[RTSP][%s:%d]stream ready at rtsp://%s:*****@127.0.0.1:%s%s", _FILE_, __LINE__, cmdArg.rtsp_id, cmdArg.rtsp_port, point);
     
     g_free(point);
 
@@ -1023,7 +989,7 @@ guint rtspServerStart()
     GstRTSPAuth *auth = gst_rtsp_auth_new ();
     
     /* make user token */
-    __LOG(LOG_INFO, "[RTSP][%s:%d] rtsp id : %s, passwd : %s", _FILE_, __LINE__, cmdArg.rtsp_id, cmdArg.rtsp_passwd);
+    __LOG(LOG_INFO, "[RTSP][%s:%d] rtsp id : %s, passwd : *****", _FILE_, __LINE__, cmdArg.rtsp_id);
     GstRTSPToken *token = gst_rtsp_token_new (GST_RTSP_TOKEN_MEDIA_FACTORY_ROLE, G_TYPE_STRING, cmdArg.rtsp_id, NULL);
     gchar *basic = gst_rtsp_auth_make_basic (cmdArg.rtsp_id, cmdArg.rtsp_passwd);
     gst_rtsp_auth_add_basic (auth, basic, token);

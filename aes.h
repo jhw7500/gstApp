@@ -17,6 +17,7 @@
 #include "util.h"
 
 #define DEFAULT_PASSWD_PATH "/root/shared_v/.passwd"
+
 typedef unsigned int            UINT;
 typedef unsigned char           BYTE;
 typedef unsigned char*          LPBYTE;
@@ -53,7 +54,7 @@ private :
     VOID Cipher(BYTE State[4][4], LPBYTE ExpKey);
 
 public :
-	
+
 private :
 
 };

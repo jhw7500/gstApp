@@ -362,18 +362,29 @@ gchar *search_file(const gchar* path, const gchar* prefix, const gchar* suffix)
 	FILE *fp;
 	static gchar str[128];
 
-  sprintf(str, "ls -ptr %s/%s*%s | grep -v '/$' | grep '\\%s$' | tail -1 | tr -d '\r\n'", path, prefix, suffix, suffix);
-  //sprintf(str, "find %s/ -maxdepth 1 -type f -name \"%s*%s\" -printf '%%T+ %%p\\n' | sort -r | head -n 1 | cut -d\" \" -f2- | tr -d '\\r\\n'", path, prefix, suffix);
-  fp = popen(str, "r");
-  if (NULL == fp)
-  {
-    perror("popen() fail");
-    __LOG(LOG_CRIT, "[CFG][%s:%d] popen fail", _FILE_, __LINE__);
-  }
-  while (fgets(str, 128, fp));
-	__LOG(LOG_INFO, "[CFG][%s:%d] search_json_file : %s", _FILE_, __LINE__, str);
-	//Eliminate(str, '\n');
+	// 주의: path, prefix, suffix는 내부 상수값만 사용됨 (외부 입력 없음)
+	sprintf(str, "ls -ptr %s/%s*%s 2>/dev/null | grep -v '/$' | grep '\\%s$' | tail -1 | tr -d '\r\n'",
+	        path, prefix, suffix, suffix);
+	fp = popen(str, "r");
+	if (NULL == fp)
+	{
+		perror("popen() fail");
+		__LOG(LOG_CRIT, "[CFG][%s:%d] popen 실패", _FILE_, __LINE__);
+		str[0] = '\0';
+		return str;
+	}
 
+	str[0] = '\0';
+	if (fgets(str, sizeof(str), fp) != NULL) {
+		// 개행 문자 제거
+		gsize len = strlen(str);
+		if (len > 0 && str[len-1] == '\n') {
+			str[len-1] = '\0';
+		}
+	}
+	pclose(fp);
+
+	__LOG(LOG_INFO, "[CFG][%s:%d] search_file: %s", _FILE_, __LINE__, str);
 	return str;
 }
 
@@ -485,6 +496,11 @@ int safe_mkdir_p(const char *path, mode_t mode)
         return -1;
     }
 
+    if (strlen(path) >= sizeof(tmp)) {
+        __LOG(LOG_ERR, "[UTIL][%s:%d] Path too long: %s", _FILE_, __LINE__, path);
+        return -1;
+    }
+
     snprintf(tmp, sizeof(tmp), "%s", path);
     len = strlen(tmp);
 
@@ -532,6 +548,10 @@ int safe_exec_i2c(const char *cmd, int bus, int addr, int reg, int value, char *
     pid = fork();
     if (pid == -1) {
         __LOG(LOG_ERR, "[UTIL][%s:%d] Failed to fork", _FILE_, __LINE__);
+        if (output && output_size > 0) {
+            close(pipefd[0]);
+            close(pipefd[1]);
+        }
         return -1;
     }
 
@@ -541,7 +561,10 @@ int safe_exec_i2c(const char *cmd, int bus, int addr, int reg, int value, char *
 
         if (output && output_size > 0) {
             close(pipefd[0]);
-            dup2(pipefd[1], STDOUT_FILENO);
+            if (dup2(pipefd[1], STDOUT_FILENO) == -1) {
+                close(pipefd[1]);
+                _exit(126);
+            }
             close(pipefd[1]);
         }
 
@@ -567,12 +590,24 @@ int safe_exec_i2c(const char *cmd, int bus, int addr, int reg, int value, char *
     if (output && output_size > 0) {
         close(pipefd[1]);
         ssize_t n = read(pipefd[0], output, output_size - 1);
-        if (n > 0) output[n] = '\0';
-        else output[0] = '\0';
+        if (n > 0) {
+            output[n] = '\0';
+        } else {
+            output[0] = '\0';
+            if (n < 0) {
+                __LOG(LOG_ERR, "[UTIL][%s:%d] Failed to read pipe", _FILE_, __LINE__);
+            }
+        }
         close(pipefd[0]);
     }
 
-    waitpid(pid, &status, 0);
+    while (waitpid(pid, &status, 0) == -1) {
+        if (errno == EINTR) {
+            continue;
+        }
+        __LOG(LOG_ERR, "[UTIL][%s:%d] Failed to wait for child", _FILE_, __LINE__);
+        return -1;
+    }
 
     if (WIFEXITED(status)) {
         return WEXITSTATUS(status);
