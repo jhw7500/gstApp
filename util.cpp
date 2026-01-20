@@ -359,52 +359,32 @@ gboolean print_delay(GstPad *pad, GstObject *parent, GstBuffer *buffer)
 
 gchar *search_file(const gchar* path, const gchar* prefix, const gchar* suffix)
 {
+	FILE *fp;
 	static gchar str[128];
-	GDir *dir = NULL;
-	GError *error = NULL;
-	const gchar *filename = NULL;
-	gchar *latest_file = NULL;
-	time_t latest_mtime = 0;
 
-	str[0] = '\0';
-
-	// GLib의 GDir API를 사용한 안전한 파일 검색 (popen 대체)
-	dir = g_dir_open(path, 0, &error);
-	if (error != NULL) {
-		__LOG(LOG_ERR, "[CFG][%s:%d] g_dir_open 실패: %s", _FILE_, __LINE__, error->message);
-		g_error_free(error);
+	// 주의: path, prefix, suffix는 내부 상수값만 사용됨 (외부 입력 없음)
+	sprintf(str, "ls -ptr %s/%s*%s 2>/dev/null | grep -v '/$' | grep '\\%s$' | tail -1 | tr -d '\r\n'",
+	        path, prefix, suffix, suffix);
+	fp = popen(str, "r");
+	if (NULL == fp)
+	{
+		perror("popen() fail");
+		__LOG(LOG_CRIT, "[CFG][%s:%d] popen 실패", _FILE_, __LINE__);
+		str[0] = '\0';
 		return str;
 	}
 
-	// prefix와 suffix가 일치하는 가장 최근 파일 찾기
-	while ((filename = g_dir_read_name(dir)) != NULL) {
-		// prefix 및 suffix 확인
-		if (g_str_has_prefix(filename, prefix) && g_str_has_suffix(filename, suffix)) {
-			gchar *fullpath = g_build_filename(path, filename, NULL);
-			GStatBuf st;
-
-			// GLib의 g_stat() 사용 - glibc 버전 의존성 없음
-			if (g_stat(fullpath, &st) == 0 && S_ISREG(st.st_mode)) {
-				if (st.st_mtime > latest_mtime) {
-					latest_mtime = st.st_mtime;
-					g_free(latest_file);
-					latest_file = g_strdup(fullpath);
-				}
-			}
-			g_free(fullpath);
+	str[0] = '\0';
+	if (fgets(str, sizeof(str), fp) != NULL) {
+		// 개행 문자 제거
+		gsize len = strlen(str);
+		if (len > 0 && str[len-1] == '\n') {
+			str[len-1] = '\0';
 		}
 	}
-	g_dir_close(dir);
+	pclose(fp);
 
-	// 결과 복사
-	if (latest_file != NULL) {
-		g_strlcpy(str, latest_file, sizeof(str));
-		__LOG(LOG_INFO, "[CFG][%s:%d] search_file 찾음: %s", _FILE_, __LINE__, str);
-		g_free(latest_file);
-	} else {
-		__LOG(LOG_WARNING, "[CFG][%s:%d] 파일을 찾지 못함: %s/%s*%s", _FILE_, __LINE__, path, prefix, suffix);
-	}
-
+	__LOG(LOG_INFO, "[CFG][%s:%d] search_file: %s", _FILE_, __LINE__, str);
 	return str;
 }
 
