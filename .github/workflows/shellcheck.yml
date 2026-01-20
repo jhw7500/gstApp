@@ -9,6 +9,7 @@ on:
       - '**/postrm'
       - '**/prerm'
       - '.github/workflows/shellcheck.yml'
+      - '.github/workflow-config.yml'
   pull_request:
     branches: [ main, master ]
     paths:
@@ -17,10 +18,37 @@ on:
       - '**/postrm'
       - '**/prerm'
       - '.github/workflows/shellcheck.yml'
+      - '.github/workflow-config.yml'
+  workflow_dispatch:
+    inputs:
+      force_run:
+        description: 'Run even if disabled in config'
+        type: boolean
+        default: false
 
 jobs:
+  check-enabled:
+    name: Check if enabled
+    runs-on: ubuntu-latest
+    outputs:
+      enabled: ${{ steps.check.outputs.enabled }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          sparse-checkout: .github
+
+      - name: Check workflow config
+        id: check
+        uses: ./.github/actions/check-workflow-enabled
+        with:
+          workflow-name: shellcheck
+          force-run: ${{ github.event.inputs.force_run || 'false' }}
+
   shellcheck:
     name: ShellCheck Analysis
+    needs: check-enabled
+    if: needs.check-enabled.outputs.enabled == 'true'
     runs-on: ubuntu-latest
 
     steps:
@@ -30,7 +58,7 @@ jobs:
           submodules: recursive
 
       - name: Run ShellCheck
-        uses: ludeeus/action-shellcheck@master
+        uses: ludeeus/action-shellcheck@2.0.0
         with:
           scandir: '.'
           severity: warning
@@ -66,3 +94,15 @@ jobs:
           echo "## ShellCheck Results" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "ShellCheck analysis completed for all shell scripts and DEBIAN maintainer scripts." >> $GITHUB_STEP_SUMMARY
+
+  skipped:
+    name: Workflow Skipped
+    needs: check-enabled
+    if: needs.check-enabled.outputs.enabled != 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Notice
+        run: |
+          echo "::notice::ShellCheck workflow is disabled in .github/workflow-config.yml"
+          echo "## Workflow Skipped" >> $GITHUB_STEP_SUMMARY
+          echo "ShellCheck is disabled in workflow-config.yml" >> $GITHUB_STEP_SUMMARY

@@ -68,7 +68,33 @@ jobs:
       request: '${{ steps.extract_command.outputs.request }}'
       additional_context: '${{ steps.extract_command.outputs.additional_context }}'
       issue_number: '${{ github.event.pull_request.number || github.event.issue.number }}'
+      review_enabled: '${{ steps.check_config.outputs.review_enabled }}'
+      triage_enabled: '${{ steps.check_config.outputs.triage_enabled }}'
+      invoke_enabled: '${{ steps.check_config.outputs.invoke_enabled }}'
     steps:
+      - name: 'Checkout for config'
+        uses: 'actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8' # ratchet:actions/checkout@v5
+        with:
+          sparse-checkout: .github
+
+      - name: 'Check workflow config'
+        id: 'check_config'
+        run: |-
+          CONFIG_FILE=".github/workflow-config.yml"
+
+          get_enabled() {
+            local workflow="$1"
+            if [[ -f "$CONFIG_FILE" ]]; then
+              grep -A1 "^  ${workflow}:" "$CONFIG_FILE" | grep "enabled:" | sed 's/.*enabled: *//' | tr -d ' ' || echo "true"
+            else
+              echo "true"
+            fi
+          }
+
+          echo "review_enabled=$(get_enabled 'gemini-review')" >> $GITHUB_OUTPUT
+          echo "triage_enabled=$(get_enabled 'gemini-triage')" >> $GITHUB_OUTPUT
+          echo "invoke_enabled=$(get_enabled 'gemini-invoke')" >> $GITHUB_OUTPUT
+
       - name: 'Mint identity token'
         id: 'mint_identity_token'
         if: |-
@@ -126,7 +152,7 @@ jobs:
   review:
     needs: 'dispatch'
     if: |-
-      ${{ needs.dispatch.outputs.command == 'review' }}
+      ${{ needs.dispatch.outputs.command == 'review' && needs.dispatch.outputs.review_enabled != 'false' }}
     uses: './.github/workflows/gemini-review.yml'
     permissions:
       contents: 'read'
@@ -140,7 +166,7 @@ jobs:
   triage:
     needs: 'dispatch'
     if: |-
-      ${{ needs.dispatch.outputs.command == 'triage' }}
+      ${{ needs.dispatch.outputs.command == 'triage' && needs.dispatch.outputs.triage_enabled != 'false' }}
     uses: './.github/workflows/gemini-triage.yml'
     permissions:
       contents: 'read'
@@ -154,7 +180,7 @@ jobs:
   invoke:
     needs: 'dispatch'
     if: |-
-      ${{ needs.dispatch.outputs.command == 'invoke' }}
+      ${{ needs.dispatch.outputs.command == 'invoke' && needs.dispatch.outputs.invoke_enabled != 'false' }}
     uses: './.github/workflows/gemini-invoke.yml'
     permissions:
       contents: 'read'

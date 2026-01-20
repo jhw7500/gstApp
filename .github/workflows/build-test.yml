@@ -3,12 +3,56 @@ name: Build and Test
 on:
   push:
     branches: [ main, master ]
+    paths:
+      - '**.c'
+      - '**.h'
+      - 'Makefile'
+      - 'build.sh'
+      - 'dist/**'
+      - 'wlan-bridge/**'
+      - '.github/workflows/build-test.yml'
+      - '.github/workflow-config.yml'
   pull_request:
     branches: [ main, master ]
+    paths:
+      - '**.c'
+      - '**.h'
+      - 'Makefile'
+      - 'build.sh'
+      - 'dist/**'
+      - 'wlan-bridge/**'
+      - '.github/workflows/build-test.yml'
+      - '.github/workflow-config.yml'
+  workflow_dispatch:
+    inputs:
+      force_run:
+        description: 'Run even if disabled in config'
+        type: boolean
+        default: false
 
 jobs:
+  check-enabled:
+    name: Check if enabled
+    runs-on: ubuntu-latest
+    outputs:
+      enabled: ${{ steps.check.outputs.enabled }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          sparse-checkout: .github
+
+      - name: Check workflow config
+        id: check
+        uses: ./.github/actions/check-workflow-enabled
+        with:
+          workflow-name: build-test
+          force-run: ${{ github.event.inputs.force_run || 'false' }}
+
   build:
     name: Build Package
+    needs: check-enabled
+    if: needs.check-enabled.outputs.enabled == 'true'
     runs-on: ubuntu-latest
 
     steps:
@@ -110,10 +154,22 @@ jobs:
           echo "## Build Results" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           if [ -f release/wlan.deb ]; then
-            echo "✅ Package built successfully" >> $GITHUB_STEP_SUMMARY
+            echo "Package built successfully" >> $GITHUB_STEP_SUMMARY
             echo "" >> $GITHUB_STEP_SUMMARY
             echo "### Package Info" >> $GITHUB_STEP_SUMMARY
             dpkg-deb -I release/wlan.deb | grep -E "(Package|Version|Architecture)" >> $GITHUB_STEP_SUMMARY || true
           else
-            echo "❌ Package build failed" >> $GITHUB_STEP_SUMMARY
+            echo "Package build failed" >> $GITHUB_STEP_SUMMARY
           fi
+
+  skipped:
+    name: Workflow Skipped
+    needs: check-enabled
+    if: needs.check-enabled.outputs.enabled != 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Notice
+        run: |
+          echo "::notice::Build and Test workflow is disabled in .github/workflow-config.yml"
+          echo "## Workflow Skipped" >> $GITHUB_STEP_SUMMARY
+          echo "Build and Test is disabled in workflow-config.yml" >> $GITHUB_STEP_SUMMARY
