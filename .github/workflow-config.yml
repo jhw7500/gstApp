@@ -44,6 +44,11 @@ workflows:
     enabled: true
     description: "Claude code review"
 
+  # === Automation Workflows ===
+  auto-rereview-request:
+    enabled: true
+    description: "Auto-notify reviewers when review feedback is addressed"
+
 # === Shared Settings ===
 gemini:
   model: "gemini-2.0-flash-exp"
