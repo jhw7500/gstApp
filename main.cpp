@@ -34,6 +34,61 @@
 #define RTSPSERVERBIN_ENABLE
 #define AUDIOBIN_ENABLE
 #define SPLIT_TIME_RECOVERY
+
+typedef struct _FragmentClosedEvent {
+    gint ch;
+    gchar *location;
+} FragmentClosedEvent;
+
+static GAsyncQueue *fragment_closed_queue = NULL;
+static GThread *fragment_closed_thread = NULL;
+
+static gpointer fragment_closed_worker(gpointer data)
+{
+    MuxSinkBin *msBin = (MuxSinkBin *)data;
+
+    while (TRUE) {
+        FragmentClosedEvent *ev = (FragmentClosedEvent *)g_async_queue_pop(fragment_closed_queue);
+        if (!ev) continue;
+
+        if (ev->ch < 0) {
+            g_free(ev->location);
+            g_free(ev);
+            break;
+        }
+
+        msBin[ev->ch].handleFragmentClosed(ev->location);
+
+        g_free(ev->location);
+        g_free(ev);
+    }
+    return NULL;
+}
+
+static void start_fragment_closed_worker(MuxSinkBin *msBin)
+{
+    if (fragment_closed_queue) return;
+
+    fragment_closed_queue = g_async_queue_new();
+    fragment_closed_thread = g_thread_new("fragment-closed-worker", fragment_closed_worker, msBin);
+}
+
+static void stop_fragment_closed_worker()
+{
+    if (!fragment_closed_queue) return;
+
+    FragmentClosedEvent *ev = g_new0(FragmentClosedEvent, 1);
+    ev->ch = -1;
+    g_async_queue_push(fragment_closed_queue, ev);
+
+    if (fragment_closed_thread) {
+        g_thread_join(fragment_closed_thread);
+        fragment_closed_thread = NULL;
+    }
+
+    g_async_queue_unref(fragment_closed_queue);
+    fragment_closed_queue = NULL;
+}
 //MuxSinkBin muxSinkBin[MAX_CHANNEL];
 gboolean config_camera(gpointer user_data);
 
@@ -158,7 +213,14 @@ gboolean bus_message_parse(GstBus *bus, GstMessage *message, gpointer data)
                 // 이름으로 찾거나 포인터로 찾기 (포인터가 더 확실함)
                 for(int i=0; i<MAX_CHANNEL; i++) {
                     if (msBin[i].be.sink == src_element) {
-                        msBin[i].handleFragmentClosed(location);
+                        if (fragment_closed_queue) {
+                            FragmentClosedEvent *ev = g_new0(FragmentClosedEvent, 1);
+                            ev->ch = i;
+                            ev->location = g_strdup(location);
+                            g_async_queue_push(fragment_closed_queue, ev);
+                        } else {
+                            msBin[i].handleFragmentClosed(location);
+                        }
                         break;
                     }
                 }
@@ -780,6 +842,8 @@ gint main(gint argc, gchar *argv[])
     threadArgs->arg4 = captureBin;
     threadArgs->arg5 = encoderBin;
 
+    start_fragment_closed_worker(muxSinkBin);
+
     //pipeline = gst_pipeline_new("test-pipeline");
     {
         GDateTime *pipe_datetime = g_date_time_new_now_local();
@@ -1178,6 +1242,8 @@ gint main(gint argc, gchar *argv[])
 
 main_end:
     __LOG(LOG_NOTICE, "[GST][%s:%d] main loop end", _FILE_, __LINE__);
+
+    stop_fragment_closed_worker();
 
     if(threadArgs) g_free(threadArgs);
 
