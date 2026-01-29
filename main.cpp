@@ -197,13 +197,13 @@ gboolean bus_message_parse(GstBus *bus, GstMessage *message, gpointer data)
  			const GstStructure *structure = gst_message_get_structure(message);
 			if(gst_structure_has_name(structure, "splitmuxsink-fragment-opened"))
             {
-                __LOG(LOG_NOTICE, "[GST][%s:%d] fragment-opened: %s", __FILE__, __LINE__, \
+                //__LOG(LOG_NOTICE, "[GST][%s:%d] fragment-opened: %s", __FILE__, __LINE__, \
                     g_value_get_string(gst_structure_get_value(structure, "location")));
             }
             else if(gst_structure_has_name(structure, "splitmuxsink-fragment-closed"))
             {
                 const gchar *location = g_value_get_string(gst_structure_get_value(structure, "location"));
-                __LOG(LOG_NOTICE, "[GST][%s:%d] fragment-closed: %s", __FILE__, __LINE__, location);
+                //__LOG(LOG_NOTICE, "[GST][%s:%d] fragment-closed: %s", __FILE__, __LINE__, location);
 
                 // 어떤 채널의 splitmuxsink인지 찾아서 핸들러 호출
                 ThreadArgs *tArgs = (ThreadArgs *)data;
