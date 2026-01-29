@@ -256,6 +256,15 @@ static bool is_safe_prefix(const gchar *prefix)
     return true;
 }
 
+static gchar *build_capture_base_dir()
+{
+    // If capture.dir is provided, it must be an absolute path.
+    if (cmdArg.cap.dir && cmdArg.cap.dir[0] == '/') {
+        return g_strdup(cmdArg.cap.dir);
+    }
+    return g_strdup_printf("%s/%s", cmdArg.mntDir, cmdArg.cap.path);
+}
+
 static void eos_callback(GstAppSink *appsink, gpointer user_data) 
 {
     CaptureData *info = (CaptureData *)user_data;
@@ -523,18 +532,22 @@ void CaptureBin::addCaptureRequest(gint maxCnt, const gchar *prefix, gpointer us
         prefix = NULL;
     }
 
+    gchar *base_dir = build_capture_base_dir();
+
     if(prefix == NULL)
     {
         GDateTime *datetime = g_date_time_new_now_local();
         gchar *date_str = g_date_time_format(datetime, "%Y%m%d_%H%M%S");
-        req->filePath = g_strdup_printf("%s/%s/%s_%s-ch%d", cmdArg.mntDir, cmdArg.cap.path, cmdArg.ohtName, date_str, captureData.ch);
+        req->filePath = g_strdup_printf("%s/%s_%s-ch%d", base_dir, cmdArg.ohtName, date_str, captureData.ch);
         g_date_time_unref(datetime);
         g_free(date_str);
     }
     else
     {
-        req->filePath = g_strdup_printf("%s/%s/%s-ch%d", cmdArg.mntDir, cmdArg.cap.path, prefix, captureData.ch);
+        req->filePath = g_strdup_printf("%s/%s-ch%d", base_dir, prefix, captureData.ch);
     }
+
+    g_free(base_dir);
     
     captureData.request_queue->push_back(req);
     
@@ -784,13 +797,15 @@ GstPad* CaptureBin::getBinSinkPad()
 gint CaptureBin::setFilePath(const gchar *prefix)
 {
     if(captureData.filePath) g_free(captureData.filePath);
+
+    gchar *base_dir = build_capture_base_dir();
     
     if(prefix == NULL)
     {
         GDateTime *datetime = g_date_time_new_now_local();
         gchar *date_str = g_date_time_format(datetime, "%Y%m%d_%H%M%S");
 
-        captureData.filePath = g_strdup_printf("%s/%s/%s_%s-ch%d", cmdArg.mntDir, cmdArg.cap.path, cmdArg.ohtName, date_str, captureData.ch);
+        captureData.filePath = g_strdup_printf("%s/%s_%s-ch%d", base_dir, cmdArg.ohtName, date_str, captureData.ch);
 
         __LOG(LOG_DEBUG, "[%s][%s:%d] filePath : %s", CAP_LOG_KEY, _FILE_, __LINE__, captureData.filePath);
 
@@ -799,9 +814,11 @@ gint CaptureBin::setFilePath(const gchar *prefix)
     }
     else
     {
-        captureData.filePath = g_strdup_printf("%s/%s/%s-ch%d", cmdArg.mntDir, cmdArg.cap.path, prefix, captureData.ch);
+        captureData.filePath = g_strdup_printf("%s/%s-ch%d", base_dir, prefix, captureData.ch);
         __LOG(LOG_DEBUG, "[%s][%s:%d] filePath : %s", CAP_LOG_KEY, _FILE_, __LINE__, captureData.filePath);
     }
+
+    g_free(base_dir);
 
     return 1;
 }
@@ -816,6 +833,32 @@ gboolean CaptureBin::init(guint8 ch)
     captureData.ch = ch;
     captureData.fps = cmdArg.fps[STREAM_CAP][captureData.ch];
     captureData.quality = cmdArg.cap.quality;
+
+    // Determine encoder type before element creation
+    captureData.enc_type = CAP_ENC_JPEG;
+    captureData.extention = "jpg";
+    if(g_strcmp0(cmdArg.cap.encoder, "jpeg") == 0 || g_strcmp0(cmdArg.cap.encoder, "jpg") == 0) {
+        captureData.enc_type = CAP_ENC_JPEG;
+        captureData.extention = "jpg";
+    }
+    else if(g_strcmp0(cmdArg.cap.encoder, "turbo") == 0 || g_strcmp0(cmdArg.cap.encoder, "turbojpeg") == 0 || g_strcmp0(cmdArg.cap.encoder, "turbojpg") == 0) {
+        captureData.enc_type = CAP_ENC_TURBO;
+        captureData.extention = "jpg";
+        captureData.tjCompressor = tjInitCompress();
+    }
+    else if(g_strcmp0(cmdArg.cap.encoder, "raw") == 0) {
+        captureData.enc_type = CAP_ENC_RAW;
+        captureData.extention = "raw";
+    }
+    else if(g_strcmp0(cmdArg.cap.encoder, "png") == 0) {
+        captureData.enc_type = CAP_ENC_PNG;
+        captureData.extention = "png";
+    }
+    else if(cmdArg.cap.encoder != NULL) {
+        __LOG(LOG_ERR, "[%s][%s:%d] capture enc %s is invalid : default enc type is jpeg", CAP_LOG_KEY, _FILE_, __LINE__, cmdArg.cap.encoder);
+        captureData.enc_type = CAP_ENC_JPEG;
+        captureData.extention = "jpg";
+    }
     //sinkPad = NULL;
     __LOG(LOG_INFO, "[%s][%s:%d] %s ch : %d, crop : %s", CAP_LOG_KEY, _FILE_, __LINE__, __FUNCTION__, captureData.ch, crop_en? "enable":"disable");
 
@@ -824,7 +867,16 @@ gboolean CaptureBin::init(guint8 ch)
     be.valve = gst_element_factory_make("valve", g_strdup_printf("valve_%d", captureData.ch));
     be.queue2 = gst_element_factory_make(QUEUE_TYPE, g_strdup_printf("queue2_%d", captureData.ch));
     be.imx_convert = gst_element_factory_make("imxvideoconvert_g2d", g_strdup_printf("imx_convert%d", captureData.ch));
-    be.enc = gst_element_factory_make("jpegenc", g_strdup_printf("jpegenc%d", captureData.ch));
+    be.enc = NULL;
+    if (captureData.enc_type == CAP_ENC_JPEG) {
+        be.enc = gst_element_factory_make("jpegenc", g_strdup_printf("jpegenc%d", captureData.ch));
+    } else if (captureData.enc_type == CAP_ENC_PNG) {
+        be.enc = gst_element_factory_make("pngenc", g_strdup_printf("pngenc%d", captureData.ch));
+        if (!be.enc) {
+            __LOG(LOG_CRIT, "[%s][%s:%d] pngenc not available (gst-plugins-good required)", CAP_LOG_KEY, _FILE_, __LINE__);
+            return ret;
+        }
+    }
     be.appsink = gst_element_factory_make("appsink", g_strdup_printf("appsink%d", captureData.ch));
     be.crop = gst_element_factory_make("videocrop", g_strdup_printf("crop%d", captureData.ch));
     be.overlay = gst_element_factory_make("textoverlay", g_strdup_printf("overlay%d", captureData.ch));
@@ -834,14 +886,18 @@ gboolean CaptureBin::init(guint8 ch)
 
     //GstElement *imx_convert = gst_element_factory_make("imxvideoconvert_g2d", g_strdup_printf("imxconvert%d", captureData.ch));
 
-    if (!be.bin || !be.queue || !be.valve || !be.queue2 || !be.enc || !be.appsink || !be.imx_convert || !be.crop || !be.overlay || \
-        !be.capsfilter || !be.appsrc || !be.queue_sink) {
+    if (!be.bin || !be.queue || !be.valve || !be.queue2 || !be.appsink || !be.imx_convert || !be.crop || !be.overlay || \
+        !be.capsfilter || !be.appsrc || !be.queue_sink || \
+        ((captureData.enc_type == CAP_ENC_JPEG || captureData.enc_type == CAP_ENC_PNG) && !be.enc)) {
         __LOG(LOG_CRIT, "[%s][%s:%d] capture element create error", CAP_LOG_KEY, _FILE_, __LINE__);
         return ret;
     }
 
-    gst_bin_add_many(GST_BIN(be.bin), be.queue, be.valve, be.queue2, be.imx_convert, be.enc, be.appsink, be.crop, be.overlay, \
+    gst_bin_add_many(GST_BIN(be.bin), be.queue, be.valve, be.queue2, be.imx_convert, be.appsink, be.crop, be.overlay, \
                     be.capsfilter, be.queue_sink, be.appsrc, NULL);
+    if (be.enc) {
+        gst_bin_add(GST_BIN(be.bin), be.enc);
+    }
     //gst_bin_add_many(GST_BIN(be.bin), be.queue_src, be.queue3, be.queue_sink, NULL);
     //gst_bin_add_many(GST_BIN(be.bin), imx_convert, , NULL);
 
@@ -864,23 +920,6 @@ gboolean CaptureBin::init(guint8 ch)
     g_object_set(be.valve, "drop", TRUE, NULL);
     captureData.valve = be.valve;
 
-    if(g_strcmp0(cmdArg.cap.encoder, "jpeg") == 0 || g_strcmp0(cmdArg.cap.encoder, "jpg") == 0) {
-        captureData.enc_type = CAP_ENC_JPEG;
-        captureData.extention = g_strdup_printf("%s", "jpg");
-    }
-    else if(g_strcmp0(cmdArg.cap.encoder, "turbo") == 0 || g_strcmp0(cmdArg.cap.encoder, "turbojpeg") == 0 || g_strcmp0(cmdArg.cap.encoder, "turbojpg") == 0) {
-        captureData.enc_type = CAP_ENC_TURBO;
-        captureData.extention = g_strdup_printf("%s", "jpg");
-        captureData.tjCompressor = tjInitCompress();
-    }
-    else if(g_strcmp0(cmdArg.cap.encoder, "raw") == 0) {
-        captureData.enc_type = CAP_ENC_RAW;
-        captureData.extention = g_strdup_printf("%s", "raw");
-    }
-    else {
-        __LOG(LOG_ERR, "[%s][%s:%d] capture enc %s is invalid : default enc type is jpeg", CAP_LOG_KEY, _FILE_, __LINE__, cmdArg.cap.encoder);
-    }
-
 #if 1
     switch(captureData.enc_type)
     {
@@ -896,6 +935,19 @@ gboolean CaptureBin::init(guint8 ch)
             g_object_set(be.capsfilter, "caps", caps, NULL);
             gst_caps_unref(caps);
             g_object_set(be.enc, "quality", captureData.quality, NULL);
+            break;
+        case CAP_ENC_PNG:
+            // pngenc typically expects RGB/RGBA. Force conversion via imxvideoconvert.
+            if(crop_en) ret = gst_element_link_many(be.appsrc, be.crop, be.imx_convert, be.capsfilter, be.enc, be.queue2, be.appsink, NULL);
+            else ret = gst_element_link_many(be.appsrc, be.imx_convert, be.capsfilter, be.enc, be.queue2, be.appsink, NULL);
+            caps = gst_caps_new_simple("video/x-raw",
+                                        "format", G_TYPE_STRING, "RGB",
+                                        "width", G_TYPE_INT, cmdArg.width,
+                                        "height", G_TYPE_INT, cmdArg.height,
+                                        "framerate", GST_TYPE_FRACTION, captureData.fps, 1,
+                                        NULL);
+            g_object_set(be.capsfilter, "caps", caps, NULL);
+            gst_caps_unref(caps);
             break;
         case CAP_ENC_TURBO:
             caps = gst_caps_new_simple("video/x-raw",

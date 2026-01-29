@@ -23,7 +23,8 @@ typedef enum
 {
     CAP_ENC_JPEG = 0,
     CAP_ENC_TURBO =1,
-    CAP_ENC_RAW =2
+    CAP_ENC_RAW =2,
+    CAP_ENC_PNG =3
 } CapEncType;
 
 // Completion callback type
