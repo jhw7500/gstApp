@@ -129,6 +129,7 @@ typedef struct {
     gint timeout;
     gint quality;
     gint queue_size;
+    const gchar *dir;     // absolute path for capture output directory (optional)
     const gchar *path;
     const gchar *encoder;
 } CaptureConfig;
