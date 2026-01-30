@@ -1087,6 +1087,25 @@ gint main(gint argc, gchar *argv[])
         }
     }
 
+    // Enable timestamp debug at startup if requested via argv.
+    if (cmdArg.dbg_cap_ts && cmdArg.stream_en[STREAM_CAP]) {
+        for (i = 0; i < MAX_CHANNEL; i++) {
+            if (cmdArg.cam[i].enable) {
+                captureBin[i].setTimeStampDebug();
+            }
+        }
+    }
+    if (cmdArg.dbg_rtsp_ts && cmdArg.stream_en[STREAM_RTSP]) {
+        for (i = 0; i < MAX_CHANNEL; i++) {
+            if (cmdArg.cam[i].enable) {
+                rtspServerBin[i].setTimeStampDebug();
+            }
+        }
+        if (cmdArg.audio_en) {
+            rtspServerBin[4].setTimeStampDebug();
+        }
+    }
+
     //gst_element_set_state(pipeline, GST_STATE_PLAYING);
     //signal(SIGINT, handle_sigint);
     GST_DEBUG_BIN_TO_DOT_FILE(GST_BIN(pipeline), GST_DEBUG_GRAPH_SHOW_ALL, gst_element_get_name(pipeline));
