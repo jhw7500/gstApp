@@ -23,7 +23,28 @@ defaults:
     shell: bash
 
 jobs:
+  check-enabled:
+    name: Check if enabled
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      enabled: ${{ steps.check.outputs.enabled }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          sparse-checkout: .github
+
+      - name: Check workflow config
+        id: check
+        uses: ./.github/actions/check-workflow-enabled
+        with:
+          workflow-name: gemini-dispatch
+
   dispatch:
+    needs: check-enabled
+    if: needs.check-enabled.outputs.enabled == 'true'
     uses: jhw7500/automation/.github/workflows/gemini-dispatch.yml@v1.22
     permissions:
       contents: read

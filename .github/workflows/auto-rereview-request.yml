@@ -15,7 +15,29 @@ on:
         default: false
 
 jobs:
+  check-enabled:
+    name: Check if enabled
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      enabled: ${{ steps.check.outputs.enabled }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          sparse-checkout: .github
+
+      - name: Check workflow config
+        id: check
+        uses: ./.github/actions/check-workflow-enabled
+        with:
+          workflow-name: auto-rereview-request
+          force-run: ${{ github.event.inputs.force_run || 'false' }}
+
   rereview:
+    needs: check-enabled
+    if: needs.check-enabled.outputs.enabled == 'true'
     permissions:
       contents: read
       pull-requests: write
