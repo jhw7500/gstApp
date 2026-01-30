@@ -1,8 +1,10 @@
-name: Gemini Auto PR Review
+name: opencode
 
 on:
-  pull_request:
-    types: [opened, synchronize]
+  issue_comment:
+    types: [created]
+  pull_request_review_comment:
+    types: [created]
 
 jobs:
   check-enabled:
@@ -22,20 +24,17 @@ jobs:
         id: check
         uses: ./.github/actions/check-workflow-enabled
         with:
-          workflow-name: gemini-auto-review
+          workflow-name: opencode
 
-  gemini-review:
+  opencode:
     needs: check-enabled
     if: >-
       needs.check-enabled.outputs.enabled == 'true' &&
-      github.event.pull_request.head.repo.fork == false &&
-      github.event.pull_request.head.repo.full_name == github.repository
+      contains(fromJson('["OWNER","MEMBER","COLLABORATOR"]'), github.event.comment.author_association)
     permissions:
-      contents: read
-      pull-requests: write
-      issues: write
       id-token: write
-    uses: jhw7500/automation/.github/workflows/gemini-auto-review.yml@v1.23
-    with:
-      pr_number: ${{ github.event.pull_request.number }}
+      contents: read
+      pull-requests: read
+      issues: read
+    uses: jhw7500/automation/.github/workflows/opencode.yml@v1.23
     secrets: inherit

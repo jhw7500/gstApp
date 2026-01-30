@@ -57,7 +57,18 @@ int CIPCInsance::init(ThreadArgs *args)
     if(ret < 0)
 		__LOG(LOG_CRIT, "[IPC][%s:%d] ret:%d", _FILE_, __LINE__, ret);
 
-    makeDir(cmdArg.cap.path);
+    // Ensure capture output directory exists
+    if (cmdArg.cap.dir && cmdArg.cap.dir[0] == '/') {
+        if (safe_mkdir_p(cmdArg.cap.dir, 0755) < 0) {
+            __LOG(LOG_ERR, "[IPC][%s:%d] err mkdir: %s", _FILE_, __LINE__, cmdArg.cap.dir);
+        }
+    } else {
+        gchar *cap_dir = g_strdup_printf("%s/%s", cmdArg.mntDir, cmdArg.cap.path);
+        if (safe_mkdir_p(cap_dir, 0755) < 0) {
+            __LOG(LOG_ERR, "[IPC][%s:%d] err mkdir: %s", _FILE_, __LINE__, cap_dir);
+        }
+        g_free(cap_dir);
+    }
 
     return ret;
 }

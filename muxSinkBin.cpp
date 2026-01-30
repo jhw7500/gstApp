@@ -11,6 +11,167 @@
  */
 
 #include "muxSinkBin.h"
+#include <sys/file.h>
+#include <unistd.h>
+#include <fcntl.h>
+#include <string.h>
+
+// 다채널 완료 추적 구조체
+typedef struct _RecordingSession {
+    gchar *timestamp;        // "20260127_143000"
+    gboolean ch0_done;
+    gboolean ch1_done;
+    gboolean ch2_done;
+    gboolean ch3_done;
+    gboolean srt_done;
+    GMutex mutex;            // 스레드 안전성
+} RecordingSession;
+
+// 전역 세션 테이블 (타임스탬프 -> RecordingSession)
+static GHashTable *recording_sessions = NULL;
+static GMutex sessions_mutex;
+
+// 세션 관리 함수
+static RecordingSession* get_or_create_session(const gchar *timestamp) {
+    g_mutex_lock(&sessions_mutex);
+
+    if (!recording_sessions) {
+        recording_sessions = g_hash_table_new_full(g_str_hash, g_str_equal, g_free, g_free);
+    }
+
+    RecordingSession *session = (RecordingSession *)g_hash_table_lookup(recording_sessions, timestamp);
+    if (!session) {
+        session = g_new0(RecordingSession, 1);
+        session->timestamp = g_strdup(timestamp);
+        g_mutex_init(&session->mutex);
+        g_hash_table_insert(recording_sessions, g_strdup(timestamp), session);
+        __LOG(LOG_INFO, "[GST][%s:%d] Created new session: %s", _FILE_, __LINE__, timestamp);
+    }
+
+    g_mutex_unlock(&sessions_mutex);
+    return session;
+}
+
+// Note: check_all_channels_done 함수는 on_fragment_closed에서 직접 카운팅하므로 제거됨
+
+static void mark_session_complete(const gchar *timestamp) {
+    // /tmp/session_<timestamp>.all_done 파일 생성
+    gchar *done_file = g_strdup_printf("/tmp/session_%s.all_done", timestamp);
+    FILE *fp = fopen(done_file, "w");
+    if (fp) {
+        fprintf(fp, "%s\n", timestamp);
+        fclose(fp);
+        __LOG(LOG_NOTICE, "[GST][%s:%d] Session complete: %s", _FILE_, __LINE__, timestamp);
+    } else {
+        __LOG(LOG_ERR, "[GST][%s:%d] Failed to create done file: %s", _FILE_, __LINE__, done_file);
+    }
+    g_free(done_file);
+}
+
+void MuxSinkBin::handleFragmentClosed(const gchar *location)
+{
+    // MuxSinkData *info = (MuxSinkData *)user_data;
+    // this->muxSinkData를 사용
+
+    __LOG(LOG_NOTICE, "[GST][%s:%d] ch%d Fragment closed (Bus): %s", _FILE_, __LINE__, muxSinkData.ch, location);
+
+    // 타임스탬프 추출 (예: /mnt/sd_cam/tmp/VD3001_20260127_143000-ch0.mp4.part)
+    const gchar *filename = strrchr(location, '/');
+    if (!filename) filename = location;
+    else filename++;  // '/' 다음 문자부터
+
+    // 타임스탬프 파싱 개선: 파일명 끝부분의 패턴(-chX)을 기준으로 역방향 추출
+    // 예: .../VD3001_20260127_143000-ch0.mp4.part
+    gchar *timestamp = NULL;
+    const gchar *ch_ptr = strstr(filename, "-ch");
+    
+    if (ch_ptr && (ch_ptr - filename) >= 15) {
+        // -ch 바로 앞 15글자 중 앞 13글자(YYYYMMDD_HHMM)만 추출
+        const gchar *ts_start = ch_ptr - 15;
+        if (g_ascii_isdigit(ts_start[0])) {
+             timestamp = g_strndup(ts_start, 13);
+        }
+    }
+
+    if (!timestamp) {
+        // Fallback
+        const gchar *underscore = strchr(filename, '_');
+        if (underscore && strlen(underscore) > 13) {
+            timestamp = g_strndup(underscore + 1, 13);
+        }
+    }
+
+    if (!timestamp) {
+        __LOG(LOG_ERR, "[GST][%s:%d] Failed to extract timestamp from: %s", _FILE_, __LINE__, location);
+        return;
+    }
+
+    __LOG(LOG_INFO, "[GST][%s:%d] ch%d Extracted timestamp: %s", _FILE_, __LINE__, muxSinkData.ch, timestamp);
+
+    // 세션 조회 또는 생성
+    RecordingSession *session = get_or_create_session(timestamp);
+
+    g_mutex_lock(&session->mutex);
+
+    // 채널별 완료 표시
+    switch(muxSinkData.ch) {
+        case 0: session->ch0_done = TRUE; break;
+        case 1: session->ch1_done = TRUE; break;
+        case 2: session->ch2_done = TRUE; break;
+        case 3: session->ch3_done = TRUE; break;
+        default:
+            __LOG(LOG_WARNING, "[GST][%s:%d] Unknown channel: %d", _FILE_, __LINE__, muxSinkData.ch);
+            break;
+    }
+
+    __LOG(LOG_INFO, "[GST][%s:%d] Session %s status: ch0=%d ch1=%d ch2=%d ch3=%d",
+          _FILE_, __LINE__, timestamp,
+          session->ch0_done, session->ch1_done, session->ch2_done, session->ch3_done);
+
+    // 모든 활성 채널 완료 확인
+    // TODO: JSON에서 활성 채널 읽어서 정확히 판단
+    // 임시: 완료된 채널이 2개 이상이면 세션 완료로 간주 (실제로는 설정 기반으로)
+    gint completed_channels = 0;
+    if (session->ch0_done) completed_channels++;
+    if (session->ch1_done) completed_channels++;
+    if (session->ch2_done) completed_channels++;
+    if (session->ch3_done) completed_channels++;
+
+    // 활성 채널 수 확인 (cmdArg 기반)
+    gint active_channels = 0;
+    for (int i = 0; i < MAX_CHANNEL; i++) {
+        if (cmdArg.cam[i].enable) {
+            active_channels++;
+        }
+    }
+
+    __LOG(LOG_INFO, "[GST][%s:%d] Session %s progress: %d/%d (active)", 
+          _FILE_, __LINE__, timestamp, completed_channels, active_channels);
+
+    // 디버그 로그: /tmp/session_debug.log에 기록
+    FILE *fp_dbg = fopen("/tmp/session_debug.log", "a");
+    if (fp_dbg) {
+        fprintf(fp_dbg, "TS: %s, File: %s, Active: %d, Done: %d, ch0:%d ch1:%d ch2:%d ch3:%d\n", 
+            timestamp, filename, active_channels, completed_channels,
+            session->ch0_done, session->ch1_done, session->ch2_done, session->ch3_done);
+        fclose(fp_dbg);
+    }
+
+    // 활성 채널 수만큼 완료되었는지 확인
+    if (completed_channels >= active_channels && active_channels > 0) {
+        mark_session_complete(timestamp);
+
+        // 세션 정리
+        g_mutex_unlock(&session->mutex);
+        g_mutex_lock(&sessions_mutex);
+        g_hash_table_remove(recording_sessions, timestamp);
+        g_mutex_unlock(&sessions_mutex);
+    } else {
+        g_mutex_unlock(&session->mutex);
+    }
+
+    g_free(timestamp);
+}
 
 static void sink_added(GstElement *sink, GstElement *arg0, gpointer data)
 {
@@ -190,9 +351,10 @@ gchararray format_location(GstElement *sink, guint arg0, gpointer data)
     gint usec = g_date_time_get_microsecond(datetime);
     gchararray file_name;
     gchar *date_str;
+    gchar *timestamp_str;
 
     //info->split_msec = sec;
-    info->split_msec = sec*1000 + usec/1000; 
+    info->split_msec = sec*1000 + usec/1000;
     //__LOG(LOG_NOTICE, "[GST][%s:%d] ch%d, %d*1000+%d/1000=%d", _FILE_, __LINE__, info->ch, sec, msec, info->split_msec);
 
     if(cmdArg.audio_en && info->split_msec >= cmdArg.split_audio_min_msec) {
@@ -201,16 +363,38 @@ gchararray format_location(GstElement *sink, guint arg0, gpointer data)
     }
 
     date_str = g_date_time_format(datetime, "%Y%m%d_%H%M00");
-    //date_str = g_date_time_format(datetime, "%Y%m%d_%H%M%S");
+    timestamp_str = g_date_time_format(datetime, "%Y%m%d_%H%M");
+
+    // .part 확장자 추가
     if(g_strcmp0(cmdArg.muxer, "ts") == 0)
-        file_name = g_strdup_printf("%s/%s_%s-ch%d.ts", cmdArg.mntDir, cmdArg.ohtName, date_str, info->ch);
+        file_name = g_strdup_printf("%s/%s_%s-ch%d.ts.part", cmdArg.mntDir, cmdArg.ohtName, date_str, info->ch);
     else
-        file_name = g_strdup_printf("%s/%s_%s-ch%d.mp4", cmdArg.mntDir, cmdArg.ohtName, date_str, info->ch);
-    
-    //__LOG(LOG_NOTICE, "[GST][%s:%d] %s : %s", _FILE_, __LINE__, __FUNCTION__, file_name);
+        file_name = g_strdup_printf("%s/%s_%s-ch%d.mp4.part", cmdArg.mntDir, cmdArg.ohtName, date_str, info->ch);
+
+    // 타임스탬프 저장 (fragment-closed에서 사용)
+    if (info->last_timestamp) {
+        g_free(info->last_timestamp);
+    }
+    info->last_timestamp = g_strdup(timestamp_str);
+
+    // 시작 시간 기록 (chk_cam_operate.sh에서 사용)
+    // 파일 락을 사용하여 동시 쓰기 방지
+    int fd = open("/tmp/start_video_time_chk", O_WRONLY | O_CREAT | O_TRUNC, 0644);
+    if (fd >= 0) {
+        if (flock(fd, LOCK_EX) == 0) {
+            gchar *time_str = g_date_time_format(datetime, "%Y%m%d %H:%M:%S");
+            write(fd, time_str, strlen(time_str));
+            flock(fd, LOCK_UN);
+            g_free(time_str);
+        }
+        close(fd);
+    }
+
+    __LOG(LOG_NOTICE, "[GST][%s:%d] ch%d Recording started: %s", _FILE_, __LINE__, info->ch, file_name);
 
     g_date_time_unref(datetime);
     g_free(date_str);
+    g_free(timestamp_str);
 
     return file_name;
 }
@@ -257,12 +441,17 @@ MuxSinkBin::MuxSinkBin()
     be.bin = NULL;
     muxSinkData.start_f = 0;
     muxSinkData.split_msec = 0;
+    muxSinkData.last_timestamp = NULL;
 }
 
 MuxSinkBin::~MuxSinkBin()
 {
     // 소멸자 코드 추가
     __LOG(LOG_INFO, "[GST][%s:%d] %s[%d]", _FILE_, __LINE__, __FUNCTION__, muxSinkData.ch);
+    if (muxSinkData.last_timestamp) {
+        g_free(muxSinkData.last_timestamp);
+        muxSinkData.last_timestamp = NULL;
+    }
 }
 
 gboolean MuxSinkBin::addBinVideoSinkPad()
@@ -331,7 +520,8 @@ gboolean MuxSinkBin::init(guint8 num)
     //me.sink = gst_element_factory_make("splitmuxsink", "splitmuxsink");
     __LOG(LOG_INFO, "[GST][%s:%d] %s ch : %d", _FILE_, __LINE__, __FUNCTION__, muxSinkData.ch);
     //g_object_set(me.sink, "max-size-time", 10*GST_SECOND, NULL);
-    be.sink = gst_element_factory_make("splitmuxsink", "splitmuxsink");
+    // 식별을 위해 엘리먼트 이름에 채널 포함
+    be.sink = gst_element_factory_make("splitmuxsink", g_strdup_printf("splitmuxsink_ch%d", muxSinkData.ch));
     be.mp4mux = gst_element_factory_make("mp4mux", "mp4mux");
     be.tsmux = gst_element_factory_make("mpegtsmux", "mpegtsmux");
     be.qtmux = gst_element_factory_make("qtmux", "qtmux");
@@ -411,6 +601,10 @@ gboolean MuxSinkBin::init(guint8 num)
     __LOG(LOG_INFO, "[GST][%s:%d] file duration : %lld", _FILE_, __LINE__, duration);
     
     g_object_set(be.sink, "max-size-time", duration, NULL);
+    // 키 프레임 요청 활성화 (분할 시점에 키 프레임 강제 요청)
+    g_object_set(be.sink, "send-keyframe-requests", TRUE, NULL);
+    // 버스 메시지로 fragment 상태 전달 (디버깅용)
+    g_object_set(be.sink, "message-forward", TRUE, NULL);
     //g_object_set(be.sink, "reserved-max-duration", 3000000000000000000, NULL);
     //g_object_set(be.sink, "reserved-moov-update-period", 1000000000, NULL);
     //g_object_set(be.sink, "use-robust-muxing", TRUE, NULL);
@@ -464,8 +658,10 @@ gboolean MuxSinkBin::init(guint8 num)
     g_object_set(be.mp4mux, "trak-timescale", 0, NULL);
 #endif
 
-    
+
     g_signal_connect(be.sink, "format-location", G_CALLBACK(format_location), &muxSinkData);
+    // fragment-closed 신호는 1.18.0 splitmuxsink에 존재하지 않으므로 버스 메시지로 대체됨
+    // g_signal_connect(be.sink, "fragment-closed", G_CALLBACK(on_fragment_closed), &muxSinkData);
     g_signal_connect(be.sink, "sink-added", G_CALLBACK(sink_added), NULL);
 
     //if(!gst_element_add_pad(me.bin, gst_ghost_pad_new(g_strdup_printf("muxBinSink_audio_ch%d", ch), gst_element_get_request_pad(me.sink, "audio_%u"))))

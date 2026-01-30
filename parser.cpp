@@ -65,6 +65,7 @@ void ParserClass::init_arg(gchar *argv)
 
     arg.cap.path = DEFAULT_CAP_DIR;
     arg.cap.maxCnt = DEFAULT_CAPTURE_MAX_CNT;
+    arg.cap.dir = NULL;
     arg.cap.encoder = NULL;
     arg.cap.res_en = TRUE;
     arg.cap.delay = DEFAULT_CAPTURE_DELAY;
@@ -339,6 +340,20 @@ gint ParserClass::json_parser(const gchar *path, const gchar *header)
             json_object_get_value(sobj, "delay", &arg.cap.delay);
             json_object_get_value(sobj, "timeout", &arg.cap.timeout);
             json_object_get_value(sobj, "encoder", &arg.cap.encoder);
+            // Optional: absolute capture output directory.
+            // Do not use json_object_get_value() because missing keys log CRIT.
+            {
+                json_object *dir_obj = json_object_object_get(sobj, "dir");
+                if (dir_obj && json_object_get_type(dir_obj) == json_type_string) {
+                    const char *dir_str = json_object_get_string(dir_obj);
+                    if (dir_str && dir_str[0] == '/') {
+                        arg.cap.dir = dir_str;
+                        __LOG(LOG_INFO, "[%s][%s:%d] capture dir: %s", LOG_KEY, _FILE_, __LINE__, arg.cap.dir);
+                    } else if (dir_str && dir_str[0] != '\0') {
+                        __LOG(LOG_WARNING, "[%s][%s:%d] capture dir must be absolute (ignored): %s", LOG_KEY, _FILE_, __LINE__, dir_str);
+                    }
+                }
+            }
             //json_object_get_value(sobj, "padding", &arg.cap.padding);
             json_object_get_value(sobj, "record", &arg.cap.record_en);
             json_object_get_value(sobj, "rtsp", &arg.cap.rtsp_en);
@@ -411,7 +426,7 @@ gint ParserClass::arg_parser(int *argc, char **argv[])
         {"cap", 'a', 0, G_OPTION_ARG_INT, &arg.stream_en[STREAM_CAP], "video capturing enable, default(0)", "INT"},
         {"audio", 's', 0, G_OPTION_ARG_INT, &arg.audio_en, "audio recording enable, default(FALSE)", "INT"},
         {"padding", 'J', 0, G_OPTION_ARG_INT, &arg.cap.padding, "padding enable, default(TRUE)", "INT"},
-        {"capenc", 'N', 0, G_OPTION_ARG_STRING, &arg.cap.encoder, "video capture encoder(jpeg, turbo/turbojpeg, raw/rgb), default(jpeg)", "STRING"},
+        {"capenc", 'N', 0, G_OPTION_ARG_STRING, &arg.cap.encoder, "video capture encoder(jpeg, turbo/turbojpeg, raw, png), default(jpeg)", "STRING"},
         {"capres", 'R', 0, G_OPTION_ARG_INT, &arg.cap.res_en, "video capture response enable, default(TRUE)", "INT"},
         {"capmax", 'x', 0, G_OPTION_ARG_INT, &arg.cap.maxCnt, "capture max count, default(3)", "INT"},
         {"capdelay", 'A', 0, G_OPTION_ARG_INT, &arg.cap.delay, "video capture delay(msec), default(0)", "INT"},
@@ -591,15 +606,20 @@ gint ParserClass::check_arg()
         }
 
         // Use safe_mkdir_p instead of system("mkdir -p ...")
-        gchar *cap_dir = g_strdup_printf("%s/%s", cmdArg.mntDir, cmdArg.cap.path);
+        gchar *cap_dir = NULL;
+        if (cmdArg.cap.dir && cmdArg.cap.dir[0] == '/') {
+            cap_dir = g_strdup(cmdArg.cap.dir);
+        } else {
+            cap_dir = g_strdup_printf("%s/%s", cmdArg.mntDir, cmdArg.cap.path);
+        }
         if(safe_mkdir_p(cap_dir, 0755) < 0)
             __LOG(LOG_ERR, "[CFG][%s:%d] err mkdir: %s", __FILE__, __LINE__, cap_dir);
         g_free(cap_dir);
 
         __LOG(LOG_NOTICE, "[%s][%s:%d] capture ch0 fps:%d, ch1 fps:%d, ch2 fps:%d, ch3 fps:%d", LOG_KEY, _FILE_, __LINE__, \
                             arg.fps[STREAM_CAP][0], arg.fps[STREAM_CAP][1], arg.fps[STREAM_CAP][2], arg.fps[STREAM_CAP][3]);  
-        __LOG(LOG_NOTICE, "[%s][%s:%d] capEnc:%s, MaxCnt:%d, res_en:%d, path:%s, delay:%d, timeout:%d, padding:%d, quality:%d, queue_size:%d", \
-                            LOG_KEY, _FILE_, __LINE__, arg.cap.encoder, arg.cap.maxCnt, arg.cap.res_en, arg.cap.path, arg.cap.delay, arg.cap.timeout, arg.cap.padding, arg.cap.quality, arg.cap.queue_size);
+        __LOG(LOG_NOTICE, "[%s][%s:%d] capEnc:%s, MaxCnt:%d, res_en:%d, dir:%s, path:%s, delay:%d, timeout:%d, padding:%d, quality:%d, queue_size:%d", \
+                            LOG_KEY, _FILE_, __LINE__, arg.cap.encoder, arg.cap.maxCnt, arg.cap.res_en, arg.cap.dir? arg.cap.dir:"(null)", arg.cap.path, arg.cap.delay, arg.cap.timeout, arg.cap.padding, arg.cap.quality, arg.cap.queue_size);
     }
 
     gint total_fps = 0;

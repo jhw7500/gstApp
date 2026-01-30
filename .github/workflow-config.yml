@@ -1,66 +1,56 @@
 # GitHub Actions Workflow Configuration
-# This file centralizes the enable/disable state and settings for each workflow.
 #
-# Usage:
-#   - Set `enabled: false` to skip a workflow.
-#   - A workflow can be force-run via workflow_dispatch with `force_run=true`.
+# This file controls enable/disable toggles for automatic workflows.
+# Workflows should default to enabled if this file is missing.
 
+# Shared workflow version pin for jhw7500/automation.
+#
+# NOTE: GitHub Actions does not allow dynamic refs in `uses: ...@ref`, so this value
+# is used by a repo automation workflow that opens a PR updating all `uses:` refs.
+automation_ref: v1.23
+
+# Global review behavior.
+# - manual triggers (e.g. @gemini-cli /review, @claude) should keep working regardless.
+# - set review.auto=false to disable automatic PR reviews.
+review:
+  auto: false
+
+# Per-workflow toggles.
+# Comment-driven workflows should be explicitly controllable even in internal repos.
 workflows:
-  # === CI/CD Workflows ===
-  shellcheck:
-    enabled: false
-    description: "Shell script static analysis"
-
+  # Repo-specific CI workflows
   build-test:
-    enabled: false
-    description: "Build and test the package"
-
-  # === Gemini AI Workflows ===
-  gemini-dispatch:
     enabled: true
-    description: "Central dispatcher for Gemini commands"
-
-  gemini-invoke:
+  shellcheck:
     enabled: true
-    description: "General Gemini CLI invocation"
-    cancel_in_progress: false  # 대화형 봇이므로 false 유지 권장
 
-  gemini-review:
+  # Repo automation helpers
+  bump-automation-ref:
     enabled: true
-    description: "PR code review with Gemini"
-    timeout_minutes: 7
 
-  gemini-triage:
-    enabled: true
-    description: "Issue triage and labeling"
-    timeout_minutes: 7
-
-  # === Claude AI Workflows ===
-  claude:
-    enabled: true
-    description: "Claude AI integration"
-
-  claude-code-review:
-    enabled: true
-    description: "Claude code review"
-
-  # === Automation Workflows ===
+  # Shared automation workflow wrappers
   auto-rereview-request:
     enabled: true
-    description: "Auto-notify reviewers when review feedback is addressed"
-
-# === Shared Settings ===
-gemini:
-  model: "gemini-2.0-flash-exp"
-  max_session_turns: 25
-  # Docker image with digest pinning for supply chain security
-  # To update: docker pull <image>:<tag> && docker inspect --format='{{index .RepoDigests 0}}' <image>:<tag>
-  mcp_server_image: "ghcr.io/github/github-mcp-server:v0.18.0@sha256:6aa543f565bc98d96106fdd80a0abdc0c7147c8ca7f4663a814ceecef1ccc6d3"
-  telemetry:
+  claude-code-review:
     enabled: true
-    target: "local"
-    outfile: ".gemini/telemetry.log"
+  gemini-auto-review:
+    enabled: true
+  gemini-dispatch:
+    enabled: true
+  gemini-invoke:
+    enabled: true
+  gemini-review:
+    enabled: true
+  gemini-scheduled-triage:
+    enabled: true
+  gemini-triage:
+    enabled: true
 
-notifications:
-  on_failure: true
-  mention_actor: true
+  opencode:
+    enabled: true
+  opencode-auto-review:
+    enabled: true
+  gemini-chat:
+    enabled: true
+  claude:
+    enabled: true
