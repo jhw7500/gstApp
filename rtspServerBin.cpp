@@ -343,11 +343,34 @@ static GstFlowReturn new_sample_handler(GstElement *sink, gpointer userData)
 
     if(info->debug)
     {
-        GstClockTime timestamp = GST_BUFFER_PTS(buffer);
-        if(info->ch == 0)
-        {
-            g_warning("ch%d Timestamp: %" GST_TIME_FORMAT "\n", info->ch, GST_TIME_ARGS(timestamp));
-            info->last_timestamp = timestamp;
+        GstClockTime pts = GST_BUFFER_PTS(buffer);
+        GstClockTime delta = GST_CLOCK_TIME_NONE;
+        GstClockTime pipe_latency = GST_CLOCK_TIME_NONE;
+
+        if (GST_CLOCK_TIME_IS_VALID(pts) && GST_CLOCK_TIME_IS_VALID(info->last_timestamp) && pts >= info->last_timestamp) {
+            delta = pts - info->last_timestamp;
+        }
+        info->last_timestamp = pts;
+
+        if (pipeline && GST_CLOCK_TIME_IS_VALID(pts)) {
+            GstClock *clock = gst_element_get_clock(pipeline);
+            if (clock) {
+                GstClockTime now = gst_clock_get_time(clock);
+                gst_object_unref(clock);
+                GstClockTime base = gst_element_get_base_time(pipeline);
+                GstClockTime running = (now > base) ? (now - base) : 0;
+                pipe_latency = (running >= pts) ? (running - pts) : 0;
+            }
+        }
+
+        // Throttle logs to avoid flooding (at most once per second per channel)
+        gint64 now_us = g_get_monotonic_time();
+        if (info->last_log_us == 0 || (now_us - info->last_log_us) >= 1000000) {
+            info->last_log_us = now_us;
+            __LOG(LOG_NOTICE,
+                  "[RTSP][%s:%d] ch%d pipe-latency=%" GST_TIME_FORMAT " pts=%" GST_TIME_FORMAT " delta=%" GST_TIME_FORMAT,
+                  _FILE_, __LINE__, info->ch,
+                  GST_TIME_ARGS(pipe_latency), GST_TIME_ARGS(pts), GST_TIME_ARGS(delta));
         }
     }
 
@@ -552,6 +575,7 @@ RtspServerBin::RtspServerBin()
     rtspServerData.start_f = FALSE;
     rtspServerData.debug = FALSE;
     rtspServerData.last_timestamp = GST_CLOCK_TIME_NONE;
+    rtspServerData.last_log_us = 0;
     rtspServerData.dual_bps = TRUE;
 }
 

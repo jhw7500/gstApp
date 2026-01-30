@@ -73,7 +73,7 @@ void MuxSinkBin::handleFragmentClosed(const gchar *location)
     // MuxSinkData *info = (MuxSinkData *)user_data;
     // this->muxSinkData를 사용
 
-    __LOG(LOG_NOTICE, "[GST][%s:%d] ch%d Fragment closed (Bus): %s", _FILE_, __LINE__, muxSinkData.ch, location);
+    __LOG(LOG_INFO, "[GST][%s:%d] ch%d Fragment closed (Bus): %s", _FILE_, __LINE__, muxSinkData.ch, location);
 
     // 타임스탬프 추출 (예: /mnt/sd_cam/tmp/VD3001_20260127_143000-ch0.mp4.part)
     const gchar *filename = strrchr(location, '/');
