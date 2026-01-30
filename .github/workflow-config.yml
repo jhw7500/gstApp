@@ -18,7 +18,37 @@ review:
 # Per-workflow toggles.
 # Comment-driven workflows should be explicitly controllable even in internal repos.
 workflows:
+  # Repo-specific CI workflows
+  build-test:
+    enabled: true
+  shellcheck:
+    enabled: true
+
+  # Repo automation helpers
+  bump-automation-ref:
+    enabled: true
+
+  # Shared automation workflow wrappers
+  auto-rereview-request:
+    enabled: true
+  claude-code-review:
+    enabled: true
+  gemini-auto-review:
+    enabled: true
+  gemini-dispatch:
+    enabled: true
+  gemini-invoke:
+    enabled: true
+  gemini-review:
+    enabled: true
+  gemini-scheduled-triage:
+    enabled: true
+  gemini-triage:
+    enabled: true
+
   opencode:
+    enabled: true
+  opencode-auto-review:
     enabled: true
   gemini-chat:
     enabled: true
