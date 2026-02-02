@@ -11,12 +11,55 @@
  */
 
 #include "videoBin.h"
+#include <linux/videodev2.h>
+#include <sys/ioctl.h>
+#include <fcntl.h>
+#include <unistd.h>
+#include <errno.h>
+#include <string.h>
 
 static void prepare_format(GstElement *object, gint arg0, GstCaps *caps, gpointer data)
 {
     guint8 *csi = (guint8 *)data;
     //__LOG(LOG_NOTICE, "[GST][%s:%d] %s [%d]", _FILE_, __LINE__, __FUNCTION__, *csi);
     __LOG(LOG_INFO, "[GST][%s:%d] csi%d caps : %s", _FILE_, __LINE__, *csi, gst_caps_to_string(caps));
+}
+
+/**
+ * Set V4L2 subdev control value via ioctl
+ * @param csiNum CSI number (0 or 1)
+ * @param ctrl_id V4L2 control ID (e.g., V4L2_CID_EXPOSURE_AUTO)
+ * @param value Control value
+ * @return 0 on success, -1 on failure
+ */
+static int set_v4l2_subdev_control(int csiNum, unsigned int ctrl_id, int value)
+{
+    char dev_path[32];
+    int fd, ret;
+    struct v4l2_control ctrl;
+
+    // csiNum 0 -> /dev/v4l-subdev2 (max9296 1-0048)
+    // csiNum 1 -> /dev/v4l-subdev3 (max9296 2-0048)
+    snprintf(dev_path, sizeof(dev_path), "/dev/v4l-subdev%d", csiNum + 2);
+
+    fd = open(dev_path, O_RDWR);
+    if (fd < 0) {
+        __LOG(LOG_ERR, "[GST][%s:%d] Failed to open %s: %s",
+              _FILE_, __LINE__, dev_path, strerror(errno));
+        return -1;
+    }
+
+    ctrl.id = ctrl_id;
+    ctrl.value = value;
+
+    ret = ioctl(fd, VIDIOC_S_CTRL, &ctrl);
+    if (ret < 0) {
+        __LOG(LOG_ERR, "[GST][%s:%d] VIDIOC_S_CTRL failed for ctrl 0x%08x on %s: %s",
+              _FILE_, __LINE__, ctrl_id, dev_path, strerror(errno));
+    }
+
+    close(fd);
+    return ret;
 }
 
 void VideoBin::getIoMode()
@@ -257,41 +300,31 @@ gboolean VideoBin::init(guint8 csiNum)
     }
 
     if (cam_cfg != NULL) {
-        GstStructure *extra_controls = gst_structure_new_empty("extra-controls");
-
-        // Exposure control (V4L2_CID_EXPOSURE_AUTO: 0=auto, 1=manual)
-        gst_structure_set(extra_controls,
-            "exposure-auto", G_TYPE_INT,
-            cam_cfg->ae_on ? 0 : 1,
-            NULL);
+        // Set V4L2 controls directly via subdev ioctl
+        // V4L2_CID_EXPOSURE_AUTO: 0=Auto Mode, 1=Manual Mode
+        int exposure_auto = cam_cfg->ae_on ? 0 : 1;  // ae_on=1 -> Auto Mode (0)
+        set_v4l2_subdev_control(csiNum, V4L2_CID_EXPOSURE_AUTO, exposure_auto);
 
         if (!cam_cfg->ae_on) {
-            // Manual exposure time (V4L2_CID_EXPOSURE_ABSOLUTE)
-            gst_structure_set(extra_controls,
-                "exposure-absolute", G_TYPE_INT, (gint)cam_cfg->exp_time, NULL);
-
-            // Manual gain (V4L2_CID_GAIN)
-            gst_structure_set(extra_controls,
-                "gain", G_TYPE_INT, (gint)cam_cfg->ae_gain, NULL);
+            // Manual mode: set exposure time and gain
+            set_v4l2_subdev_control(csiNum, V4L2_CID_EXPOSURE, cam_cfg->exp_time);
+            set_v4l2_subdev_control(csiNum, V4L2_CID_GAIN, cam_cfg->ae_gain);
+            // Disable auto gain when in manual exposure mode
+            set_v4l2_subdev_control(csiNum, V4L2_CID_AUTOGAIN, 0);
+        } else {
+            // Auto mode: enable auto gain
+            set_v4l2_subdev_control(csiNum, V4L2_CID_AUTOGAIN, 1);
         }
 
-        // White balance (V4L2_CID_AUTO_WHITE_BALANCE: 1=auto, 0=manual)
+        // White balance: 1=auto, 0=manual
         gint awb_auto = (g_strcmp0(cam_cfg->awb, "auto") == 0) ? 1 : 0;
-        gst_structure_set(extra_controls,
-            "white-balance-automatic", G_TYPE_INT, awb_auto, NULL);
+        set_v4l2_subdev_control(csiNum, V4L2_CID_AUTO_WHITE_BALANCE, awb_auto);
 
-        // Horizontal flip (V4L2_CID_HFLIP)
-        gst_structure_set(extra_controls,
-            "horizontal-flip", G_TYPE_INT, cam_cfg->hflip ? 1 : 0, NULL);
+        // Flip controls
+        set_v4l2_subdev_control(csiNum, V4L2_CID_HFLIP, cam_cfg->hflip ? 1 : 0);
+        set_v4l2_subdev_control(csiNum, V4L2_CID_VFLIP, cam_cfg->vflip ? 1 : 0);
 
-        // Vertical flip (V4L2_CID_VFLIP)
-        gst_structure_set(extra_controls,
-            "vertical-flip", G_TYPE_INT, cam_cfg->vflip ? 1 : 0, NULL);
-
-        g_object_set(be.src, "extra-controls", extra_controls, NULL);
-        gst_structure_free(extra_controls);
-
-        __LOG(LOG_INFO, "[GST][%s:%d] V4L2 controls set: csi%d ae_on=%d exp=%d gain=%d awb=%s hflip=%d vflip=%d",
+        __LOG(LOG_INFO, "[GST][%s:%d] V4L2 subdev controls set: csi%d ae_on=%d exp=%d gain=%d awb=%s hflip=%d vflip=%d",
             _FILE_, __LINE__, csiNum, cam_cfg->ae_on, cam_cfg->exp_time, cam_cfg->ae_gain,
             cam_cfg->awb, cam_cfg->hflip, cam_cfg->vflip);
     }
