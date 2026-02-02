@@ -31,6 +31,7 @@ typedef struct _RtspServerData
     gboolean debug;
     guint8 ch;
     GstClockTime last_timestamp;
+    gint64 last_log_us;
     gboolean dual_bps;
 } RtspServerData;
 

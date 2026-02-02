@@ -40,10 +40,11 @@ typedef struct _CaptureRequest {
     gint timeoutMs;
     std::atomic<bool> responseSent;  // Atomic for thread-safe callback prevention
     std::atomic<bool> timed_out;  // Skip pending I/O after timeout
+    std::atomic<gint> droppedCnt;  // Dropped frames during this request (queue full, etc.)
 
     _CaptureRequest() : maxCnt(0), filePath(NULL), userData(NULL), mode(0),
                         captureCnt(0), startTime(0), timeoutMs(0), responseSent(false),
-                        timed_out(false) {}
+                        timed_out(false), droppedCnt(0) {}
     ~_CaptureRequest() { if(filePath) g_free(filePath); }
 } CaptureRequest;
 
@@ -77,6 +78,20 @@ typedef struct _CaptureData
     std::shared_ptr<CaptureRequest> current_request;
     std::unique_ptr<std::mutex> queue_mutex;
     GstElement *valve;
+
+    // Debug/metrics
+    GstClockTime last_saved_pts;  // for delta between saved frames
+    gint64 last_drop_log_us;
+
+    // Buffered capture mode (for stable PTS spacing under heavy encoders like PNG)
+    gboolean buffering_active;
+    std::shared_ptr<CaptureRequest> buffering_req;
+    std::deque<GstBuffer*> buffering_buffers; // holds refs; consumed by appsrc
+    GstClockTime buffering_first_pts;
+    GstClockTime buffering_next_pts;
+    GstClockTime buffering_period;
+    GThread *buffering_feeder_thread;
+    std::atomic<bool> buffering_feeder_running;
 } CaptureData;
 
 typedef struct _CaptureElement

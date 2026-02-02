@@ -103,10 +103,32 @@ struct _AsyncCaptureTask {
     CaptureData *info;
     gchar *file_path;
     gint capture_index;
-    
+
+    // Timing from sample
+    GstClockTime pts;
+    GstClockTime running_time;
+
     // Linked Request
     std::shared_ptr<CaptureRequest> request;
 };
+
+// Forward declarations for buffered capture helpers
+static void clear_buffering_buffers(CaptureData *info);
+static gpointer buffering_feeder_thread(gpointer user_data);
+
+static GstClockTime get_pipeline_running_time()
+{
+    if (!pipeline) return GST_CLOCK_TIME_NONE;
+    GstClock *clock = gst_element_get_clock(pipeline);
+    if (!clock) return GST_CLOCK_TIME_NONE;
+
+    GstClockTime now = gst_clock_get_time(clock);
+    gst_object_unref(clock);
+
+    GstClockTime base = gst_element_get_base_time(pipeline);
+    if (now <= base) return 0;
+    return now - base;
+}
 
 // Callback data for idle handler
 typedef struct {
@@ -158,6 +180,7 @@ static gpointer capture_worker_thread(gpointer user_data)
         FILE *fp = NULL;
         GstMapInfo map;
         gboolean success = FALSE;
+        gsize written_bytes = 0;
 
         do {
             if(task->info->enc_type == CAP_ENC_TURBO)
@@ -167,10 +190,15 @@ static gpointer capture_worker_thread(gpointer user_data)
                 if(jpeg_buf && jpeg_size > 0) {
                     fp = fopen(task->file_path, "wb");
                     if(fp) {
-                        fwrite(jpeg_buf, 1, jpeg_size, fp);
+                        written_bytes = fwrite(jpeg_buf, 1, jpeg_size, fp);
                         fclose(fp);
-                        __LOG(LOG_INFO, "[%s][%s:%d] ch%d Saved JPEG to %s (%ld bytes)", CAP_LOG_KEY, _FILE_, __LINE__, task->info->ch, task->file_path, jpeg_size);
-                        success = TRUE;
+                        success = (written_bytes == (gsize)jpeg_size);
+                        if (success) {
+                            __LOG(LOG_INFO, "[%s][%s:%d] ch%d Saved JPEG to %s (%ld bytes)", CAP_LOG_KEY, _FILE_, __LINE__, task->info->ch, task->file_path, jpeg_size);
+                        } else {
+                            __LOG(LOG_ERR, "[%s][%s:%d] ch%d Failed to write complete file %s (%zu/%ld bytes written)",
+                                  CAP_LOG_KEY, _FILE_, __LINE__, task->info->ch, task->file_path, (size_t)written_bytes, jpeg_size);
+                        }
                     }
                     else {
                         __LOG(LOG_ERR, "[%s][%s:%d] ch%d Failed to open file %s for writing", CAP_LOG_KEY, _FILE_, __LINE__, task->info->ch, task->file_path);
@@ -196,9 +224,13 @@ static gpointer capture_worker_thread(gpointer user_data)
 
                 fp = fopen(task->file_path, "wb");
                 if(fp) {
-                    fwrite(map.data, 1, map.size, fp);
+                    written_bytes = fwrite(map.data, 1, map.size, fp);
                     fclose(fp);
-                    success = TRUE;
+                    success = (written_bytes == map.size);
+                    if (!success) {
+                        __LOG(LOG_ERR, "[%s][%s:%d] ch%d Failed to write complete file %s (%zu/%zu bytes written)",
+                              CAP_LOG_KEY, _FILE_, __LINE__, task->info->ch, task->file_path, (size_t)written_bytes, (size_t)map.size);
+                    }
                 }
                 else {
                     __LOG(LOG_ERR, "[%s][%s:%d] ch%d Failed to open file %s for writing", CAP_LOG_KEY, _FILE_, __LINE__, task->info->ch, task->file_path);
@@ -207,6 +239,48 @@ static gpointer capture_worker_thread(gpointer user_data)
             }
         } while(0);
 
+        // Per-file completion logging (keep it lightweight):
+        // - Always log the first file of the request
+        // - Log the last file when we know maxCnt
+        if (success && task->request) {
+            const gint last_index = task->request->maxCnt - 1;
+            if (task->capture_index == 0 || (last_index >= 0 && task->capture_index == last_index)) {
+                __LOG(LOG_INFO, "[%s][%s:%d] ch%d Saved frame idx=%d/%d: %s (%zu bytes)",
+                      CAP_LOG_KEY, _FILE_, __LINE__, task->info->ch,
+                      task->capture_index, task->request->maxCnt, task->file_path, (size_t)written_bytes);
+            }
+
+            if (task->info->debug) {
+                GstClockTime pts = task->pts;
+                GstClockTime rt = task->running_time;
+                GstClockTime delta = GST_CLOCK_TIME_NONE;
+                GstClockTime latency = GST_CLOCK_TIME_NONE;
+
+                if (GST_CLOCK_TIME_IS_VALID(pts) && GST_CLOCK_TIME_IS_VALID(task->info->last_saved_pts)) {
+                    if (pts >= task->info->last_saved_pts) {
+                        delta = pts - task->info->last_saved_pts;
+                    }
+                }
+                if (GST_CLOCK_TIME_IS_VALID(rt) && GST_CLOCK_TIME_IS_VALID(pts)) {
+                    if (rt >= pts) {
+                        latency = rt - pts;
+                    } else {
+                        latency = 0;
+                    }
+                }
+
+                __LOG(LOG_NOTICE,
+                      "[%s][%s:%d] ch%d CAP sample: idx=%d/%d pts=%" GST_TIME_FORMAT " delta=%" GST_TIME_FORMAT " pipe=%" GST_TIME_FORMAT,
+                      CAP_LOG_KEY, _FILE_, __LINE__, task->info->ch,
+                      task->capture_index, task->request->maxCnt,
+                      GST_TIME_ARGS(pts), GST_TIME_ARGS(delta), GST_TIME_ARGS(latency));
+
+                if (GST_CLOCK_TIME_IS_VALID(pts)) {
+                    task->info->last_saved_pts = pts;
+                }
+            }
+        }
+
         // Increment counter only after successful write (atomic operation)
         if(success && task->request) {
             // Increment WRITTEN count in request
@@ -214,6 +288,7 @@ static gpointer capture_worker_thread(gpointer user_data)
 
             // Check if all captures for this request are complete
             if(new_count >= task->request->maxCnt) {
+                gint64 elapsed_ms = (g_get_monotonic_time() - task->request->startTime) / 1000;
                 // Atomic compare-and-swap to prevent double callback (timeout vs completion race)
                 bool expected = false;
                 if (task->request->responseSent.compare_exchange_strong(expected, true) &&
@@ -229,6 +304,34 @@ static gpointer capture_worker_thread(gpointer user_data)
                           CAP_LOG_KEY, _FILE_, __LINE__, task->info->ch, new_count, task->request->maxCnt);
                 }
 
+                __LOG(LOG_NOTICE, "[%s][%s:%d] ch%d Capture request DONE: %s (written %d/%d, dropped %d, elapsed %ld ms)",
+                      CAP_LOG_KEY, _FILE_, __LINE__, task->info->ch,
+                      task->request->filePath ? task->request->filePath : "(null)",
+                      new_count, task->request->maxCnt, (gint)task->request->droppedCnt.load(), elapsed_ms);
+
+                // Start buffered collection for next pending request (PNG only)
+                {
+                    std::lock_guard<std::mutex> lock(*task->info->queue_mutex);
+                    if (task->info->enc_type == CAP_ENC_PNG &&
+                        !task->info->buffering_active &&
+                        !task->info->current_request &&
+                        task->info->request_queue &&
+                        !task->info->request_queue->empty()) {
+                        std::shared_ptr<CaptureRequest> next = task->info->request_queue->front();
+                        clear_buffering_buffers(task->info);
+                        task->info->buffering_active = TRUE;
+                        task->info->buffering_req = next;
+                        task->info->buffering_first_pts = GST_CLOCK_TIME_NONE;
+                        task->info->buffering_next_pts = GST_CLOCK_TIME_NONE;
+                        task->info->buffering_period = (task->info->fps > 0) ? (GST_SECOND / task->info->fps) : (GST_SECOND / 1);
+                        if (task->info->valve) {
+                            g_object_set(task->info->valve, "drop", FALSE, NULL);
+                        }
+                        __LOG(LOG_NOTICE, "[%s][%s:%d] ch%d buffered capture enabled for next request: fps=%d cnt=%d",
+                              CAP_LOG_KEY, _FILE_, __LINE__, task->info->ch, task->info->fps, next->maxCnt);
+                    }
+                }
+
                 // Request object managed by shared_ptr, will be deleted when last reference gone
             }
         }
@@ -240,6 +343,52 @@ static gpointer capture_worker_thread(gpointer user_data)
     }
 
     __LOG(LOG_NOTICE, "[%s][%s:%d] ch%d worker thread stopped", CAP_LOG_KEY, _FILE_, __LINE__, info->ch);
+    return NULL;
+}
+
+static void clear_buffering_buffers(CaptureData *info)
+{
+    if (!info) return;
+    for (auto *b : info->buffering_buffers) {
+        if (b) gst_buffer_unref(b);
+    }
+    info->buffering_buffers.clear();
+}
+
+static gpointer buffering_feeder_thread(gpointer user_data)
+{
+    CaptureData *info = (CaptureData *)user_data;
+    if (!info) return NULL;
+
+    while (info->buffering_feeder_running.load()) {
+        GstBuffer *buf = NULL;
+        {
+            std::lock_guard<std::mutex> lock(*info->queue_mutex);
+            if (info->buffering_buffers.empty()) {
+                break;
+            }
+            buf = info->buffering_buffers.front();
+            info->buffering_buffers.pop_front();
+        }
+
+        GstFlowReturn ret;
+        g_signal_emit_by_name(info->appsrc, "push-buffer", buf, &ret);
+        if (ret != GST_FLOW_OK) {
+            __LOG(LOG_ERR, "[%s][%s:%d] ch%d buffered push-buffer failed: %d", CAP_LOG_KEY, _FILE_, __LINE__, info->ch, ret);
+            // On failure, appsrc may not have taken ownership.
+            gst_buffer_unref(buf);
+            break;
+        }
+    }
+
+    // Cleanup any remaining buffers (if we bailed early)
+    {
+        std::lock_guard<std::mutex> lock(*info->queue_mutex);
+        clear_buffering_buffers(info);
+        info->buffering_req = nullptr;
+    }
+
+    info->buffering_feeder_running.store(false);
     return NULL;
 }
 
@@ -296,18 +445,109 @@ static GstFlowReturn on_new_sample_from_sink(GstElement *sink, gpointer userData
         return GST_FLOW_ERROR;
     }
     
-    //__LOG(LOG_DEBUG, "[%s] Forwarding frame to appsrc ch%d", CAP_LOG_KEY, info->ch);
+    // Buffered capture mode for PNG:
+    // - Collect buffers first at a fixed PTS cadence (1/fps)
+    // - Then feed them to appsrc later (encode/write can be slow without affecting PTS spacing)
+    if (info->buffering_active && info->buffering_req) {
+        GstClockTime pts = GST_BUFFER_PTS(buffer);
+        gboolean fallback_to_streaming = FALSE;
+        bool accept = false;
+        {
+            std::lock_guard<std::mutex> lock(*info->queue_mutex);
 
+            if (info->buffering_period == 0) {
+                // fps may be invalid; avoid division by zero
+                info->buffering_period = (info->fps > 0) ? (GST_SECOND / info->fps) : (GST_SECOND / 1);
+            }
+
+            if (!GST_CLOCK_TIME_IS_VALID(info->buffering_first_pts) && GST_CLOCK_TIME_IS_VALID(pts)) {
+                info->buffering_first_pts = pts;
+                info->buffering_next_pts = pts;
+            }
+
+            if (!GST_CLOCK_TIME_IS_VALID(pts)) {
+                // No timestamp; accept until we reach count
+                accept = true;
+            } else if (!GST_CLOCK_TIME_IS_VALID(info->buffering_next_pts)) {
+                accept = true;
+                info->buffering_next_pts = pts;
+            } else if (pts + (info->buffering_period / 10) >= info->buffering_next_pts) {
+                // Allow small jitter tolerance (10% of period)
+                accept = true;
+            }
+
+            if (accept) {
+                // IMPORTANT: Do NOT keep references to upstream buffers here.
+                // v4l2src often uses a small buffer pool; holding GstBuffer refs can
+                // starve the pool and trip the upstream watchdog.
+                GstBuffer *stored = gst_buffer_copy_deep(buffer);
+                if (!stored) {
+                    // Fallback to manual copy
+                    GstMapInfo map;
+                    if (gst_buffer_map(buffer, &map, GST_MAP_READ)) {
+                        stored = gst_buffer_new_allocate(NULL, map.size, NULL);
+                        if (stored) {
+                            gst_buffer_fill(stored, 0, map.data, map.size);
+                            GST_BUFFER_PTS(stored) = pts;
+                            GST_BUFFER_DTS(stored) = GST_BUFFER_DTS(buffer);
+                            GST_BUFFER_DURATION(stored) = GST_BUFFER_DURATION(buffer);
+                        }
+                        gst_buffer_unmap(buffer, &map);
+                    }
+                }
+
+                if (!stored) {
+                    __LOG(LOG_ERR, "[%s][%s:%d] ch%d buffered copy failed; disabling buffering", CAP_LOG_KEY, _FILE_, __LINE__, info->ch);
+                    info->buffering_active = FALSE;
+                    info->buffering_req = nullptr;
+                    clear_buffering_buffers(info);
+                    fallback_to_streaming = TRUE;
+                } else {
+                    info->buffering_buffers.push_back(stored);
+                }
+                if (GST_CLOCK_TIME_IS_VALID(pts)) {
+                    info->buffering_next_pts = pts + info->buffering_period;
+                }
+
+                if ((gint)info->buffering_buffers.size() >= info->buffering_req->maxCnt) {
+                    // Done collecting. Stop upstream flow and start feeding encoder.
+                    info->buffering_active = FALSE;
+                    if (info->valve) {
+                        g_object_set(info->valve, "drop", TRUE, NULL);
+                    }
+
+                    if (!info->buffering_feeder_running.load()) {
+                        info->buffering_feeder_running.store(true);
+                        info->buffering_feeder_thread = g_thread_new("cap-buffer-feed", buffering_feeder_thread, info);
+                        __LOG(LOG_INFO, "[%s][%s:%d] ch%d buffered capture: collected %d frames, start feeding", CAP_LOG_KEY, _FILE_, __LINE__, info->ch, info->buffering_req->maxCnt);
+                    }
+                }
+            }
+        }
+
+        if (fallback_to_streaming) {
+            // Keep streaming behavior for this buffer so capture remains functional.
+            GstBuffer *b2 = gst_buffer_ref(buffer);
+            g_signal_emit_by_name(info->appsrc, "push-buffer", b2, &ret);
+            if (ret != GST_FLOW_OK) {
+                __LOG(LOG_ERR, "[%s][%s:%d] ch%d Error pushing buffer to appsrc: %d", CAP_LOG_KEY, _FILE_, __LINE__, info->ch, ret);
+            }
+        }
+
+        gst_sample_unref(sample);
+        return GST_FLOW_OK;
+    }
+
+    // Default behavior: forward every sample to appsrc
     g_signal_emit_by_name(info->appsrc, "push-buffer", buffer, &ret);
     if (ret != GST_FLOW_OK)
     {
-        //g_printerr("Error pushing buffer to appsrc: %d\n", ret);
         __LOG(LOG_ERR, "[%s][%s:%d] ch%d Error pushing buffer to appsrc: %d", CAP_LOG_KEY, _FILE_, __LINE__, info->ch, ret);
+        gst_sample_unref(sample);
         return ret;
     }
 
     gst_sample_unref(sample);
-
     return GST_FLOW_OK;
 }
 
@@ -323,6 +563,7 @@ static GstFlowReturn on_new_sample_to_file(GstElement *sink, gpointer userData)
     }
 
     bool should_drop = false;
+    const gchar *drop_reason = NULL;
     std::shared_ptr<CaptureRequest> req;
     AsyncCaptureTask *task = NULL;
 
@@ -339,6 +580,7 @@ static GstFlowReturn on_new_sample_to_file(GstElement *sink, gpointer userData)
                 // Reset pushed count for new request
                 g_atomic_int_set(&info->captureCnt_, 0);
                 info->push_index.store(0);
+                info->last_saved_pts = GST_CLOCK_TIME_NONE;
 
                 __LOG(LOG_INFO, "[%s][%s:%d] ch%d Starting new request: %s (max: %d)",
                       CAP_LOG_KEY, _FILE_, __LINE__, info->ch, info->current_request->filePath, info->current_request->maxCnt);
@@ -351,20 +593,29 @@ static GstFlowReturn on_new_sample_to_file(GstElement *sink, gpointer userData)
                  g_object_set(info->valve, "drop", TRUE, NULL);
             }
             should_drop = true;
+            drop_reason = "no-request";
         } else {
             req = info->current_request;
 
             // Check queue size limit (prevent memory overflow)
             gint queue_length = g_async_queue_length(info->task_queue);
             if(queue_length > queue_limit) {
-                __LOG(LOG_WARNING, "[%s][%s:%d] ch%d queue full (%d > %d), dropping frame", CAP_LOG_KEY, _FILE_, __LINE__, info->ch, queue_length, queue_limit);
                 should_drop = true;
+                drop_reason = "queue-full";
+                req->droppedCnt.fetch_add(1);
             } else {
                 // Create async task (transfer ownership of sample to task)
                 task = g_new0(AsyncCaptureTask, 1);
                 task->sample = sample;
                 task->info = info;
                 task->request = req; // Link to request
+
+                // Capture sample timestamps for debug/metrics
+                task->running_time = get_pipeline_running_time();
+                {
+                    GstBuffer *b = gst_sample_get_buffer(sample);
+                    task->pts = b ? GST_BUFFER_PTS(b) : GST_CLOCK_TIME_NONE;
+                }
 
                 // Use push_index which is incremented atomically at push time
                 task->capture_index = info->push_index.fetch_add(1);
@@ -397,6 +648,41 @@ static GstFlowReturn on_new_sample_to_file(GstElement *sink, gpointer userData)
     } // lock_guard automatically releases mutex here
 
     if (should_drop) {
+        // Drop logging: only when debug is enabled, and throttle to avoid spam.
+        // Note: "no-request" drops are expected when not capturing (valve should be closed);
+        // treat them as normal and do not warn.
+        if (info->debug && drop_reason && g_strcmp0(drop_reason, "no-request") != 0) {
+            gint64 now_us = g_get_monotonic_time();
+            if (info->last_drop_log_us == 0 || (now_us - info->last_drop_log_us) >= 1000000) {
+                info->last_drop_log_us = now_us;
+
+                GstClockTime pts = GST_CLOCK_TIME_NONE;
+                GstClockTime rt = get_pipeline_running_time();
+                GstClockTime pipe_latency = GST_CLOCK_TIME_NONE;
+                {
+                    GstBuffer *b = gst_sample_get_buffer(sample);
+                    pts = b ? GST_BUFFER_PTS(b) : GST_CLOCK_TIME_NONE;
+                    if (GST_CLOCK_TIME_IS_VALID(rt) && GST_CLOCK_TIME_IS_VALID(pts)) {
+                        pipe_latency = (rt >= pts) ? (rt - pts) : 0;
+                    }
+                }
+
+                gint qlen = -1;
+                if (info->task_queue) {
+                    qlen = g_async_queue_length(info->task_queue);
+                }
+                gint pushed = g_atomic_int_get(&info->captureCnt_);
+                gint dropped_req = req ? (gint)req->droppedCnt.load() : 0;
+                gint maxcnt = req ? req->maxCnt : 0;
+
+                __LOG(LOG_WARNING,
+                      "[%s][%s:%d] ch%d DROP(%s): pts=%" GST_TIME_FORMAT " pipe=%" GST_TIME_FORMAT " q=%d/%d pushed=%d/%d dropped=%d",
+                      CAP_LOG_KEY, _FILE_, __LINE__, info->ch,
+                      drop_reason ? drop_reason : "unknown",
+                      GST_TIME_ARGS(pts), GST_TIME_ARGS(pipe_latency),
+                      qlen, queue_limit, pushed, maxcnt, dropped_req);
+            }
+        }
         gst_sample_unref(sample);
     }
 
@@ -467,6 +753,15 @@ CaptureBin::CaptureBin()
     captureData.request_queue = std::unique_ptr<std::deque<std::shared_ptr<CaptureRequest>>>(new std::deque<std::shared_ptr<CaptureRequest>>());
     captureData.queue_mutex = std::unique_ptr<std::mutex>(new std::mutex());
     captureData.current_request = nullptr;
+    captureData.last_saved_pts = GST_CLOCK_TIME_NONE;
+    captureData.last_drop_log_us = 0;
+    captureData.buffering_active = FALSE;
+    captureData.buffering_req = nullptr;
+    captureData.buffering_first_pts = GST_CLOCK_TIME_NONE;
+    captureData.buffering_next_pts = GST_CLOCK_TIME_NONE;
+    captureData.buffering_period = 0;
+    captureData.buffering_feeder_thread = NULL;
+    captureData.buffering_feeder_running.store(false);
     
     timeout_source_id.store(0);
     captureData.valve = NULL;
@@ -486,6 +781,16 @@ CaptureBin::~CaptureBin()
 
     // Stop worker thread and wait for completion
     stopWorker();
+
+    // Stop buffered capture feeder thread and free collected buffers
+    captureData.buffering_active = FALSE;
+    captureData.buffering_req = nullptr;
+    captureData.buffering_feeder_running.store(false);
+    if (captureData.buffering_feeder_thread) {
+        g_thread_join(captureData.buffering_feeder_thread);
+        captureData.buffering_feeder_thread = NULL;
+    }
+    clear_buffering_buffers(&captureData);
 
     // Clear remaining tasks in queue
     if(captureData.task_queue) {
@@ -525,6 +830,26 @@ void CaptureBin::addCaptureRequest(gint maxCnt, const gchar *prefix, gpointer us
     req->mode = mode;
     req->captureCnt = 0; // Written count
     req->startTime = g_get_monotonic_time(); // microseconds
+    // PNG encode path (videoconvert + pngenc) is heavier and can easily exceed
+    // DEFAULT_CAPTURE_TIMEOUT-derived budgets (often ~300ms for 1 frame).
+    // Ensure a sane minimum so requests don't timeout before the first sample arrives.
+    // PNG encode path (videoconvert + pngenc) is CPU-heavy. Timeout must scale with
+    // requested frame count (maxCnt), otherwise large requests will complete partially.
+    if (captureData.enc_type == CAP_ENC_PNG) {
+        const gint base_min_ms = 10000; // handle negotiation + first-frame latency
+        const gint per_frame_ms = 2500; // conservative budget on target
+
+        gint64 required = base_min_ms;
+        if (maxCnt > 0) {
+            required = (gint64)base_min_ms;
+            gint64 scaled = 2000 + (gint64)maxCnt * (gint64)per_frame_ms;
+            if (scaled > required) required = scaled;
+        }
+
+        if (timeoutMs < required) {
+            timeoutMs = (required > G_MAXINT) ? G_MAXINT : (gint)required;
+        }
+    }
     req->timeoutMs = timeoutMs;
     
     if(prefix != NULL && !is_safe_prefix(prefix)) {
@@ -557,6 +882,23 @@ void CaptureBin::addCaptureRequest(gint maxCnt, const gchar *prefix, gpointer us
     // If not capturing, open valve
     if (captureData.valve) {
         g_object_set(captureData.valve, "drop", FALSE, NULL);
+    }
+
+    // For PNG multi-frame capture, pre-collect buffers at stable PTS cadence and
+    // feed them to appsrc later. This avoids PTS jumps caused by encoder backpressure.
+    if (captureData.enc_type == CAP_ENC_PNG && maxCnt > 1 &&
+        !captureData.buffering_active && !captureData.current_request) {
+        // Clear any leftover buffers
+        clear_buffering_buffers(&captureData);
+
+        captureData.buffering_active = TRUE;
+        captureData.buffering_req = req;
+        captureData.buffering_first_pts = GST_CLOCK_TIME_NONE;
+        captureData.buffering_next_pts = GST_CLOCK_TIME_NONE;
+        captureData.buffering_period = (captureData.fps > 0) ? (GST_SECOND / captureData.fps) : (GST_SECOND / 1);
+
+        __LOG(LOG_INFO, "[%s][%s:%d] ch%d buffered capture enabled: fps=%d cnt=%d",
+              CAP_LOG_KEY, _FILE_, __LINE__, captureData.ch, captureData.fps, maxCnt);
     }
 }
 
@@ -608,10 +950,22 @@ gboolean CaptureBin::checkTimeout()
         gint64 elapsed_ms = (now - req->startTime) / 1000;
         
         if (elapsed_ms > req->timeoutMs) {
-             __LOG(LOG_WARNING, "[%s][%s:%d] ch%d Pending Request TIMEOUT: %s (Elapsed: %ld ms)", 
-                  CAP_LOG_KEY, _FILE_, __LINE__, captureData.ch, req->filePath, elapsed_ms);
-             
+             __LOG(LOG_WARNING, "[%s][%s:%d] ch%d Pending Request TIMEOUT: %s (Elapsed: %ld ms)",
+                   CAP_LOG_KEY, _FILE_, __LINE__, captureData.ch, req->filePath, elapsed_ms);
+
              req->timed_out.store(true);
+
+             // If this timed-out request was the current buffering target,
+             // stop buffering and drop collected frames to avoid misattribution.
+             if (captureData.buffering_req && captureData.buffering_req.get() == req.get()) {
+                 captureData.buffering_active = FALSE;
+                 captureData.buffering_feeder_running.store(false);
+                 captureData.buffering_req = nullptr;
+                 clear_buffering_buffers(&captureData);
+
+                 __LOG(LOG_INFO, "[%s][%s:%d] ch%d Cleared buffered capture for timed-out request",
+                       CAP_LOG_KEY, _FILE_, __LINE__, captureData.ch);
+             }
 
              // Atomic compare-and-swap to prevent double callback
              bool expected = false;
@@ -676,6 +1030,16 @@ gint CaptureBin::stopCapture()
     if (captureData.request_queue) {
          captureData.request_queue->clear();
     }
+
+    // Stop buffered capture feeder thread and drop any collected buffers
+    captureData.buffering_active = FALSE;
+    captureData.buffering_req = nullptr;
+    captureData.buffering_feeder_running.store(false);
+    if (captureData.buffering_feeder_thread) {
+        g_thread_join(captureData.buffering_feeder_thread);
+        captureData.buffering_feeder_thread = NULL;
+    }
+    clear_buffering_buffers(&captureData);
 
     return 1;
 }
@@ -866,7 +1230,18 @@ gboolean CaptureBin::init(guint8 ch)
     be.queue = gst_element_factory_make(QUEUE_TYPE, g_strdup_printf("queue_%d", captureData.ch));
     be.valve = gst_element_factory_make("valve", g_strdup_printf("valve_%d", captureData.ch));
     be.queue2 = gst_element_factory_make(QUEUE_TYPE, g_strdup_printf("queue2_%d", captureData.ch));
-    be.imx_convert = gst_element_factory_make("imxvideoconvert_g2d", g_strdup_printf("imx_convert%d", captureData.ch));
+    // PNG needs strict raw formats (RGB/RGBA). Prefer software videoconvert for broad compatibility.
+    // If videoconvert is not available, fall back to imxvideoconvert_g2d.
+    if (captureData.enc_type == CAP_ENC_PNG) {
+        be.imx_convert = gst_element_factory_make("videoconvert", g_strdup_printf("convert%d", captureData.ch));
+        if (!be.imx_convert) {
+            __LOG(LOG_WARNING, "[%s][%s:%d] videoconvert not available; fallback to imxvideoconvert_g2d", CAP_LOG_KEY, _FILE_, __LINE__);
+            be.imx_convert = gst_element_factory_make("imxvideoconvert_g2d", g_strdup_printf("imx_convert%d", captureData.ch));
+        }
+    }
+    else {
+        be.imx_convert = gst_element_factory_make("imxvideoconvert_g2d", g_strdup_printf("imx_convert%d", captureData.ch));
+    }
     be.enc = NULL;
     if (captureData.enc_type == CAP_ENC_JPEG) {
         be.enc = gst_element_factory_make("jpegenc", g_strdup_printf("jpegenc%d", captureData.ch));
@@ -937,17 +1312,31 @@ gboolean CaptureBin::init(guint8 ch)
             g_object_set(be.enc, "quality", captureData.quality, NULL);
             break;
         case CAP_ENC_PNG:
-            // pngenc typically expects RGB/RGBA. Force conversion via imxvideoconvert.
+            // pngenc expects RGB/RGBA/GRAY*. Force conversion to RGBA (more widely supported than RGB).
             if(crop_en) ret = gst_element_link_many(be.appsrc, be.crop, be.imx_convert, be.capsfilter, be.enc, be.queue2, be.appsink, NULL);
             else ret = gst_element_link_many(be.appsrc, be.imx_convert, be.capsfilter, be.enc, be.queue2, be.appsink, NULL);
             caps = gst_caps_new_simple("video/x-raw",
-                                        "format", G_TYPE_STRING, "RGB",
+                                        "format", G_TYPE_STRING, "RGBA",
                                         "width", G_TYPE_INT, cmdArg.width,
                                         "height", G_TYPE_INT, cmdArg.height,
                                         "framerate", GST_TYPE_FRACTION, captureData.fps, 1,
                                         NULL);
             g_object_set(be.capsfilter, "caps", caps, NULL);
             gst_caps_unref(caps);
+
+            // Map capture quality (0-100, default 85) to pngenc compression-level (0-9).
+            // PNG is lossless; "quality" here controls speed vs file size:
+            // - quality 100 => compression-level 0 (fastest, largest)
+            // - quality 0   => compression-level 9 (slowest, smallest)
+            {
+                gint q = captureData.quality;
+                if (q < 0) q = 0;
+                if (q > 100) q = 100;
+                guint comp = (guint)(((100 - q) * 9 + 50) / 100);
+                g_object_set(be.enc, "compression-level", comp, NULL);
+                __LOG(LOG_INFO, "[%s][%s:%d] ch%d pngenc compression-level=%u (quality=%d)",
+                      CAP_LOG_KEY, _FILE_, __LINE__, captureData.ch, comp, q);
+            }
             break;
         case CAP_ENC_TURBO:
             caps = gst_caps_new_simple("video/x-raw",
@@ -995,7 +1384,7 @@ gboolean CaptureBin::init(guint8 ch)
                                     "format", G_TYPE_STRING, "RGBx",
                                     "width", G_TYPE_INT, cmdArg.width*(crop_en+1),
                                     "height", G_TYPE_INT, cmdArg.height,
-                                    //"framerate", GST_TYPE_FRACTION, captureData.fps, 1,
+                                    "framerate", GST_TYPE_FRACTION, captureData.fps, 1,
                                     NULL);
         g_object_set(be.appsrc, "caps", srccaps, NULL);
         gst_caps_unref(srccaps);
@@ -1003,10 +1392,10 @@ gboolean CaptureBin::init(guint8 ch)
     else
     {
         srccaps = gst_caps_new_simple("video/x-raw",
-                                    //"format", G_TYPE_STRING, "RGBx",
+                                    "format", G_TYPE_STRING, "RGBx",
                                     "width", G_TYPE_INT, cmdArg.width*(crop_en+1),
                                     "height", G_TYPE_INT, cmdArg.height,
-                                    //"framerate", GST_TYPE_FRACTION, captureData.fps, 1,
+                                    "framerate", GST_TYPE_FRACTION, captureData.fps, 1,
                                     NULL);
         g_object_set(be.appsrc, "caps", srccaps, NULL);
         gst_caps_unref(srccaps);

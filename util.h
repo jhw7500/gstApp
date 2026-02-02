@@ -144,6 +144,9 @@ typedef struct _CmdArg
     gint gop[MAX_MODE][MAX_CHANNEL];
     gint log_level;
     gint dbg_level;
+    gboolean dbg_ts;        // enable timestamp debug (rtsp + capture)
+    gboolean dbg_cap_ts;    // enable capture timestamp debug
+    gboolean dbg_rtsp_ts;   // enable rtsp timestamp/latency debug
     const gchar *dotDir;
     const gchar *mntDir;
     const gchar *ohtName;
