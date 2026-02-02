@@ -38,9 +38,9 @@ static int set_v4l2_subdev_control(int csiNum, unsigned int ctrl_id, int value)
     int fd, ret;
     struct v4l2_control ctrl;
 
-    // csiNum 0 -> /dev/v4l-subdev2 (max9296 1-0048)
-    // csiNum 1 -> /dev/v4l-subdev3 (max9296 2-0048)
-    snprintf(dev_path, sizeof(dev_path), "/dev/v4l-subdev%d", csiNum + 2);
+    // csiNum 0 -> /dev/v4l-subdev3 (max9296 1-0048, I2C bus 1)
+    // csiNum 1 -> /dev/v4l-subdev2 (max9296 2-0048, I2C bus 2)
+    snprintf(dev_path, sizeof(dev_path), "/dev/v4l-subdev%d", csiNum == 0 ? 3 : 2);
 
     fd = open(dev_path, O_RDWR);
     if (fd < 0) {
@@ -56,6 +56,9 @@ static int set_v4l2_subdev_control(int csiNum, unsigned int ctrl_id, int value)
     if (ret < 0) {
         __LOG(LOG_ERR, "[GST][%s:%d] VIDIOC_S_CTRL failed for ctrl 0x%08x on %s: %s",
               _FILE_, __LINE__, ctrl_id, dev_path, strerror(errno));
+    } else {
+        __LOG(LOG_NOTICE, "[GST][%s:%d] Set ctrl 0x%08x = %d on %s",
+              _FILE_, __LINE__, ctrl_id, value, dev_path);
     }
 
     close(fd);
@@ -324,7 +327,7 @@ gboolean VideoBin::init(guint8 csiNum)
         set_v4l2_subdev_control(csiNum, V4L2_CID_HFLIP, cam_cfg->hflip ? 1 : 0);
         set_v4l2_subdev_control(csiNum, V4L2_CID_VFLIP, cam_cfg->vflip ? 1 : 0);
 
-        __LOG(LOG_INFO, "[GST][%s:%d] V4L2 subdev controls set: csi%d ae_on=%d exp=%d gain=%d awb=%s hflip=%d vflip=%d",
+        __LOG(LOG_NOTICE, "[GST][%s:%d] V4L2 subdev controls set: csi%d ae_on=%d exp=%d gain=%d awb=%s hflip=%d vflip=%d",
             _FILE_, __LINE__, csiNum, cam_cfg->ae_on, cam_cfg->exp_time, cam_cfg->ae_gain,
             cam_cfg->awb, cam_cfg->hflip, cam_cfg->vflip);
     }
