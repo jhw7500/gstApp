@@ -249,13 +249,20 @@ gboolean VideoBin::init(guint8 csiNum)
         cam_cfg = &cmdArg.cam[ch_base + 1];
     }
 
+    if (cmdArg.cam[ch_base].enable && cmdArg.cam[ch_base + 1].enable) {
+        __LOG(LOG_WARNING, "[GST][%s:%d] Both channels %d and %d are enabled on CSI%d. "
+            "V4L2 controls will be applied to channel %d's device. "
+            "Ensure the driver supports per-channel controls with I2C addresses 0x11 and 0x12.",
+            _FILE_, __LINE__, ch_base, ch_base + 1, csiNum, ch_base);
+    }
+
     if (cam_cfg != NULL) {
         GstStructure *extra_controls = gst_structure_new_empty("extra-controls");
 
-        // Exposure control (V4L2_CID_EXPOSURE_AUTO: 1=auto, 0=manual)
+        // Exposure control (V4L2_CID_EXPOSURE_AUTO: 0=auto, 1=manual)
         gst_structure_set(extra_controls,
             "exposure-auto", G_TYPE_INT,
-            cam_cfg->ae_on ? 1 : 0,  // V4L2_EXPOSURE_AUTO=1, V4L2_EXPOSURE_MANUAL=0
+            cam_cfg->ae_on ? 0 : 1,
             NULL);
 
         if (!cam_cfg->ae_on) {
