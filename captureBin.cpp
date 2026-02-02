@@ -841,9 +841,10 @@ void CaptureBin::addCaptureRequest(gint maxCnt, const gchar *prefix, gpointer us
 
         gint64 required = base_min_ms;
         if (maxCnt > 0) {
-            required = (gint64)base_min_ms;
             gint64 scaled = 2000 + (gint64)maxCnt * (gint64)per_frame_ms;
-            if (scaled > required) required = scaled;
+            if (scaled > required) {
+                required = scaled;
+            }
         }
 
         if (timeoutMs < required) {
