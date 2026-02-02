@@ -192,8 +192,13 @@ static gpointer capture_worker_thread(gpointer user_data)
                     if(fp) {
                         written_bytes = fwrite(jpeg_buf, 1, jpeg_size, fp);
                         fclose(fp);
-                        __LOG(LOG_INFO, "[%s][%s:%d] ch%d Saved JPEG to %s (%ld bytes)", CAP_LOG_KEY, _FILE_, __LINE__, task->info->ch, task->file_path, jpeg_size);
-                        success = TRUE;
+                        success = (written_bytes == (gsize)jpeg_size);
+                        if (success) {
+                            __LOG(LOG_INFO, "[%s][%s:%d] ch%d Saved JPEG to %s (%ld bytes)", CAP_LOG_KEY, _FILE_, __LINE__, task->info->ch, task->file_path, jpeg_size);
+                        } else {
+                            __LOG(LOG_ERR, "[%s][%s:%d] ch%d Failed to write complete file %s (%zu/%ld bytes written)",
+                                  CAP_LOG_KEY, _FILE_, __LINE__, task->info->ch, task->file_path, (size_t)written_bytes, jpeg_size);
+                        }
                     }
                     else {
                         __LOG(LOG_ERR, "[%s][%s:%d] ch%d Failed to open file %s for writing", CAP_LOG_KEY, _FILE_, __LINE__, task->info->ch, task->file_path);
@@ -221,7 +226,11 @@ static gpointer capture_worker_thread(gpointer user_data)
                 if(fp) {
                     written_bytes = fwrite(map.data, 1, map.size, fp);
                     fclose(fp);
-                    success = TRUE;
+                    success = (written_bytes == map.size);
+                    if (!success) {
+                        __LOG(LOG_ERR, "[%s][%s:%d] ch%d Failed to write complete file %s (%zu/%zu bytes written)",
+                              CAP_LOG_KEY, _FILE_, __LINE__, task->info->ch, task->file_path, (size_t)written_bytes, (size_t)map.size);
+                    }
                 }
                 else {
                     __LOG(LOG_ERR, "[%s][%s:%d] ch%d Failed to open file %s for writing", CAP_LOG_KEY, _FILE_, __LINE__, task->info->ch, task->file_path);
@@ -941,10 +950,22 @@ gboolean CaptureBin::checkTimeout()
         gint64 elapsed_ms = (now - req->startTime) / 1000;
         
         if (elapsed_ms > req->timeoutMs) {
-             __LOG(LOG_WARNING, "[%s][%s:%d] ch%d Pending Request TIMEOUT: %s (Elapsed: %ld ms)", 
-                  CAP_LOG_KEY, _FILE_, __LINE__, captureData.ch, req->filePath, elapsed_ms);
-             
+             __LOG(LOG_WARNING, "[%s][%s:%d] ch%d Pending Request TIMEOUT: %s (Elapsed: %ld ms)",
+                   CAP_LOG_KEY, _FILE_, __LINE__, captureData.ch, req->filePath, elapsed_ms);
+
              req->timed_out.store(true);
+
+             // If this timed-out request was the current buffering target,
+             // stop buffering and drop collected frames to avoid misattribution.
+             if (captureData.buffering_req && captureData.buffering_req.get() == req.get()) {
+                 captureData.buffering_active = FALSE;
+                 captureData.buffering_feeder_running.store(false);
+                 captureData.buffering_req = nullptr;
+                 clear_buffering_buffers(&captureData);
+
+                 __LOG(LOG_INFO, "[%s][%s:%d] ch%d Cleared buffered capture for timed-out request",
+                       CAP_LOG_KEY, _FILE_, __LINE__, captureData.ch);
+             }
 
              // Atomic compare-and-swap to prevent double callback
              bool expected = false;
