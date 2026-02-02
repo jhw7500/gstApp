@@ -237,6 +237,58 @@ gboolean VideoBin::init(guint8 csiNum)
     g_object_set(be.queue_main, "max-size-time", 300*GST_MSECOND, "max-size-buffers", cmdArg.main_fps[csiNum], "leaky", LEAKY_DOWNSTREAM, NULL);
     g_object_set(be.watchdog, "timeout", wdt_timeout, NULL);
 
+    // V4L2 controls setup - use camera config from enabled channels
+    // csiNum 0 -> channels 0,1 / csiNum 1 -> channels 2,3
+    guint8 ch_base = csiNum * 2;
+    CamConfig *cam_cfg = NULL;
+
+    // Find first enabled camera on this CSI
+    if (cmdArg.cam[ch_base].enable) {
+        cam_cfg = &cmdArg.cam[ch_base];
+    } else if (cmdArg.cam[ch_base + 1].enable) {
+        cam_cfg = &cmdArg.cam[ch_base + 1];
+    }
+
+    if (cam_cfg != NULL) {
+        GstStructure *extra_controls = gst_structure_new_empty("extra-controls");
+
+        // Exposure control (V4L2_CID_EXPOSURE_AUTO: 1=auto, 0=manual)
+        gst_structure_set(extra_controls,
+            "exposure-auto", G_TYPE_INT,
+            cam_cfg->ae_on ? 1 : 0,  // V4L2_EXPOSURE_AUTO=1, V4L2_EXPOSURE_MANUAL=0
+            NULL);
+
+        if (!cam_cfg->ae_on) {
+            // Manual exposure time (V4L2_CID_EXPOSURE_ABSOLUTE)
+            gst_structure_set(extra_controls,
+                "exposure-absolute", G_TYPE_INT, (gint)cam_cfg->exp_time, NULL);
+
+            // Manual gain (V4L2_CID_GAIN)
+            gst_structure_set(extra_controls,
+                "gain", G_TYPE_INT, (gint)cam_cfg->ae_gain, NULL);
+        }
+
+        // White balance (V4L2_CID_AUTO_WHITE_BALANCE: 1=auto, 0=manual)
+        gint awb_auto = (g_strcmp0(cam_cfg->awb, "auto") == 0) ? 1 : 0;
+        gst_structure_set(extra_controls,
+            "white-balance-automatic", G_TYPE_INT, awb_auto, NULL);
+
+        // Horizontal flip (V4L2_CID_HFLIP)
+        gst_structure_set(extra_controls,
+            "horizontal-flip", G_TYPE_INT, cam_cfg->hflip ? 1 : 0, NULL);
+
+        // Vertical flip (V4L2_CID_VFLIP)
+        gst_structure_set(extra_controls,
+            "vertical-flip", G_TYPE_INT, cam_cfg->vflip ? 1 : 0, NULL);
+
+        g_object_set(be.src, "extra-controls", extra_controls, NULL);
+        gst_structure_free(extra_controls);
+
+        __LOG(LOG_INFO, "[GST][%s:%d] V4L2 controls set: csi%d ae_on=%d exp=%d gain=%d awb=%s hflip=%d vflip=%d",
+            _FILE_, __LINE__, csiNum, cam_cfg->ae_on, cam_cfg->exp_time, cam_cfg->ae_gain,
+            cam_cfg->awb, cam_cfg->hflip, cam_cfg->vflip);
+    }
+
     if(cmdArg.levelMode == MODE_TEST)
     {
         //GstPad *srcpad = gst_element_get_static_pad(be.src, "src");
