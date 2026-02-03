@@ -18,6 +18,20 @@
 #include <errno.h>
 #include <string.h>
 
+/* Custom V4L2 controls for per-channel settings in dual-channel mode */
+#define V4L2_CID_EXPOSURE_AUTO_CH0      (V4L2_CID_USER_BASE + 0x1000)
+#define V4L2_CID_EXPOSURE_AUTO_CH1      (V4L2_CID_USER_BASE + 0x1001)
+#define V4L2_CID_AUTO_WHITE_BALANCE_CH0 (V4L2_CID_USER_BASE + 0x1002)
+#define V4L2_CID_AUTO_WHITE_BALANCE_CH1 (V4L2_CID_USER_BASE + 0x1003)
+#define V4L2_CID_AUTOGAIN_CH0           (V4L2_CID_USER_BASE + 0x1004)
+#define V4L2_CID_AUTOGAIN_CH1           (V4L2_CID_USER_BASE + 0x1005)
+#define V4L2_CID_GAIN_CH0               (V4L2_CID_USER_BASE + 0x1006)
+#define V4L2_CID_GAIN_CH1               (V4L2_CID_USER_BASE + 0x1007)
+#define V4L2_CID_HFLIP_CH0              (V4L2_CID_USER_BASE + 0x1008)
+#define V4L2_CID_HFLIP_CH1              (V4L2_CID_USER_BASE + 0x1009)
+#define V4L2_CID_VFLIP_CH0              (V4L2_CID_USER_BASE + 0x100A)
+#define V4L2_CID_VFLIP_CH1              (V4L2_CID_USER_BASE + 0x100B)
+
 static void prepare_format(GstElement *object, gint arg0, GstCaps *caps, gpointer data)
 {
     guint8 *csi = (guint8 *)data;
@@ -283,52 +297,78 @@ gboolean VideoBin::init(guint8 csiNum)
     g_object_set(be.queue_main, "max-size-time", 300*GST_MSECOND, "max-size-buffers", cmdArg.main_fps[csiNum], "leaky", LEAKY_DOWNSTREAM, NULL);
     g_object_set(be.watchdog, "timeout", wdt_timeout, NULL);
 
-    // V4L2 controls setup - use camera config from enabled channels
+    // V4L2 controls setup - per-channel settings in dual mode
     // csiNum 0 -> channels 0,1 / csiNum 1 -> channels 2,3
     guint8 ch_base = csiNum * 2;
-    CamConfig *cam_cfg = NULL;
+    guint8 ch0 = ch_base;
+    guint8 ch1 = ch_base + 1;
+    gboolean ch0_enabled = cmdArg.cam[ch0].enable;
+    gboolean ch1_enabled = cmdArg.cam[ch1].enable;
+    gboolean dual_mode = ch0_enabled && ch1_enabled;
 
-    // Find first enabled camera on this CSI
-    if (cmdArg.cam[ch_base].enable) {
-        cam_cfg = &cmdArg.cam[ch_base];
-    } else if (cmdArg.cam[ch_base + 1].enable) {
-        cam_cfg = &cmdArg.cam[ch_base + 1];
+    // Exposure time is shared (global) across both channels
+    if (ch0_enabled || ch1_enabled) {
+        // Use exp_time from i2c config (shared between channels)
+        guint32 exp_time = ch0_enabled ? cmdArg.cam[ch0].exp_time : cmdArg.cam[ch1].exp_time;
+        set_v4l2_subdev_control(csiNum, V4L2_CID_EXPOSURE, exp_time);
     }
 
-    if (cmdArg.cam[ch_base].enable && cmdArg.cam[ch_base + 1].enable) {
-        __LOG(LOG_WARNING, "[GST][%s:%d] Both channels %d and %d are enabled on CSI%d. "
-            "V4L2 controls will be applied to channel %d's device. "
-            "Ensure the driver supports per-channel controls with I2C addresses 0x11 and 0x12.",
-            _FILE_, __LINE__, ch_base, ch_base + 1, csiNum, ch_base);
-    }
+    if (dual_mode) {
+        __LOG(LOG_NOTICE, "[GST][%s:%d] Dual-channel mode detected for csi%d (ch%d + ch%d)",
+            _FILE_, __LINE__, csiNum, ch0, ch1);
 
-    if (cam_cfg != NULL) {
-        // Set V4L2 controls directly via subdev ioctl
-        // V4L2_CID_EXPOSURE_AUTO: 0=Auto Mode, 1=Manual Mode
-        int exposure_auto = cam_cfg->ae_on ? 0 : 1;  // ae_on=1 -> Auto Mode (0)
+        // Channel 0 settings
+        int ae_ch0 = cmdArg.cam[ch0].ae_on ? 0 : 1;  // 0=auto, 1=manual
+        set_v4l2_subdev_control(csiNum, V4L2_CID_EXPOSURE_AUTO_CH0, ae_ch0);
+        set_v4l2_subdev_control(csiNum, V4L2_CID_AUTOGAIN_CH0, cmdArg.cam[ch0].ae_on ? 1 : 0);
+        set_v4l2_subdev_control(csiNum, V4L2_CID_GAIN_CH0, cmdArg.cam[ch0].ae_gain);
+
+        gint awb_ch0 = (g_strcmp0(cmdArg.cam[ch0].awb, "auto") == 0) ? 1 : 0;
+        set_v4l2_subdev_control(csiNum, V4L2_CID_AUTO_WHITE_BALANCE_CH0, awb_ch0);
+
+        set_v4l2_subdev_control(csiNum, V4L2_CID_HFLIP_CH0, cmdArg.cam[ch0].hflip ? 1 : 0);
+        set_v4l2_subdev_control(csiNum, V4L2_CID_VFLIP_CH0, cmdArg.cam[ch0].vflip ? 1 : 0);
+
+        __LOG(LOG_NOTICE, "[GST][%s:%d] CH0 controls: ae=%d gain=%d awb=%d hflip=%d vflip=%d",
+            _FILE_, __LINE__, ae_ch0, cmdArg.cam[ch0].ae_gain, awb_ch0,
+            cmdArg.cam[ch0].hflip, cmdArg.cam[ch0].vflip);
+
+        // Channel 1 settings
+        int ae_ch1 = cmdArg.cam[ch1].ae_on ? 0 : 1;  // 0=auto, 1=manual
+        set_v4l2_subdev_control(csiNum, V4L2_CID_EXPOSURE_AUTO_CH1, ae_ch1);
+        set_v4l2_subdev_control(csiNum, V4L2_CID_AUTOGAIN_CH1, cmdArg.cam[ch1].ae_on ? 1 : 0);
+        set_v4l2_subdev_control(csiNum, V4L2_CID_GAIN_CH1, cmdArg.cam[ch1].ae_gain);
+
+        gint awb_ch1 = (g_strcmp0(cmdArg.cam[ch1].awb, "auto") == 0) ? 1 : 0;
+        set_v4l2_subdev_control(csiNum, V4L2_CID_AUTO_WHITE_BALANCE_CH1, awb_ch1);
+
+        set_v4l2_subdev_control(csiNum, V4L2_CID_HFLIP_CH1, cmdArg.cam[ch1].hflip ? 1 : 0);
+        set_v4l2_subdev_control(csiNum, V4L2_CID_VFLIP_CH1, cmdArg.cam[ch1].vflip ? 1 : 0);
+
+        __LOG(LOG_NOTICE, "[GST][%s:%d] CH1 controls: ae=%d gain=%d awb=%d hflip=%d vflip=%d",
+            _FILE_, __LINE__, ae_ch1, cmdArg.cam[ch1].ae_gain, awb_ch1,
+            cmdArg.cam[ch1].hflip, cmdArg.cam[ch1].vflip);
+    } else {
+        // Single-channel mode: use legacy controls (apply to whichever channel is enabled)
+        CamConfig *cam_cfg = ch0_enabled ? &cmdArg.cam[ch0] : &cmdArg.cam[ch1];
+        guint8 active_ch = ch0_enabled ? ch0 : ch1;
+
+        __LOG(LOG_NOTICE, "[GST][%s:%d] Single-channel mode for csi%d (ch%d)",
+            _FILE_, __LINE__, csiNum, active_ch);
+
+        int exposure_auto = cam_cfg->ae_on ? 0 : 1;  // 0=auto, 1=manual
         set_v4l2_subdev_control(csiNum, V4L2_CID_EXPOSURE_AUTO, exposure_auto);
+        set_v4l2_subdev_control(csiNum, V4L2_CID_AUTOGAIN, cam_cfg->ae_on ? 1 : 0);
+        set_v4l2_subdev_control(csiNum, V4L2_CID_GAIN, cam_cfg->ae_gain);
 
-        if (!cam_cfg->ae_on) {
-            // Manual mode: set exposure time and gain
-            set_v4l2_subdev_control(csiNum, V4L2_CID_EXPOSURE, cam_cfg->exp_time);
-            set_v4l2_subdev_control(csiNum, V4L2_CID_GAIN, cam_cfg->ae_gain);
-            // Disable auto gain when in manual exposure mode
-            set_v4l2_subdev_control(csiNum, V4L2_CID_AUTOGAIN, 0);
-        } else {
-            // Auto mode: enable auto gain
-            set_v4l2_subdev_control(csiNum, V4L2_CID_AUTOGAIN, 1);
-        }
-
-        // White balance: 1=auto, 0=manual
         gint awb_auto = (g_strcmp0(cam_cfg->awb, "auto") == 0) ? 1 : 0;
         set_v4l2_subdev_control(csiNum, V4L2_CID_AUTO_WHITE_BALANCE, awb_auto);
 
-        // Flip controls
         set_v4l2_subdev_control(csiNum, V4L2_CID_HFLIP, cam_cfg->hflip ? 1 : 0);
         set_v4l2_subdev_control(csiNum, V4L2_CID_VFLIP, cam_cfg->vflip ? 1 : 0);
 
-        __LOG(LOG_NOTICE, "[GST][%s:%d] V4L2 subdev controls set: csi%d ae_on=%d exp=%d gain=%d awb=%s hflip=%d vflip=%d",
-            _FILE_, __LINE__, csiNum, cam_cfg->ae_on, cam_cfg->exp_time, cam_cfg->ae_gain,
+        __LOG(LOG_NOTICE, "[GST][%s:%d] V4L2 subdev controls set: csi%d ch%d ae=%d gain=%d awb=%s hflip=%d vflip=%d",
+            _FILE_, __LINE__, csiNum, active_ch, cam_cfg->ae_on, cam_cfg->ae_gain,
             cam_cfg->awb, cam_cfg->hflip, cam_cfg->vflip);
     }
 
