@@ -670,21 +670,30 @@ gboolean config_camera(gpointer user_data)
         __LOG(LOG_INFO, "[CFG][%s:%d] ch%d enable, ch%d enable", _FILE_, __LINE__, ch_num0, ch_num1);
         int bus = i ? 1 : 2;
 
+        /*
+         * NOTE: 0x100c (AP1302 rotation) is now driver-owned via V4L2 controls.
+         * Keep the legacy I2C path here for reference.
+         */
+        (void)bus;
+
+        /*
         // Use safe_exec_i2c instead of system() for ch_num0 (addr 0x11)
         __LOG(LOG_INFO, "[CFG][%s:%d] ch%d i2cwrite bus=%d addr=0x11 reg=0x100c value=0x%04x", _FILE_, __LINE__, ch_num0, bus, (cmdArg.ch_rotate >> (i * 4)) & 0x03);
         if (safe_exec_i2c("i2cwrite", bus, 0x11, 0x100c, (cmdArg.ch_rotate >> (i * 4)) & 0x03, NULL, 0) < 0)
             __LOG(LOG_ERR, "[CFG][%s:%d] ch%d rotation fail", __FILE__, __LINE__, ch_num0);
+        */
 
-        // NOTE: AE/Gain/Exposure now controlled via V4L2 extra-controls in videoBin.cpp
-        // Keeping rotation here as V4L2 doesn't have rotation control (only hflip/vflip)
+        // NOTE: AE/Gain/Exposure are now controlled via V4L2 extra-controls in videoBin.cpp.
+        // Rotation is also driver-owned via V4L2 controls; legacy I2C paths are disabled.
 
+        /*
         // Use safe_exec_i2c instead of system() for ch_num1 (addr 0x12)
         __LOG(LOG_INFO, "[CFG][%s:%d] ch%d i2cwrite bus=%d addr=0x12 reg=0x100c value=0x%04x", _FILE_, __LINE__, ch_num1, bus, (cmdArg.ch_rotate >> (i * 4 + 2)) & 0x03);
         if (safe_exec_i2c("i2cwrite", bus, 0x12, 0x100c, (cmdArg.ch_rotate >> (i * 4 + 2)) & 0x03, NULL, 0) < 0)
             __LOG(LOG_ERR, "[CFG][%s:%d] ch%d rotation fail", __FILE__, __LINE__, ch_num1);
+        */
 
-        // NOTE: AE/Gain/Exposure now controlled via V4L2 extra-controls in videoBin.cpp
-        // Keeping rotation here as V4L2 doesn't have rotation control (only hflip/vflip)
+
     }
     else
     {
@@ -714,10 +723,12 @@ gboolean config_camera(gpointer user_data)
         {
             __LOG(LOG_INFO, "[CFG][%s:%d] ch%d enable, ch%d disable", _FILE_, __LINE__, ch_num0, ch_num1);
 
+            /*
             // Use safe_exec_i2c instead of system() for ch_num0 (addr 0x3c)
             __LOG(LOG_INFO, "[CFG][%s:%d] ch%d i2cwrite bus=%d addr=0x3c reg=0x100c value=0x%04x", _FILE_, __LINE__, ch_num0, bus, (cmdArg.ch_rotate >> (i * 4)) & 0x03);
             if (safe_exec_i2c("i2cwrite", bus, 0x3c, 0x100c, (cmdArg.ch_rotate >> (i * 4)) & 0x03, NULL, 0) < 0)
                 __LOG(LOG_ERR, "[CFG][%s:%d] ch%d rotation fail", __FILE__, __LINE__, ch_num0);
+            */
             if (val[ch_num0] == 0)
                 __LOG(LOG_ERR, "[CFG][%s:%d] swap : ch%d enable but ch%d display", _FILE_, __LINE__, ch_num0, ch_num1);
 
@@ -728,10 +739,12 @@ gboolean config_camera(gpointer user_data)
         {
             __LOG(LOG_INFO, "[CFG][%s:%d] ch%d disable, ch%d enable", _FILE_, __LINE__, ch_num0, ch_num1);
 
+            /*
             // Use safe_exec_i2c instead of system() for ch_num1 (addr 0x3c)
             __LOG(LOG_INFO, "[CFG][%s:%d] ch%d i2cwrite bus=%d addr=0x3c reg=0x100c value=0x%04x", _FILE_, __LINE__, ch_num1, bus, (cmdArg.ch_rotate >> (i * 4 + 2)) & 0x03);
             if (safe_exec_i2c("i2cwrite", bus, 0x3c, 0x100c, (cmdArg.ch_rotate >> (i * 4 + 2)) & 0x03, NULL, 0) < 0)
                 __LOG(LOG_ERR, "[CFG][%s:%d] ch%d rotation fail", __FILE__, __LINE__, ch_num1);
+            */
             if (val[ch_num1] == 0)
                 __LOG(LOG_ERR, "[CFG][%s:%d] swap : ch%d enable but ch%d display", _FILE_, __LINE__, ch_num1, ch_num0);
 
