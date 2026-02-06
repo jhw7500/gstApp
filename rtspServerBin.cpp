@@ -22,6 +22,71 @@ GstRTSPServer *rtspServer = NULL;
 guint cleanSesson_id = 0;
 guint removeSesson_id = 0;
 
+static gint clamp_int(gint value, gint min_value, gint max_value)
+{
+    if (value < min_value)
+        return min_value;
+    if (value > max_value)
+        return max_value;
+    return value;
+}
+
+typedef struct _RtspPayProbeCtx
+{
+    RtspServerData *info;
+    GstElement *media_element;
+    gint64 last_log_us;
+} RtspPayProbeCtx;
+
+static void rtsp_pay_probe_ctx_free(gpointer data)
+{
+    RtspPayProbeCtx *ctx = (RtspPayProbeCtx *)data;
+    if (!ctx)
+        return;
+
+    if (ctx->media_element)
+        gst_object_unref(ctx->media_element);
+
+    g_free(ctx);
+}
+
+static GstPadProbeReturn rtsp_pay_src_probe(GstPad *pad, GstPadProbeInfo *probe_info, gpointer user_data)
+{
+    RtspPayProbeCtx *ctx = (RtspPayProbeCtx *)user_data;
+    if (!ctx || !ctx->info || !ctx->media_element)
+        return GST_PAD_PROBE_OK;
+
+    GstBuffer *buffer = GST_PAD_PROBE_INFO_BUFFER(probe_info);
+    if (!buffer)
+        return GST_PAD_PROBE_OK;
+
+    GstClockTime pts = GST_BUFFER_PTS(buffer);
+    if (!GST_CLOCK_TIME_IS_VALID(pts))
+        return GST_PAD_PROBE_OK;
+
+    GstClock *clock = gst_element_get_clock(ctx->media_element);
+    if (!clock)
+        return GST_PAD_PROBE_OK;
+
+    GstClockTime now = gst_clock_get_time(clock);
+    gst_object_unref(clock);
+
+    GstClockTime base = gst_element_get_base_time(ctx->media_element);
+    GstClockTime running = (now > base) ? (now - base) : 0;
+    GstClockTime rtsp_latency = (running >= pts) ? (running - pts) : 0;
+
+    gint64 now_us = g_get_monotonic_time();
+    if (ctx->last_log_us == 0 || (now_us - ctx->last_log_us) >= 1000000) {
+        ctx->last_log_us = now_us;
+        __LOG(LOG_NOTICE,
+              "[RTSP][%s:%d] ch%d rtsp-out-latency=%" GST_TIME_FORMAT " pts=%" GST_TIME_FORMAT,
+              _FILE_, __LINE__, ctx->info->ch,
+              GST_TIME_ARGS(rtsp_latency), GST_TIME_ARGS(pts));
+    }
+
+    return GST_PAD_PROBE_OK;
+}
+
 static void enough_data(GstElement *source, gpointer user_data) 
 {
     RtspServerData *info = (RtspServerData*)user_data;
@@ -236,7 +301,7 @@ static void	media_configure(GstRTSPMediaFactory *factory, GstRTSPMedia *media, g
     //static GMutex mutex;
 
 	//g_mutex_lock(&mutex);
-    __LOG(LOG_NOTICE, "[GST][%s:%d] media connect ch:%d", _FILE_, __LINE__, info->ch);
+	__LOG(LOG_NOTICE, "[GST][%s:%d] media connect ch:%d", _FILE_, __LINE__, info->ch);
 	element = gst_rtsp_media_get_element(media);
     //name = GST_ELEMENT_NAME(GST_APP_SRC(element));
     //name = gst_object_get_name(GST_OBJECT(element));
@@ -252,6 +317,35 @@ static void	media_configure(GstRTSPMediaFactory *factory, GstRTSPMedia *media, g
 
     //g_object_set (G_OBJECT (queue), 
     //g_free(queue_name);
+
+    if (cmdArg.dbg_rtsp_ts) {
+        GstElement *pay = gst_bin_get_by_name_recurse_up(GST_BIN(element), "pay0");
+        if (pay) {
+            if (g_object_get_data(G_OBJECT(pay), "rtsp-pay-probe-added")) {
+                gst_object_unref(pay);
+                goto media_configure_out;
+            }
+
+            GstPad *pay_src_pad = gst_element_get_static_pad(pay, "src");
+            if (pay_src_pad) {
+                RtspPayProbeCtx *ctx = (RtspPayProbeCtx *)g_malloc0(sizeof(RtspPayProbeCtx));
+                ctx->info = info;
+                ctx->media_element = (GstElement *)gst_object_ref(element);
+                ctx->last_log_us = 0;
+                gst_pad_add_probe(pay_src_pad, GST_PAD_PROBE_TYPE_BUFFER,
+                                 (GstPadProbeCallback)rtsp_pay_src_probe,
+                                 ctx, rtsp_pay_probe_ctx_free);
+                g_object_set_data(G_OBJECT(pay), "rtsp-pay-probe-added", GINT_TO_POINTER(1));
+                gst_object_unref(pay_src_pad);
+            }
+            gst_object_unref(pay);
+        } else {
+            __LOG(LOG_INFO, "[RTSP][%s:%d] ch%d pay0 not found (no rtsp-out-latency)",
+                  _FILE_, __LINE__, info->ch);
+        }
+    }
+
+media_configure_out:
 	gst_object_unref(element);
 
     g_signal_connect(media, "prepared", (GCallback) media_prepared_cb, factory);
@@ -672,11 +766,12 @@ gboolean RtspServerBin::audioInit()
         return ret;
     }
     
-    //g_object_set(re.sink, "max-buffers", 30, NULL);
+    const gint appsink_max_buffers = clamp_int(cmdArg.rtsp_appsink_max_buffers, 1, 120);
+    g_object_set(re.sink, "max-buffers", appsink_max_buffers, NULL);
     g_object_set(re.sink, "drop", TRUE, NULL);
     //g_object_set(pipe->sink, "max-lateness", 1*GST_SECOND, NULL);
     //g_object_set(pipe->sink, "render-delay", 100*GST_MSECOND, NULL);
-    g_object_set(re.sink, "emit-signals", TRUE, "sync", TRUE, "async", FALSE, NULL);
+    g_object_set(re.sink, "emit-signals", TRUE, "sync", FALSE, "async", FALSE, NULL);
     //g_object_set(re.convert, "videocrop-meta-enable", TRUE, NULL);
 
     g_signal_connect(re.sink, "eos", G_CALLBACK(eos_callback), &rtspServerData);
@@ -701,11 +796,15 @@ gboolean RtspServerBin::audioInit()
 
     //gchar *launch_str = g_strdup_printf("( appsrc name=%s ! queue max-size-buffers=60 leaky=2 ! vpuenc_h264 bitrate=1024 ! h264parse config-interval=-1 ! rtph264pay name=pay0 config-interval=-1 )", rtspServerData.appSrcName);
     //gchar *launch_str = g_strdup_printf("appsrc name=%s ! rtpjitterbuffer latency=200 ! rtpmp4adepay ! mpegaudioparse ! rtpmpapay name=pay0 pt=97 )", rtspServerData.appSrcName);
-    gchar *launch_str = g_strdup_printf("appsrc name=%s do-timestamp=1 is-live=1 format=3 ! queue max-size-buffers=10 leaky=2 ! mpegaudioparse ! rtpmpapay name=pay0 pt=97 config-interval=-1 )", rtspServerData.appSrcName);
+    const gint q_max_buffers = clamp_int(cmdArg.rtsp_factory_queue_max_buffers, 1, 120);
+    gchar *launch_str = g_strdup_printf("appsrc name=%s do-timestamp=1 is-live=1 format=3 ! queue max-size-buffers=%d max-size-time=0 max-size-bytes=0 leaky=2 ! mpegaudioparse ! rtpmpapay name=pay0 pt=97 config-interval=-1 )",
+                                       rtspServerData.appSrcName, q_max_buffers);
     //gchar *launch_str = g_strdup_printf("appsrc name=%s do-timestamp=1 is-live=1 format=3 ! queue max-size-buffers=15 leaky=2 ! mpegaudioparse ! rtpmpapay name=pay0 pt=97 )", rtspServerData.appSrcName);
 
     gst_rtsp_media_factory_set_launch(factory, launch_str);
     gst_rtsp_media_factory_set_shared(factory, TRUE);
+    const gint factory_latency_ms = clamp_int(cmdArg.rtsp_factory_latency_ms, 1, 2000);
+    gst_rtsp_media_factory_set_latency(factory, factory_latency_ms);
     g_free(launch_str);
     
     log_once(LOG_INFO, g_strdup_printf("[GST][%s:%d] eos shutdown : %s", _FILE_, __LINE__, gst_rtsp_media_factory_is_eos_shutdown(factory)? "TRUE":"FALSE"));
@@ -792,6 +891,8 @@ gboolean RtspServerBin::init(guint8 ch, gboolean crop_en)
 
     gst_rtsp_media_factory_set_launch(factory, launch_str);
     gst_rtsp_media_factory_set_shared(factory, TRUE);
+    const gint factory_latency_ms = clamp_int(cmdArg.rtsp_factory_latency_ms, 1, 2000);
+    gst_rtsp_media_factory_set_latency(factory, factory_latency_ms);
     g_free(launch_str);
     
     log_once(LOG_INFO, g_strdup_printf("[GST][%s:%d] eos shutdown : %s", _FILE_, __LINE__, gst_rtsp_media_factory_is_eos_shutdown(factory)? "TRUE":"FALSE"));
@@ -884,7 +985,8 @@ gboolean RtspServerBin::init(guint8 ch, gboolean crop_en)
 
     g_object_set(re.enc, "bitrate", cmdArg.cam[ch].bps[STREAM_RTSP], NULL);
     g_object_set(re.enc, "gop-size", cmdArg.cam[ch].gop[STREAM_RTSP], NULL);
-    g_object_set(re.queue, "max-size-time", 200*GST_MSECOND, "leaky", LEAKY_DOWNSTREAM, NULL);
+    const gint bin_queue_ms = clamp_int(cmdArg.rtsp_bin_queue_max_time_ms, 0, 2000);
+    g_object_set(re.queue, "max-size-time", (guint64)bin_queue_ms * GST_MSECOND, "leaky", LEAKY_DOWNSTREAM, NULL);
 
 #ifdef CHANNEL_EACH_CROP
     if(crop_en && cmdArg.overlay_en) ret = gst_element_link_many(re.queue, re.crop, re.overlay, re.convert, re.rate, re.capsfilter, re.enc, re.parse, re.sink, NULL);
@@ -922,11 +1024,12 @@ gboolean RtspServerBin::init(guint8 ch, gboolean crop_en)
     //if(cmdArg.rtsp_fps >= 25) g_object_set(re.rate, "max-rate", cmdArg.rtsp_fps, "drop-only", TRUE, NULL);
 
     //g_object_set(re.capsfilter, "max-size-time", 5*GST_SECOND, "max-size-buffers", 60, "leaky", 1, NULL);
-    g_object_set(re.sink, "max-buffers", cmdArg.fps[STREAM_RTSP][ch]/2, NULL);
+    const gint appsink_max_buffers = clamp_int(cmdArg.rtsp_appsink_max_buffers, 1, 120);
+    g_object_set(re.sink, "max-buffers", appsink_max_buffers, NULL);
     g_object_set(re.sink, "drop", TRUE, NULL);
     //g_object_set(pipe->sink, "max-lateness", 1*GST_SECOND, NULL);
     //g_object_set(pipe->sink, "render-delay", 100*GST_MSECOND, NULL);
-    g_object_set(re.sink, "emit-signals", TRUE, "sync", TRUE, NULL);
+    g_object_set(re.sink, "emit-signals", TRUE, "sync", FALSE, "async", FALSE, NULL);
     //g_object_set(re.convert, "videocrop-meta-enable", TRUE, NULL);
 
     g_signal_connect(re.sink, "eos", G_CALLBACK(eos_callback), NULL);
@@ -947,11 +1050,15 @@ gboolean RtspServerBin::init(guint8 ch, gboolean crop_en)
     rtspServerData.appSrcName = g_strdup_printf("%s%d", "rtsp_appsrc", ch);
 
     //gchar *launch_str = g_strdup_printf("( appsrc name=%s ! queue max-size-buffers=60 leaky=2 ! vpuenc_h264 bitrate=1024 ! h264parse config-interval=-1 ! rtph264pay name=pay0 config-interval=-1 )", rtspServerData.appSrcName);
-    gchar *launch_str = g_strdup_printf("( appsrc name=%s do-timestamp=1 is-live=1 format=3 ! queue max-size-buffers=%d leaky=2 ! h264parse ! rtph264pay name=pay0 config-interval=-1 )", rtspServerData.appSrcName, cmdArg.fps[STREAM_RTSP][ch]/2);
+    const gint q_max_buffers = clamp_int(cmdArg.rtsp_factory_queue_max_buffers, 1, 120);
+    gchar *launch_str = g_strdup_printf("( appsrc name=%s do-timestamp=1 is-live=1 format=3 ! queue max-size-buffers=%d max-size-time=0 max-size-bytes=0 leaky=2 ! h264parse ! rtph264pay name=pay0 config-interval=-1 )",
+                                        rtspServerData.appSrcName, q_max_buffers);
     //gchar *launch_str = g_strdup_printf("( appsrc name=%s do-timestamp=1 is-live=1 block=true ! queue max-size-buffers=5 leaky=2 min-threshold-time=500000000 ! h264parse ! rtph264pay name=pay0 config-interval=0 )", rtspServerData.appSrcName);
 
     gst_rtsp_media_factory_set_launch(factory, launch_str);
     gst_rtsp_media_factory_set_shared(factory, TRUE);
+    const gint factory_latency_ms = clamp_int(cmdArg.rtsp_factory_latency_ms, 1, 2000);
+    gst_rtsp_media_factory_set_latency(factory, factory_latency_ms);
     g_free(launch_str);
     
     log_once(LOG_INFO, g_strdup_printf("[GST][%s:%d] eos shutdown : %s", _FILE_, __LINE__, gst_rtsp_media_factory_is_eos_shutdown(factory)? "TRUE":"FALSE"));
