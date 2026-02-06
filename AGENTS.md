@@ -9,6 +9,11 @@ This file is guidance for agentic coding in `gstApp/`.
 - Cursor rules: **none found** (`.cursor/rules/` or `.cursorrules` not present)
 - Copilot rules: **none found** (`.github/copilot-instructions.md` not present)
 
+## GitHub/GitLab workflow
+
+This repo is often developed on GitHub first, then a curated result is pushed to company GitLab.
+See `projects/GITLAB_PUBLISH.md`.
+
 ## Quick Commands (from `Makefile`)
 - Build (default target): `make`
 - Clean: `make clean`
