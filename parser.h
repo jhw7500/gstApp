@@ -54,6 +54,20 @@
 #define DEFAULT_RTSP_ID     "user"
 #define DEFAULT_RTSP_PASSWD "user"
 
+#define DEFAULT_RTSP_FACTORY_LATENCY_MS 200
+#define DEFAULT_RTSP_APPSINK_MAX_BUFFERS 2
+#define DEFAULT_RTSP_FACTORY_QUEUE_MAX_BUFFERS 2
+#define DEFAULT_RTSP_BIN_QUEUE_MAX_TIME_MS 200
+
+// Platform device mapping defaults
+// Target mapping (confirmed via sysfs):
+// - i2c-2 (max9296 2-0048) -> /dev/v4l-subdev2 -> channels 0/1 (csi0)
+// - i2c-1 (max9296 1-0048) -> /dev/v4l-subdev3 -> channels 2/3 (csi1)
+#define DEFAULT_V4L_SUBDEV_CSI0 2
+#define DEFAULT_V4L_SUBDEV_CSI1 3
+#define DEFAULT_V4L_VIDEO_CSI0 4
+#define DEFAULT_V4L_VIDEO_CSI1 3
+
 #define DEFAULT_TCP_PORT    8555
 #define DEFAULT_IPC_MID     0x65
 

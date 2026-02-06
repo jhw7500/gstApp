@@ -179,6 +179,15 @@ typedef struct _CmdArg
     gint ipc_mid;
     const gchar *muxer;
     gboolean dual_enc;
+    gint rtsp_factory_latency_ms;
+    gint rtsp_appsink_max_buffers;
+    gint rtsp_factory_queue_max_buffers;
+    gint rtsp_bin_queue_max_time_ms;
+
+    gint v4l_subdev_csi0;
+    gint v4l_subdev_csi1;
+    gint v4l_video_csi0;
+    gint v4l_video_csi1;
     CaptureConfig cap;
     gint wdt_timeout_short;
     gint wdt_timeout_long;
