@@ -12,12 +12,28 @@
 
 #include "util.h"
 #include <glib-unix.h>
+#include <fcntl.h>
 #include <sys/stat.h>
+#include <sys/syscall.h>
 #include <sys/wait.h>
 #include <errno.h>
 #include <unistd.h>
 #include <string.h>
 #include <dirent.h>
+
+static int sys_newfstatat(const char *path, struct stat *st)
+{
+#if defined(__NR_newfstatat)
+    return (int)syscall(__NR_newfstatat, AT_FDCWD, path, st, 0);
+#elif defined(__NR_fstatat64)
+    return (int)syscall(__NR_fstatat64, AT_FDCWD, path, st, 0);
+#else
+    (void)path;
+    (void)st;
+    errno = ENOSYS;
+    return -1;
+#endif
+}
 
 GstElement *pipeline = NULL;
 GMainLoop *loop = NULL;
@@ -366,7 +382,7 @@ gboolean print_delay(GstPad *pad, GstObject *parent, GstBuffer *buffer)
   return TRUE;
 }
 
-gchar *search_file(const gchar* path, const gchar* prefix, const gchar* suffix)
+	gchar *search_file(const gchar* path, const gchar* prefix, const gchar* suffix)
 {
 	static gchar str[128];
 	str[0] = '\0';
@@ -386,7 +402,7 @@ gchar *search_file(const gchar* path, const gchar* prefix, const gchar* suffix)
 				char fullpath[512];
 				snprintf(fullpath, sizeof(fullpath), "%s/%s", path, ent->d_name);
 
-				if (stat(fullpath, &st) == 0) {
+				if (sys_newfstatat(fullpath, &st) == 0) {
 					if (st.st_mtime > latest_mtime) {
 						latest_mtime = st.st_mtime;
 						strncpy(latest_filename, ent->d_name, sizeof(latest_filename) - 1);
