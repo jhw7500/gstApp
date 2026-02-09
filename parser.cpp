@@ -20,6 +20,23 @@
 
 #define LOG_KEY "CFG"
 
+static void json_object_get_int_optional(json_object *obj, const gchar *name,
+                                         gint *out) {
+  if (!obj || !name || !out)
+    return;
+
+  json_object *vobj = json_object_object_get(obj, name);
+  if (!vobj)
+    return;
+
+  enum json_type type = json_object_get_type(vobj);
+  if (type != json_type_int)
+    return;
+
+  *out = json_object_get_int(vobj);
+  __LOG(LOG_INFO, "[CFG][%s:%d] %s : %d", _FILE_, __LINE__, name, *out);
+}
+
 void ParserClass::init_arg(gchar *argv) {
   // g_print("%s\n", __FUNCTION__);
   arg.appname = CHARNEXT(argv, '/');
@@ -64,6 +81,16 @@ void ParserClass::init_arg(gchar *argv) {
   arg.dual_enc = FALSE;
   arg.wdt_timeout_long = DEFAULT_WDT_TIMEOUT_LONG;
   arg.wdt_timeout_short = DEFAULT_WDT_TIMEOUT_SHORT;
+
+  arg.rtsp_factory_latency_ms = DEFAULT_RTSP_FACTORY_LATENCY_MS;
+  arg.rtsp_appsink_max_buffers = DEFAULT_RTSP_APPSINK_MAX_BUFFERS;
+  arg.rtsp_factory_queue_max_buffers = DEFAULT_RTSP_FACTORY_QUEUE_MAX_BUFFERS;
+  arg.rtsp_bin_queue_max_time_ms = DEFAULT_RTSP_BIN_QUEUE_MAX_TIME_MS;
+
+  arg.v4l_subdev_csi0 = DEFAULT_V4L_SUBDEV_CSI0;
+  arg.v4l_subdev_csi1 = DEFAULT_V4L_SUBDEV_CSI1;
+  arg.v4l_video_csi0 = DEFAULT_V4L_VIDEO_CSI0;
+  arg.v4l_video_csi1 = DEFAULT_V4L_VIDEO_CSI1;
 
   arg.cap.path = DEFAULT_CAP_DIR;
   arg.cap.maxCnt = DEFAULT_CAPTURE_MAX_CNT;
@@ -363,16 +390,64 @@ gint ParserClass::json_parser(const gchar *path, const gchar *header) {
       json_object_get_value(sobj, "quality", &arg.cap.quality);
       json_object_get_value(sobj, "queue_size", &arg.cap.queue_size);
       json_object_get_value(sobj, "response", &arg.cap.res_en);
+
       arg.stream_en[STREAM_REC] = arg.cap.record_en;
       arg.stream_en[STREAM_RTSP] = arg.cap.rtsp_en;
       arg.ipc_en = TRUE;
     }
 
+    // Optional RTSP tuning knobs. Keep optional to avoid breaking older
+    // edgeconf.
+    {
+      json_object *rtsp_obj = json_object_object_get(hobj, "rtsp_tune");
+      json_object *tune_obj = rtsp_obj ? rtsp_obj : sobj;
+      json_object_get_int_optional(tune_obj, "rtsp_factory_latency_ms",
+                                   &arg.rtsp_factory_latency_ms);
+      json_object_get_int_optional(tune_obj, "rtsp_appsink_max_buffers",
+                                   &arg.rtsp_appsink_max_buffers);
+      json_object_get_int_optional(tune_obj, "rtsp_factory_queue_max_buffers",
+                                   &arg.rtsp_factory_queue_max_buffers);
+      json_object_get_int_optional(tune_obj, "rtsp_bin_queue_max_time_ms",
+                                   &arg.rtsp_bin_queue_max_time_ms);
+    }
+
+    // Optional platform device mapping overrides.
+    {
+      json_object *map_obj = json_object_object_get(hobj, "v4l_map");
+      if (!map_obj)
+        map_obj = json_object_object_get(hobj, "device_map");
+
+      json_object_get_int_optional(map_obj, "csi0_subdev",
+                                   &arg.v4l_subdev_csi0);
+      json_object_get_int_optional(map_obj, "csi1_subdev",
+                                   &arg.v4l_subdev_csi1);
+      json_object_get_int_optional(map_obj, "csi0_video", &arg.v4l_video_csi0);
+      json_object_get_int_optional(map_obj, "csi1_video", &arg.v4l_video_csi1);
+    }
+
+    /*
+     * Derive enable/rotation bitmasks from per-channel JSON.
+     * init_arg() seeds defaults (e.g., DEFAULT_CH_ROTATE). If we don't reset
+     * here, stale default bits can leak into runtime settings.
+     */
+    arg.ch_enable = 0;
+    arg.ch_rotate = 0;
+
     for (guint8 i = 0; i < MAX_CHANNEL; i++) {
       gchar *i2c_key = g_strdup_printf("i2c%d", i / 2 ? 1 : 2);
       sobj = json_object_object_get(hobj, i2c_key);
       g_free(i2c_key);
-      json_object_get_value(sobj, "exp_time", &arg.cam[i].exp_time);
+      /* Accept both ext_time and exp_time for backward compatibility. */
+      {
+        json_object *ext_obj = json_object_object_get(sobj, "ext_time");
+        if (ext_obj && json_object_get_type(ext_obj) == json_type_int) {
+          arg.cam[i].exp_time = (guint32)json_object_get_int(ext_obj);
+          __LOG(LOG_INFO, "[CFG][%s:%d] ext_time : %u", _FILE_, __LINE__,
+                arg.cam[i].exp_time);
+        } else {
+          json_object_get_value(sobj, "exp_time", &arg.cam[i].exp_time);
+        }
+      }
       gchar *ch_key = g_strdup_printf("ch%d", i);
       vobj = json_object_object_get(sobj, ch_key);
       g_free(ch_key);
@@ -670,6 +745,11 @@ gint ParserClass::check_arg() {
         arg.wdt_timeout_long, arg.wdt_timeout_short);
 
   __LOG(LOG_NOTICE,
+        "[%s][%s:%d] v4l_map subdev(csi0=%d,csi1=%d) video(csi0=%d,csi1=%d)",
+        LOG_KEY, _FILE_, __LINE__, arg.v4l_subdev_csi0, arg.v4l_subdev_csi1,
+        arg.v4l_video_csi0, arg.v4l_video_csi1);
+
+  __LOG(LOG_NOTICE,
         "[%s][%s:%d] chEn:0x%x, recEn:%d, rtspEn:%d, capEn:%d, audoEn:%d, "
         "dualEn:%d, inputEn:%d, overlayEn:%d tcpEn:%d, tcpPort:%d, ipc_en:%d, "
         "ipc_mid:%d",
@@ -714,6 +794,13 @@ gint ParserClass::check_arg() {
           LOG_KEY, _FILE_, __LINE__, arg.rtsp_id, arg.rtsp_passwd,
           arg.rtsp_port, arg.fps[STREAM_RTSP][0], arg.fps[STREAM_RTSP][1],
           arg.fps[STREAM_RTSP][2], arg.fps[STREAM_RTSP][3]);
+
+    __LOG(LOG_NOTICE,
+          "[%s][%s:%d] rtsp_tune factory_latency_ms:%d appsink_max_buffers:%d "
+          "factory_queue_max_buffers:%d bin_queue_max_time_ms:%d",
+          LOG_KEY, _FILE_, __LINE__, arg.rtsp_factory_latency_ms,
+          arg.rtsp_appsink_max_buffers, arg.rtsp_factory_queue_max_buffers,
+          arg.rtsp_bin_queue_max_time_ms);
   }
 
   if (arg.stream_en[STREAM_CAP]) {
@@ -754,7 +841,7 @@ gint ParserClass::check_arg() {
   for (i = 0; i < MAX_CHANNEL; i++) {
     if (arg.stream_en[STREAM_REC])
       total_fps += arg.fps[STREAM_REC][i] * cmdArg.cam[i].enable;
-    if (arg.stream_en[STREAM_RTSP])
+    if (arg.stream_en[STREAM_RTSP] && arg.dual_enc)
       total_fps += arg.fps[STREAM_RTSP][i] * cmdArg.cam[i].enable;
   }
 
@@ -870,12 +957,13 @@ gint ParserClass::cfi_parser(gchar *buffer, gint len, gpointer data) {
   capMaxCnt = _TCfiSendData.data.cap_cnt;
 
   // For lossless PNG continuous capture, keep requests bounded.
-  // We allow completion to be late, but memory/CPU can explode for large counts.
+  // We allow completion to be late, but memory/CPU can explode for large
+  // counts.
   if (cmdArg.cap.encoder && g_strcmp0(cmdArg.cap.encoder, "png") == 0) {
     const guint16 MAX_PNG_CAP_CNT = 20;
     if (capMaxCnt > MAX_PNG_CAP_CNT) {
-      __LOG(LOG_WARNING, "[%s][%s:%d] png cap_cnt clamped: %d -> %d", CAP_LOG_KEY,
-            _FILE_, __LINE__, capMaxCnt, MAX_PNG_CAP_CNT);
+      __LOG(LOG_WARNING, "[%s][%s:%d] png cap_cnt clamped: %d -> %d",
+            CAP_LOG_KEY, _FILE_, __LINE__, capMaxCnt, MAX_PNG_CAP_CNT);
       capMaxCnt = MAX_PNG_CAP_CNT;
     }
   }
@@ -918,11 +1006,11 @@ gint ParserClass::cfi_parser(gchar *buffer, gint len, gpointer data) {
       timeout_msec = timeout_msec + processing_overhead + cmdArg.cap.timeout;
 
       // PNG encoding is CPU-heavy (lossless compression). The generic timeout
-      // calculation above (based on fps) severely underestimates real encode time,
-      // which can cause partial output (e.g., 10/30) before timeout.
+      // calculation above (based on fps) severely underestimates real encode
+      // time, which can cause partial output (e.g., 10/30) before timeout.
       if (cmdArg.cap.encoder && g_strcmp0(cmdArg.cap.encoder, "png") == 0) {
-        const guint32 base_min_ms = 10000;   // negotiation + first-frame latency
-        const guint32 per_frame_ms = 2500;   // conservative budget per PNG frame
+        const guint32 base_min_ms = 10000; // negotiation + first-frame latency
+        const guint32 per_frame_ms = 2500; // conservative budget per PNG frame
         guint32 scaled = 2000 + (guint32)capMaxCnt * per_frame_ms;
         if (scaled < base_min_ms)
           scaled = base_min_ms;
@@ -930,7 +1018,8 @@ gint ParserClass::cfi_parser(gchar *buffer, gint len, gpointer data) {
           timeout_msec = scaled;
 
         __LOG(LOG_NOTICE,
-              "[%s][%s:%d] ch%d png timeout scaled: cnt:%d fps:%d -> timeout:%u ms",
+              "[%s][%s:%d] ch%d png timeout scaled: cnt:%d fps:%d -> "
+              "timeout:%u ms",
               CAP_LOG_KEY, _FILE_, __LINE__, i, capMaxCnt, fps, timeout_msec);
       }
 
