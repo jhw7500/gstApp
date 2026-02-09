@@ -1,29 +1,46 @@
 name: gstApp Build and Test
 
 on:
-  push:
-    branches: [ main, master, "feature/*", "fix/*" ]
-    paths:
-      - 'projects/gstApp/**'
   pull_request:
+    types: [opened, reopened]
     branches: [ main, master ]
     paths:
       - 'projects/gstApp/**'
+  issue_comment:
+    types: [created]
   workflow_dispatch:
 
 jobs:
   build:
     name: Build gstApp
+    if: |
+      (github.event_name == 'pull_request') ||
+      (github.event_name == 'issue_comment' && github.event.issue.pull_request && startsWith(github.event.comment.body, '/build')) ||
+      (github.event_name == 'workflow_dispatch')
     runs-on: ubuntu-latest
     defaults:
       run:
         working-directory: projects/gstApp
 
     steps:
+      - name: Get PR Branch Info
+        if: github.event_name == 'issue_comment'
+        id: pr_info
+        uses: actions/github-script@v6
+        with:
+          script: |
+            const pr = await github.rest.pulls.get({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              pull_number: context.issue.number
+            });
+            core.setOutput('ref', pr.data.head.ref);
+
       - name: Checkout code
         uses: actions/checkout@v4
         with:
           submodules: recursive
+          ref: ${{ steps.pr_info.outputs.ref || github.ref }}
 
       - name: Install Dependencies
         run: |
