@@ -371,31 +371,42 @@ gchar *search_file(const gchar* path, const gchar* prefix, const gchar* suffix)
 	static gchar str[128];
 	str[0] = '\0';
 
-	DIR *dir = opendir(path);
-	if (dir == NULL) {
-		__LOG(LOG_CRIT, "[CFG][%s:%d] opendir 실패: %s", _FILE_, __LINE__, path);
+	DIR *dir;
+	struct dirent *ent;
+	struct stat st;
+	time_t latest_mtime = 0;
+	char latest_filename[256] = {0};
+
+	if ((dir = opendir(path)) != NULL) 
+	{
+		while ((ent = readdir(dir)) != NULL) 
+		{
+			if(g_str_has_prefix(ent->d_name, prefix) && g_str_has_suffix(ent->d_name, suffix))
+			{
+				char fullpath[512];
+				snprintf(fullpath, sizeof(fullpath), "%s/%s", path, ent->d_name);
+
+				if (stat(fullpath, &st) == 0) {
+					if (st.st_mtime > latest_mtime) {
+						latest_mtime = st.st_mtime;
+						strncpy(latest_filename, ent->d_name, sizeof(latest_filename) - 1);
+						latest_filename[sizeof(latest_filename) - 1] = '\0';
+					}
+				}
+			}
+		}
+
+		if (latest_mtime > 0) {
+			snprintf(str, sizeof(str), "%s/%s", path, latest_filename);
+		}
+		closedir(dir);
+	} 
+	else 
+	{
+		/* could not open directory */
+		perror ("");
 		return str;
 	}
-
-	struct dirent *entry;
-	while ((entry = readdir(dir)) != NULL) {
-		// 디렉토리 건너뛰기
-		if (entry->d_type == DT_DIR)
-			continue;
-
-		// prefix 매칭
-		if (!g_str_has_prefix(entry->d_name, prefix))
-			continue;
-
-		// suffix 매칭
-		if (!g_str_has_suffix(entry->d_name, suffix))
-			continue;
-
-		// 매칭된 파일: 전체 경로 조합
-		snprintf(str, sizeof(str), "%s/%s", path, entry->d_name);
-	}
-
-	closedir(dir);
 
 	__LOG(LOG_INFO, "[CFG][%s:%d] search_file: %s", _FILE_, __LINE__, str);
 	return str;
