@@ -158,12 +158,16 @@ int CTCPServer::init(ThreadArgs *args)
 	ret = pthread_create(&m_threadConnect, NULL, &thread_waitingConnect, args);
 	if(ret < 0) {
 		__LOG(LOG_CRIT, "[TCP][%s:%d] ret:%d", _FILE_, __LINE__, ret);
+		close(m_serverSocket);
+		m_serverSocket = -1;
 		return ret;
 	}
 
 	ret = pthread_create(&m_threadSend, NULL, &thread_waitingSend, NULL);
 	if(ret < 0) {
 		__LOG(LOG_CRIT, "[TCP][%s:%d] ret:%d", _FILE_, __LINE__, ret);
+		close(m_serverSocket);
+		m_serverSocket = -1;
 		return ret;
 	}
 
