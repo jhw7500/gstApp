@@ -72,6 +72,29 @@ static void mark_session_complete(const gchar *timestamp) {
           __LINE__, done_file);
   }
   g_free(done_file);
+
+  // 개별 플래그 정리
+  gchar *video_flag = g_strdup_printf("/tmp/session_%s.video_done", timestamp);
+  gchar *srt_flag = g_strdup_printf("/tmp/session_%s.srt_done", timestamp);
+  unlink(video_flag);
+  unlink(srt_flag);
+  g_free(video_flag);
+  g_free(srt_flag);
+}
+
+static void check_and_mark_all_done(const gchar *timestamp) {
+  gchar *video_flag = g_strdup_printf("/tmp/session_%s.video_done", timestamp);
+  gchar *srt_flag = g_strdup_printf("/tmp/session_%s.srt_done", timestamp);
+
+  gboolean video_done = (access(video_flag, F_OK) == 0);
+  gboolean srt_done = !cmdArg.srt_en || (access(srt_flag, F_OK) == 0);
+
+  if (video_done && srt_done) {
+    mark_session_complete(timestamp);
+  }
+
+  g_free(video_flag);
+  g_free(srt_flag);
 }
 
 void MuxSinkBin::handleFragmentClosed(const gchar *location) {
@@ -185,7 +208,15 @@ void MuxSinkBin::handleFragmentClosed(const gchar *location) {
 
   // 활성 채널 수만큼 완료되었는지 확인
   if (completed_channels >= active_channels && active_channels > 0) {
-    mark_session_complete(timestamp);
+    // .video_done 플래그 생성
+    gchar *video_flag = g_strdup_printf("/tmp/session_%s.video_done", timestamp);
+    FILE *fp = fopen(video_flag, "w");
+    if (fp)
+      fclose(fp);
+    g_free(video_flag);
+
+    // 전체 완료 확인
+    check_and_mark_all_done(timestamp);
 
     // 세션 정리
     g_mutex_unlock(&session->mutex);
@@ -348,7 +379,7 @@ gboolean MuxSinkBin::splitNow(gpointer data, gboolean timer_en) {
   if (timer_en) {
     __LOG(LOG_NOTICE, "[GST][%s:%d] split timer start ch : %d", _FILE_,
           __LINE__, muxSinkData.ch);
-    g_timeout_add_seconds(cmdArg.duration, (GSourceFunc)split, &be);
+    g_timeout_add_seconds(cmdArg.duration * 60, (GSourceFunc)split, &be);
   }
 
   return TRUE;

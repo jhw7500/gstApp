@@ -11,6 +11,7 @@
  */
 
 #include "parser.h"
+#include <unistd.h>
 #include "captureBin.h"
 #include "ipc.h"
 #include "muxSinkBin.h"
@@ -464,6 +465,30 @@ gint ParserClass::json_parser(const gchar *path, const gchar *header) {
 
       for (guint8 k = 0; k < MAX_MODE; k++)
         arg.fps[k][i] = arg.main_fps[CSI_1];
+    }
+
+    // Read SRT enabled status from ord_vcm_conf.json
+    {
+      const gchar *ord_json = "/root/shared_v/ord_vcm_conf.json";
+      if (access(ord_json, R_OK) != 0) {
+        ord_json = "/home/root/ord_vcm_conf.json";
+      }
+
+      json_object *ord_obj = json_object_from_file(ord_json);
+      if (ord_obj) {
+        json_object *vcm_obj = json_object_object_get(ord_obj, "VCM");
+        if (vcm_obj) {
+          json_object *srt_obj = json_object_object_get(vcm_obj, "srt_enable");
+          if (srt_obj) {
+            arg.srt_en = json_object_get_boolean(srt_obj);
+            __LOG(LOG_INFO, "[CFG][%s:%d] srt_enable : %s", _FILE_, __LINE__,
+                  arg.srt_en ? "TRUE" : "FALSE");
+          }
+        }
+        json_object_put(ord_obj);
+      } else {
+        arg.srt_en = FALSE;
+      }
     }
 
   } while (0);

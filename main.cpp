@@ -484,21 +484,57 @@ static void splitCheck(gpointer data, guint8 startSec) {
     start_flag = 1;
   }
 
-  if (target_min != min || startSec != sec) {
+  // 현재 시각과 목표 시각의 차이 계산 (초 단위)
+  // (min * 60 + sec) 형태로 계산하여 비교
+  gint current_total_sec = min * 60 + sec;
+  gint target_total_sec = target_min * 60 + startSec;
+  gint diff = current_total_sec - target_total_sec;
+
+  // 60분(3600초) 단위 순환 보정 (예: 목표 59분, 현재 00분인 경우)
+  if (diff < -1800) diff += 3600;
+  else if (diff > 1800) diff -= 3600;
+
+  // 목표 시간보다 0초~10초 사이로 경과했다면 분할 트리거
+  // (너무 오래 지난 경우는 다른 예외 상황이므로 제외)
+  gboolean time_to_split = (diff >= 0 && diff < 10);
+
+  if (!time_to_split) {
     g_date_time_unref(datetime);
     return;
   }
 
+  __LOG(LOG_NOTICE, "[GST][%s:%d] Split time reached (%02ds), triggering split now", _FILE_, __LINE__, startSec);
+
+  // 1. vcm과의 동기화를 위해 시작 시간 정보 갱신
+  {
+    GDateTime *split_datetime = g_date_time_new_now_local();
+    gchar *date_str = g_date_time_format(split_datetime, "%Y%m%d %H:%M:%S");
+    if (safe_write_file(DEFAULT_START_VIDEO_TIME_PATH, date_str) < 0)
+      __LOG(LOG_ERR, "[GST][%s:%d] Failed to write split time to %s",
+            _FILE_, __LINE__, DEFAULT_START_VIDEO_TIME_PATH);
+    else
+      __LOG(LOG_NOTICE, "[GST][%s:%d] Wrote split time to %s for vcm sync", _FILE_,
+            __LINE__, DEFAULT_START_VIDEO_TIME_PATH);
+    g_free(date_str);
+    g_date_time_unref(split_datetime);
+  }
+
+  // 2. 모든 활성 채널 분할 트리거
+  for (i = 0; i < MAX_CHANNEL; i++) {
+    if (cmdArg.cam[i].enable) {
+      muxSinkBin[i].splitNow(NULL, FALSE);
+    }
+  }
+
 #ifdef SPLIT_TIME_RECOVERY
   gint splitMax = 0, splitMin = 59999;
+  gboolean recovery_needed = FALSE;
 
   for (i = 0; i < MAX_CHANNEL; i++) {
     if (!cmdArg.cam[i].enable)
       continue;
 
     gint splitMsec = muxSinkBin[i].getSplitMsec();
-    __LOG(LOG_DEBUG, "[GST][%s:%d] splitMsec[%d] : %d", _FILE_, __LINE__, i,
-          splitMsec);
     if (splitMsec > splitMax)
       splitMax = splitMsec;
     if (splitMsec < splitMin)
@@ -506,39 +542,16 @@ static void splitCheck(gpointer data, guint8 startSec) {
 
     muxSinkBin[i].setSplitMsec(DEFAULT_SPLIT_MAX_MSEC);
   }
-  __LOG(LOG_INFO, "[GST][%s:%d] splitMax : %d, splitMin : %d", _FILE_, __LINE__,
-        splitMax, splitMin);
 
-  do {
-    if (splitMax - splitMin >= cmdArg.split_diff_msec ||
-        (splitMax >= cmdArg.split_max_msec)) {
-      // if(cmdArg.audio_en && splitMax >= cmdArg.split_audio_min_msec) break;
-
-      __LOG(
-          LOG_ERR,
-          "[GST][%s:%d] split time check error : splitMax : %d, splitMin : %d",
+  if (splitMax - splitMin >= cmdArg.split_diff_msec ||
+      (splitMax >= cmdArg.split_max_msec)) {
+    recovery_needed = TRUE;
+    __LOG(LOG_ERR, "[GST][%s:%d] split time recovery check: splitMax:%d, splitMin:%d",
           _FILE_, __LINE__, splitMax, splitMin);
+  }
 
-      // Use safe_write_file instead of system("echo ...")
-      GDateTime *split_datetime = g_date_time_new_now_local();
-      gchar *date_str = g_date_time_format(split_datetime, "%Y%m%d %H:%M:%S");
-      if (safe_write_file(DEFAULT_START_VIDEO_TIME_PATH, date_str) < 0)
-        __LOG(LOG_ERR, "[GST][%s:%d] Failed to write split time to %s in %s",
-              _FILE_, __LINE__, DEFAULT_START_VIDEO_TIME_PATH, __FUNCTION__);
-      else
-        __LOG(LOG_NOTICE, "[GST][%s:%d] Wrote split time to %s in %s", _FILE_,
-              __LINE__, DEFAULT_START_VIDEO_TIME_PATH, __FUNCTION__);
-
-      g_free(date_str);
-      g_date_time_unref(split_datetime);
-
-      __LOG(LOG_NOTICE, "[GST][%s:%d] split now", _FILE_, __LINE__);
-      for (i = 0; i < MAX_CHANNEL; i++)
-        if (cmdArg.cam[i].enable)
-          muxSinkBin[i].splitNow(NULL, FALSE);
-    }
-  } while (0);
-
+  // Note: 위에서 이미 splitNow를 호출했으므로 여기서는 추가 작업 없이 로그만 남김
+  // (필요 시 강제 splitNow를 한 번 더 호출할 수도 있으나, 이미 split-after가 예약됨)
 #endif
   target_min = g_date_time_get_minute(
       g_date_time_add_minutes(datetime, cmdArg.duration));
@@ -1174,9 +1187,9 @@ gint main(gint argc, gchar *argv[]) {
   }
 
   if (cmdArg.stream_en[STREAM_REC] || cmdArg.audio_en) {
-    __LOG(LOG_INFO, "[GST][%s:%d] split timer start (1 second interval)",
+    __LOG(LOG_INFO, "[GST][%s:%d] split timer start (500ms interval)",
           _FILE_, __LINE__);
-    g_timeout_add_seconds(1, split_timer_callback, muxSinkBin);
+    g_timeout_add(500, (GSourceFunc)split_timer_callback, muxSinkBin);
   }
 
   if (cmdArg.overlay_en) {
