@@ -728,9 +728,13 @@ GstPad *RtspServerBin::getBinSinkPad() {
 
 gboolean RtspServerBin::addBinTeeRecordPad(guint8 ch) {
   __LOG(LOG_NOTICE, "[GST][%s:%d] %s[%d]", _FILE_, __LINE__, __FUNCTION__, ch);
+  
+  GstPad *target_pad = gst_element_get_request_pad(re.tee, "src_%u");
   teeRecordPad =
       gst_ghost_pad_new(g_strdup_printf("record_pad_ch%d", ch),
-                        gst_element_get_request_pad(re.tee, "src_%u"));
+                        target_pad);
+  if (target_pad)
+      gst_object_unref(target_pad);
 
   return gst_element_add_pad(re.bin, teeRecordPad);
 }

@@ -319,7 +319,10 @@ gboolean RecordBin::removeBinToPipe(GstElement *pipe)
 gboolean RecordBin::addBinRtspSrcPad(guint8 ch)
 {
     __LOG(LOG_NOTICE, "[GST][%s:%d] %s[%d]", _FILE_, __LINE__, __FUNCTION__, ch);
-    srcRtspPad = gst_ghost_pad_new(g_strdup_printf("rtsp_pad_ch%d", ch), gst_element_get_request_pad(re.tee, "src_%u"));
+    GstPad *target_pad = gst_element_get_request_pad(re.tee, "src_%u");
+    srcRtspPad = gst_ghost_pad_new(g_strdup_printf("rtsp_pad_ch%d", ch), target_pad);
+    if (target_pad)
+        gst_object_unref(target_pad);
 
     return gst_element_add_pad(re.bin, srcRtspPad);
 }

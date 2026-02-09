@@ -41,7 +41,11 @@ gboolean TestBin::addBinSrcPad(guint8 ch)
 {
     __LOG(LOG_NOTICE, "[GST][%s:%d] %s ch:%d ptr:%d", _FILE_, __LINE__, __FUNCTION__, ch, ptr);
 
-    return gst_element_add_pad(be.bin, gst_ghost_pad_new(g_strdup_printf("test_src_ch%d", ch), gst_element_get_request_pad(be.element[ptr], "src_%u")));
+    GstPad *target_pad = gst_element_get_request_pad(be.element[ptr], "src_%u");
+    GstPad *ghost_pad = gst_ghost_pad_new(g_strdup_printf("test_src_ch%d", ch), target_pad);
+    if (target_pad)
+        gst_object_unref(target_pad);
+    return gst_element_add_pad(be.bin, ghost_pad);
 }
 
 gboolean TestBin::linkElement()

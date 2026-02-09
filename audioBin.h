@@ -16,7 +16,7 @@
 
 #include "util.h"
 
-typedef struct _AuidoData
+typedef struct _AudioData
 {
     guint8 ch;
 } AudioData;

@@ -199,7 +199,10 @@ GstPad* EncoderBin::getBinSinkPad()
 gboolean EncoderBin::addBinRtspSrcPad()
 {
     __LOG(LOG_INFO, "[GST][%s:%d] ch%d %s", _FILE_, __LINE__, encData.ch, __FUNCTION__);
-    srcRtspPad = gst_ghost_pad_new("rtsp_srcpad", gst_element_get_request_pad(re.tee, "src_%u"));
+    GstPad *target_pad = gst_element_get_request_pad(re.tee, "src_%u");
+    srcRtspPad = gst_ghost_pad_new("rtsp_srcpad", target_pad);
+    if (target_pad)
+        gst_object_unref(target_pad);
 
     return gst_element_add_pad(re.bin, srcRtspPad);
 }
@@ -217,7 +220,10 @@ GstPad* EncoderBin::getBinRtspSrcPad()
 gboolean EncoderBin::addBinRecSrcPad()
 {
     __LOG(LOG_INFO, "[GST][%s:%d] %s[%d]", _FILE_, __LINE__, __FUNCTION__, encData.ch);
-    srcRecPad = gst_ghost_pad_new("rec_srcpad", gst_element_get_request_pad(re.tee, "src_%u"));
+    GstPad *target_pad = gst_element_get_request_pad(re.tee, "src_%u");
+    srcRecPad = gst_ghost_pad_new("rec_srcpad", target_pad);
+    if (target_pad)
+        gst_object_unref(target_pad);
 
     return gst_element_add_pad(re.bin, srcRecPad);
 }

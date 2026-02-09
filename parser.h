@@ -36,7 +36,7 @@
 #define DEFAULT_RTSP_FPS        15
 #define DEFAULT_CAPTURE_FPS     15
 #define DEFAULT_GOP_SIZE        15
-#define DEFUALT_DURATION        1
+#define DEFAULT_DURATION        1
 #define DEFAULT_DBG_LEVEL       4
 #define DEFAULT_LOG_LEVEL       5
 #define DEFAULT_CH_ENABLE       0x00

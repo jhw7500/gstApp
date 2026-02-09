@@ -819,7 +819,6 @@ CaptureBin::~CaptureBin()
 
     destroy_compressor(&captureData);
 }
-
 void CaptureBin::addCaptureRequest(gint maxCnt, const gchar *prefix, gpointer userData, guint8 mode, gint timeoutMs)
 {
     std::lock_guard<std::mutex> lock(*captureData.queue_mutex);
@@ -830,9 +829,6 @@ void CaptureBin::addCaptureRequest(gint maxCnt, const gchar *prefix, gpointer us
     req->mode = mode;
     req->captureCnt = 0; // Written count
     req->startTime = g_get_monotonic_time(); // microseconds
-    // PNG encode path (videoconvert + pngenc) is heavier and can easily exceed
-    // DEFAULT_CAPTURE_TIMEOUT-derived budgets (often ~300ms for 1 frame).
-    // Ensure a sane minimum so requests don't timeout before the first sample arrives.
     // PNG encode path (videoconvert + pngenc) is CPU-heavy. Timeout must scale with
     // requested frame count (maxCnt), otherwise large requests will complete partially.
     if (captureData.enc_type == CAP_ENC_PNG) {

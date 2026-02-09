@@ -40,7 +40,7 @@ int CIPCInsance::init(ThreadArgs *args)
     m_threadRecv = 0;
 	
 #if 1
-    int msg_id = msgget((key_t)MSG_Q_REQ_KEY, IPC_CREAT | 0666);
+    int msg_id = msgget((key_t)MSG_Q_REQ_KEY, IPC_CREAT | 0600);
 
     if(msg_id == -1) {
         perror("msgget fail");
@@ -88,7 +88,7 @@ int CIPCInsance::destroy()
     }
 
 #if 1
-    int msg_id = msgget((key_t)MSG_Q_REQ_KEY, IPC_CREAT | 0666);
+    int msg_id = msgget((key_t)MSG_Q_REQ_KEY, IPC_CREAT | 0600);
 
     if(msg_id == -1) {
         perror("msgget fail");
@@ -138,7 +138,7 @@ static void dump_cfi_header(const guint8 *buf, size_t len)
 
 int CIPCInsance::sendData(char* data, int len)
 {
-    int msg_id = msgget((key_t)MSG_Q_RES_KEY, IPC_CREAT | 0666);
+    int msg_id = msgget((key_t)MSG_Q_RES_KEY, IPC_CREAT | 0600);
     if (msg_id == -1) {
         perror("msgget fail");
         __LOG(LOG_ERR, "[IPC][%s:%d] msgget fail", _FILE_, __LINE__);
@@ -186,7 +186,7 @@ int CIPCInsance::waitingRecv(void* pData)
 	IpcBuffer recvMsg;
     ParserClass* parser = ParserClass::getInstance();
 
-	//msg_id = msgget((key_t)MSG_Q_KEY, IPC_CREAT | 0666);
+	//msg_id = msgget((key_t)MSG_Q_KEY, IPC_CREAT | 0600);
 
     while(1) {
         g_usleep(10000);
@@ -194,7 +194,7 @@ int CIPCInsance::waitingRecv(void* pData)
         if(m_flagDestroy)
             break;
 
-		msg_id = msgget((key_t)MSG_Q_REQ_KEY, IPC_CREAT | 0666);
+		msg_id = msgget((key_t)MSG_Q_REQ_KEY, IPC_CREAT | 0600);
         if(msg_id == -1) {
             perror("msgget fail");
             __LOG(LOG_CRIT, "[IPC][%s:%d] msg_id:%d", _FILE_, __LINE__, ret);

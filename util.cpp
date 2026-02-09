@@ -17,6 +17,7 @@
 #include <errno.h>
 #include <unistd.h>
 #include <string.h>
+#include <dirent.h>
 
 GstElement *pipeline = NULL;
 GMainLoop *loop = NULL;
@@ -172,9 +173,9 @@ void sigHandler(int sig)
 
   if(cnt++ > 3)
   {
-    g_main_loop_unref(loop);
     gst_element_set_state (pipeline, GST_STATE_NULL);
     gst_object_unref(pipeline);
+    g_main_loop_unref(loop);
   }
 
 #if 0
@@ -220,14 +221,18 @@ void cleanup()
   gst_deinit();  // GStreamer 해제
 }
 
-void log_once(gint opt, const gchar *message) 
+void log_once(gint opt, const gchar *message)
 {
   static gchar lastMessage[256][256];
   static guint8 ptr = 0;
+  static GMutex log_once_mutex;
+
+  g_mutex_lock(&log_once_mutex);
 
   for(guint8 i=0; i<ptr; i++)
   {
     if (strcmp(message, lastMessage[i]) == 0) {
+      g_mutex_unlock(&log_once_mutex);
       return;
     }
   }
@@ -251,9 +256,13 @@ void log_once(gint opt, const gchar *message)
     g_free(date_str);
   }
 
-    //strncpy(lastMessage[ptr], message, sizeof(lastMessage));
-  strncpy(lastMessage[ptr], message, sizeof(lastMessage[ptr]));
-  ptr++;
+  if(ptr < 255) {
+    strncpy(lastMessage[ptr], message, sizeof(lastMessage[ptr]));
+    lastMessage[ptr][sizeof(lastMessage[ptr]) - 1] = '\0';
+    ptr++;
+  }
+
+  g_mutex_unlock(&log_once_mutex);
 }
 
 void mylog(gint opt, const gchar* _szfmt, ... )
@@ -262,7 +271,7 @@ void mylog(gint opt, const gchar* _szfmt, ... )
 	gchar strTmp[512];
 
 	va_start( va, _szfmt );
-	vsprintf(strTmp, _szfmt ,va);
+	vsnprintf(strTmp, sizeof(strTmp), _szfmt, va);
 
 	if(opt <= cmdArg.log_level || opt <= LOG_ALERT) {
 		//syslog( opt|LOG_LOCAL0, "  [%5ld.%06ld] [%s]%s", ts.tv_sec, ts.tv_nsec/1000, debug_codes[opt], strTmp);
@@ -359,30 +368,34 @@ gboolean print_delay(GstPad *pad, GstObject *parent, GstBuffer *buffer)
 
 gchar *search_file(const gchar* path, const gchar* prefix, const gchar* suffix)
 {
-	FILE *fp;
 	static gchar str[128];
+	str[0] = '\0';
 
-	// 주의: path, prefix, suffix는 내부 상수값만 사용됨 (외부 입력 없음)
-	sprintf(str, "ls -ptr %s/%s*%s 2>/dev/null | grep -v '/$' | grep '\\%s$' | tail -1 | tr -d '\r\n'",
-	        path, prefix, suffix, suffix);
-	fp = popen(str, "r");
-	if (NULL == fp)
-	{
-		perror("popen() fail");
-		__LOG(LOG_CRIT, "[CFG][%s:%d] popen 실패", _FILE_, __LINE__);
-		str[0] = '\0';
+	DIR *dir = opendir(path);
+	if (dir == NULL) {
+		__LOG(LOG_CRIT, "[CFG][%s:%d] opendir 실패: %s", _FILE_, __LINE__, path);
 		return str;
 	}
 
-	str[0] = '\0';
-	if (fgets(str, sizeof(str), fp) != NULL) {
-		// 개행 문자 제거
-		gsize len = strlen(str);
-		if (len > 0 && str[len-1] == '\n') {
-			str[len-1] = '\0';
-		}
+	struct dirent *entry;
+	while ((entry = readdir(dir)) != NULL) {
+		// 디렉토리 건너뛰기
+		if (entry->d_type == DT_DIR)
+			continue;
+
+		// prefix 매칭
+		if (!g_str_has_prefix(entry->d_name, prefix))
+			continue;
+
+		// suffix 매칭
+		if (!g_str_has_suffix(entry->d_name, suffix))
+			continue;
+
+		// 매칭된 파일: 전체 경로 조합
+		snprintf(str, sizeof(str), "%s/%s", path, entry->d_name);
 	}
-	pclose(fp);
+
+	closedir(dir);
 
 	__LOG(LOG_INFO, "[CFG][%s:%d] search_file: %s", _FILE_, __LINE__, str);
 	return str;
