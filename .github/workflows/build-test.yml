@@ -1,5 +1,10 @@
 name: gstApp Build and Test
 
+permissions:
+  contents: read
+  pull-requests: read
+  issues: read
+
 on:
   pull_request:
     types: [opened, reopened]
@@ -18,9 +23,6 @@ jobs:
       (github.event_name == 'issue_comment' && github.event.issue.pull_request && startsWith(github.event.comment.body, '/build')) ||
       (github.event_name == 'workflow_dispatch')
     runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: projects/gstApp
 
     steps:
       - name: Get PR Branch Info
@@ -73,8 +75,7 @@ jobs:
 
       - name: Build
         run: |
-          # Try make, fallback if it fails due to missing rnnoise or similar specific paths
-          # We might need to mock or adjust Makefile for CI environment if paths are hardcoded
+          cd projects/gstApp
           make || { echo "Build failed. Check dependencies."; exit 1; }
 
       - name: Upload Build Artifact
