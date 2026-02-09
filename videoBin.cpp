@@ -174,18 +174,24 @@ GstPad *VideoBin::getBinCaptureSrcPad(guint8 ch) {
 
 gboolean VideoBin::addBinRtspSrcPad(guint8 ch) {
   __LOG(LOG_INFO, "[GST][%s:%d] %s[%d]", _FILE_, __LINE__, __FUNCTION__, ch);
+  GstPad *target_pad = gst_element_get_request_pad(be.teeCrop, "src_%u");
   srcRtspPad =
       gst_ghost_pad_new(g_strdup_printf("srcpad_ch%d", ch),
-                        gst_element_get_request_pad(be.teeCrop, "src_%u"));
+                        target_pad);
+  if (target_pad)
+      gst_object_unref(target_pad);
 
   return gst_element_add_pad(be.bin, srcRtspPad);
 }
 
 gboolean VideoBin::addBinRecordSrcPad(guint8 ch) {
   __LOG(LOG_INFO, "[GST][%s:%d] %s[%d]", _FILE_, __LINE__, __FUNCTION__, ch);
+  GstPad *target_pad = gst_element_get_request_pad(be.teeCrop, "src_%u");
   srcRecordPad =
       gst_ghost_pad_new(g_strdup_printf("record_pad_ch%d", ch),
-                        gst_element_get_request_pad(be.teeCrop, "src_%u"));
+                        target_pad);
+  if (target_pad)
+      gst_object_unref(target_pad);
 
   if (cmdArg.levelMode == MODE_TEST) {
     gst_pad_add_probe(srcRecordPad, GST_PAD_PROBE_TYPE_BUFFER,
@@ -197,9 +203,12 @@ gboolean VideoBin::addBinRecordSrcPad(guint8 ch) {
 
 gboolean VideoBin::addBinCaptureSrcPad(guint8 ch) {
   __LOG(LOG_INFO, "[GST][%s:%d] %s[%d]", _FILE_, __LINE__, __FUNCTION__, ch);
+  GstPad *target_pad = gst_element_get_request_pad(be.teeCrop, "src_%u");
   srcCapturePad =
       gst_ghost_pad_new(g_strdup_printf("capture_pad_ch%d", ch),
-                        gst_element_get_request_pad(be.teeCrop, "src_%u"));
+                        target_pad);
+  if (target_pad)
+      gst_object_unref(target_pad);
 
   return gst_element_add_pad(be.bin, srcCapturePad);
 }

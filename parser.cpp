@@ -48,7 +48,7 @@ void ParserClass::init_arg(gchar *argv) {
   arg.dbg_cap_ts = FALSE;
   arg.dbg_rtsp_ts = FALSE;
   arg.mntDir = DEFAULT_MOUNT_PATH;
-  arg.duration = DEFUALT_DURATION;
+  arg.duration = DEFAULT_DURATION;
   arg.rtsp_port = DEFAULT_RTSP_PORT;
   arg.rtsp_id = DEFAULT_RTSP_ID;
 
@@ -1068,7 +1068,9 @@ gint ParserClass::cmd_parser(gchar *buffer, gint len, gpointer data) {
   // GstPadLinkReturn linkRet;
 
   // gint len = strlen(buffer);
-  buffer[len] = '\0';
+  if (len >= 0) {
+    buffer[len] = '\0';
+  }
   g_print("Input: %s\n", buffer);
   //__LOG(LOG_NOTICE, "[TCP][%s:%d] Input: %s", _FILE_, __LINE__, buffer);
 

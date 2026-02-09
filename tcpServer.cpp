@@ -131,14 +131,16 @@ int CTCPServer::init(ThreadArgs *args)
 	if (ret < 0)
 	{
 		__LOG(LOG_CRIT, "[TCP][%s:%d] Server bind failed", _FILE_, __LINE__);
-		//m_flagDestroy = 1;
+		close(m_serverSocket);
+		m_serverSocket = -1;
 		return ret;
 	}
 
 	ret = listen(m_serverSocket, MAXPENDING);
 	if(ret < 0 ) {
 		__LOG(LOG_CRIT, "[TCP][%s:%d] Server listen failed", _FILE_, __LINE__) ;
-		//m_flagDestroy = 1;
+		close(m_serverSocket);
+		m_serverSocket = -1;
 		return ret;
 	}
 
@@ -156,12 +158,16 @@ int CTCPServer::init(ThreadArgs *args)
 	ret = pthread_create(&m_threadConnect, NULL, &thread_waitingConnect, args);
 	if(ret < 0) {
 		__LOG(LOG_CRIT, "[TCP][%s:%d] ret:%d", _FILE_, __LINE__, ret);
+		close(m_serverSocket);
+		m_serverSocket = -1;
 		return ret;
 	}
 
 	ret = pthread_create(&m_threadSend, NULL, &thread_waitingSend, NULL);
 	if(ret < 0) {
 		__LOG(LOG_CRIT, "[TCP][%s:%d] ret:%d", _FILE_, __LINE__, ret);
+		close(m_serverSocket);
+		m_serverSocket = -1;
 		return ret;
 	}
 
@@ -358,10 +364,11 @@ int CTCPServer::waitingConnect(void* pData)
 				case SERVER_RECEIVES_DATA:
 				{
 					//sendBuf.fd[sendBuf.inptr] = fd;
-					nread = recv(fd, szBuf, BUF_SIZE, 0);
+					nread = recv(fd, szBuf, BUF_SIZE - 1, 0);
 
 					if (nread > 0) 
 					{
+						szBuf[nread] = '\0'; // Ensure null-termination
 						__LOG(LOG_INFO, "[TCP][%s:%d] recv data socket_id(%d) byte %d", _FILE_, __LINE__, fd, nread);
 						for (int i = 0; i < nread; i++)
 							__LOG(LOG_DEBUG, "[TCP][%s:%d] (%d)0x%02x", _FILE_, __LINE__, i, szBuf[i]);

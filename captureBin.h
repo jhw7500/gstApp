@@ -1,4 +1,4 @@
-#ifndef _CAPTRUEBIN_H_
+#ifndef _CAPTUREBIN_H_
 #define _CAPTUREBIN_H_
 
 #include "util.h"
