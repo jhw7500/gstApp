@@ -209,7 +209,7 @@ void addSignalHandler()
 {
   signal_watch_intr_id = g_unix_signal_add (SIGINT, (GSourceFunc) intr_handler, pipeline);
   signal_watch_hup_id = g_unix_signal_add (SIGHUP, (GSourceFunc) hup_handler, pipeline);
-  //signal_watch_term_id = g_unix_signal_add (SIGTERM, (GSourceFunc) term_handler, pipeline);
+  signal_watch_term_id = g_unix_signal_add (SIGTERM, (GSourceFunc) term_handler, pipeline); // [안전 종료] SIGTERM도 처리
   //signal_watch_kill_id = g_unix_signal_add (SIGKILL, (GSourceFunc) kill_handler, pipeline);
 }
 
