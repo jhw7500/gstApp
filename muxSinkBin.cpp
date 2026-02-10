@@ -448,6 +448,19 @@ gchararray format_location(GstElement *sink, guint arg0, gpointer data) {
   gchararray file_name;
   gchar *date_str_ptr = NULL;
   gchar *ts_str_ptr = NULL;
+  
+  // [I/O 최적화] 마커 파일을 기록할 대표 채널 선정 (최초 1회만 계산)
+  static gint marker_channel = -1;
+  if (marker_channel == -1) {
+    for (int i = 0; i < MAX_CHANNEL; i++) {
+      if (cmdArg.cam[i].enable) {
+        marker_channel = i;
+        break;
+      }
+    }
+    // 활성 채널이 없으면 0번으로 fallback
+    if (marker_channel == -1) marker_channel = 0;
+  }
 
   info->split_msec = sec * 1000 + usec / 1000;
 
@@ -457,51 +470,60 @@ gchararray format_location(GstElement *sink, guint arg0, gpointer data) {
   }
 
   // [캐싱 최적화] 1초 내 중복 요청은 캐시된 문자열 재사용
+  // Mutex 경합 최소화: 데이터 복사 후 즉시 Unlock
+  gchar local_date_str[32];
+  gchar local_ts_str[32];
   gint64 current_unix_sec = g_date_time_to_unix(datetime);
+  
   g_mutex_lock(&timestamp_cache_mutex);
   if (current_unix_sec != last_cache_unix_sec) {
     GDateTime *round_time = g_date_time_add_seconds(datetime, 1);
     gchar *tmp_date = g_date_time_format(round_time, "%Y%m%d_%H%M00");
     gchar *tmp_ts = g_date_time_format(round_time, "%Y%m%d_%H%M");
     
-    strncpy(cached_date_str, tmp_date, sizeof(cached_date_str) - 1);
-    strncpy(cached_timestamp_str, tmp_ts, sizeof(cached_timestamp_str) - 1);
+    g_strlcpy(cached_date_str, tmp_date, sizeof(cached_date_str));
+    g_strlcpy(cached_timestamp_str, tmp_ts, sizeof(cached_timestamp_str));
     last_cache_unix_sec = current_unix_sec;
 
     g_free(tmp_date);
     g_free(tmp_ts);
     g_date_time_unref(round_time);
   }
-  date_str_ptr = cached_date_str;
-  ts_str_ptr = cached_timestamp_str;
+  g_strlcpy(local_date_str, cached_date_str, sizeof(local_date_str));
+  g_strlcpy(local_ts_str, cached_timestamp_str, sizeof(local_ts_str));
+  g_mutex_unlock(&timestamp_cache_mutex);
 
-  // [snprintf 최적화] 안전한 버퍼 경로 생성
+  // [snprintf 최적화] 안전한 버퍼 경로 생성 (Mutex 밖에서 수행)
   char path_buf[1024];
   int written;
   const char *ext = (g_strcmp0(cmdArg.muxer, "ts") == 0) ? "ts" : "mp4";
   
   written = snprintf(path_buf, sizeof(path_buf), "%s/%s_%s-ch%d.%s.part", 
-                     cmdArg.mntDir, cmdArg.ohtName, date_str_ptr, info->ch, ext);
+                     cmdArg.mntDir, cmdArg.ohtName, local_date_str, info->ch, ext);
   
   if (written >= (int)sizeof(path_buf)) {
-    __LOG(LOG_ERR, "[GST][%s:%d] Path truncated! Increase buffer size", _FILE_, __LINE__);
+    __LOG(LOG_ERR, "[GST][%s:%d] Path truncated! Using fallback", _FILE_, __LINE__);
+    // Fallback: 안전한 짧은 이름 사용
+    snprintf(path_buf, sizeof(path_buf), "/tmp/fallback_ch%d_%ld.mp4", info->ch, (long)current_unix_sec);
   }
   file_name = g_strdup(path_buf);
 
   // 타임스탬프 저장 (fragment-closed에서 사용)
   if (info->last_timestamp) g_free(info->last_timestamp);
-  info->last_timestamp = g_strdup(ts_str_ptr);
-  g_mutex_unlock(&timestamp_cache_mutex);
+  info->last_timestamp = g_strdup(local_ts_str);
 
-  // 시작 시간 기록 (chk_cam_operate.sh용 - 1채널에서만 수행하여 부하 감소)
-  if (info->ch == 0) {
-    int fd = open("/tmp/start_video_time_chk", O_WRONLY | O_CREAT | O_TRUNC, 0644);
+  // 시작 시간 기록 (chk_cam_operate.sh용 - 대표 채널에서만 수행)
+  if (info->ch == marker_channel) {
+    // [I/O 안정성] O_TRUNC 없이 열고 락 획득 후에만 truncate 수행
+    int fd = open("/tmp/start_video_time_chk", O_WRONLY | O_CREAT, 0644);
     if (fd >= 0) {
       if (flock(fd, LOCK_EX | LOCK_NB) == 0) {
-        gchar *time_str = g_date_time_format(datetime, "%Y%m%d %H:%M:%S");
-        write(fd, time_str, strlen(time_str));
+        if (ftruncate(fd, 0) == 0) {
+          gchar *time_str = g_date_time_format(datetime, "%Y%m%d %H:%M:%S");
+          write(fd, time_str, strlen(time_str));
+          g_free(time_str);
+        }
         flock(fd, LOCK_UN);
-        g_free(time_str);
       }
       close(fd);
     }
