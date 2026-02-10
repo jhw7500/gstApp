@@ -28,7 +28,8 @@
 // #include <signal.h>
 
 #define APP_VERSION "1.3"
-#define MAX_SNAPBACK_DRIFT_MS 59000
+#define MAX_SNAPBACK_DRIFT_MS 30000
+#define MIN_SPLIT_INTERVAL_SEC 5
 
 #define SEGFAULT_DEBUG
 #define RECORDBIN_ENABLE
@@ -477,9 +478,13 @@ static void check_terminal_input(
 }
 
 static void splitCheck(gpointer data, guint8 startSec) {
-  MuxSinkBin *muxSinkBin = (MuxSinkBin *)data;
+  ThreadArgs *tArgs = (ThreadArgs *)data;
+  MuxSinkBin *muxSinkBin = (MuxSinkBin *)tArgs->arg3;
+  EncoderBin *eBin = (EncoderBin *)tArgs->arg5;
   static gboolean start_flag = 0;
   static gint target_min;
+  static gint64 last_split_ts = 0; // 마지막 분할 시점 (단조 클럭)
+  static gint last_split_min = -1; // 마지막 분할 시점의 '분' 정보
   guint8 i;
   GDateTime *datetime = g_date_time_new_now_local();
   gint sec = g_date_time_get_second(datetime);
@@ -496,6 +501,8 @@ static void splitCheck(gpointer data, guint8 startSec) {
     target_min = (sec != startSec) ? g_date_time_get_minute(g_date_time_add_minutes(datetime, 1)) : min;
     __LOG(LOG_NOTICE, "[GST][%s:%d] next split time : %02dm %02ds", _FILE_, __LINE__, target_min, startSec);
     start_flag = 1;
+    last_split_ts = g_get_monotonic_time();
+    last_split_min = min; // 앱 시작 시점의 분 저장
   }
 
   gint current_total_sec = min * 60 + sec;
@@ -506,55 +513,80 @@ static void splitCheck(gpointer data, guint8 startSec) {
   else if (diff > 1800) diff -= 3600;
 
   if (diff >= 0) {
-    gboolean is_misaligned = FALSE;
+    gboolean any_misaligned = FALSE;
     gint splitMax = 0, splitMin = 59999;
     gint active_count = 0;
 
-    // 1. 각 채널 상태 확인 및 스큐(Skew) 계산
+    // 1. 각 채널 상태 확인 및 스큐(Skew) 데이터 수집
     for (i = 0; i < MAX_CHANNEL; i++) {
       if (!cmdArg.cam[i].enable) continue;
       gint sm = muxSinkBin[i].getSplitMsec();
       active_count++;
-      if (sm >= cmdArg.split_max_msec) is_misaligned = TRUE;
+      
+      if (diff < 5) {
+        __LOG(LOG_DEBUG, "[GST][%s:%d] ch%d sm:%dms, diff:%ds", _FILE_, __LINE__, i, sm, diff);
+      }
+
+      if (sm >= cmdArg.split_max_msec) any_misaligned = TRUE;
       if (sm > splitMax) splitMax = sm;
       if (sm < splitMin) splitMin = sm;
     }
 
+    // 2. 정시 분할 성공 판단
+    gboolean is_fully_aligned = (!any_misaligned);
     if (active_count > 1 && (splitMax - splitMin >= cmdArg.split_diff_msec)) {
-      __LOG(LOG_NOTICE, "[GST][%s:%d] Inter-channel skew detected: %dms", _FILE_, __LINE__, splitMax - splitMin);
-      is_misaligned = TRUE;
+      is_fully_aligned = FALSE;
     }
 
-    // 2. 정시 분할 성공 시 다음 주기로 이동
-    if (!is_misaligned) {
+    if (is_fully_aligned) {
       target_min = (target_min + cmdArg.duration) % 60;
       __LOG(LOG_NOTICE, "[GST][%s:%d] All channels aligned to 00s. Next target : %02dm %02ds", 
             _FILE_, __LINE__, target_min, startSec);
+      last_split_ts = g_get_monotonic_time();
+      last_split_min = min; 
       g_date_time_unref(datetime);
       return;
     }
 
-    // 3. 비정상 상태 시 강제 분할(do_force) 시점 결정
-    gboolean do_force = FALSE;
+    // 3. 실행 시점 결정: 기본적으로 즉시 강제 정정하되, 정각 직전만 유예
+    gboolean do_force = TRUE;
     for (i = 0; i < MAX_CHANNEL; i++) {
       if (!cmdArg.cam[i].enable) continue;
       gint sm = muxSinkBin[i].getSplitMsec();
-      // CASE A: 이미 지연 시작됨 (0~30s 사이의 늦은 시작)
-      if (sm >= cmdArg.split_max_msec && sm < MAX_SNAPBACK_DRIFT_MS) {
-        do_force = TRUE; break;
+      if (sm >= 58000 && (diff * 1000 < cmdArg.split_max_msec)) {
+        do_force = FALSE;
+        break;
       }
-      // CASE B: 아직 이전 파일을 쓰는 중 (타임아웃 도달)
-      if (diff * 1000 >= cmdArg.split_max_msec) {
-        do_force = TRUE; break;
+    }
+
+    // [보호 로직 개선] 
+    // 분(Minute)이 달라졌다면(파일명이 달라짐) 5초 보호 없이 즉시 실행.
+    // 같은 분 내에서만 5초 보호를 적용하여 무한 루프 방지.
+    if (do_force) {
+      gint64 now_ts = g_get_monotonic_time();
+      if (min == last_split_min && (now_ts - last_split_ts) < (MIN_SPLIT_INTERVAL_SEC * 1000000)) {
+        __LOG(LOG_NOTICE, "[GST][%s:%d] Skip forced split (Same minute interval protection: %ldms)", 
+              _FILE_, __LINE__, (now_ts - last_split_ts) / 1000);
+        do_force = FALSE;
       }
     }
 
     if (do_force) {
-      __LOG(LOG_ERR, "[GST][%s:%d] Forced split to restore sync (Drift:%dms, Skew:%dms)", 
-            _FILE_, __LINE__, splitMax, (active_count > 1 ? splitMax - splitMin : 0));
+      __LOG(LOG_ERR, "[GST][%s:%d] Snap-back split (diff:%ds, smMax:%dms, skew:%dms)", 
+            _FILE_, __LINE__, diff, splitMax, (active_count > 1 ? splitMax - splitMin : 0));
+      
+      // 모든 인코더에 키프레임 생성 강제 요청 (분할 시점 일치 극대화)
+      EncoderBin *eBin = (EncoderBin *)tArgs->arg5;
+      for (i = 0; i < MAX_CHANNEL; i++) {
+        if (cmdArg.cam[i].enable) {
+          eBin[i].forceKeyframe();
+        }
+      }
+
       gchar *date_str = g_date_time_format(datetime, "%Y%m%d %H:%M:%S");
       safe_write_file(DEFAULT_START_VIDEO_TIME_PATH, date_str);
       g_free(date_str);
+
       for (i = 0; i < MAX_CHANNEL; i++) {
         if (cmdArg.cam[i].enable) {
           muxSinkBin[i].splitNow(NULL, FALSE);
@@ -562,8 +594,8 @@ static void splitCheck(gpointer data, guint8 startSec) {
         }
       }
       target_min = (target_min + cmdArg.duration) % 60;
-      __LOG(LOG_NOTICE, "[GST][%s:%d] Next target : %02dm %02ds (after snap-back)", 
-            _FILE_, __LINE__, target_min, startSec);
+      last_split_ts = g_get_monotonic_time();
+      last_split_min = min;
     }
   }
 
@@ -1188,7 +1220,7 @@ gint main(gint argc, gchar *argv[]) {
   if (cmdArg.stream_en[STREAM_REC] || cmdArg.audio_en) {
     __LOG(LOG_INFO, "[GST][%s:%d] split timer start (500ms interval)", _FILE_,
           __LINE__);
-    g_timeout_add(500, (GSourceFunc)split_timer_callback, muxSinkBin);
+    g_timeout_add(500, (GSourceFunc)split_timer_callback, threadArgs);
   }
 
   if (cmdArg.overlay_en) {

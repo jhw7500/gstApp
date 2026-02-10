@@ -11,6 +11,7 @@
  */
 
 #include "encoderBin.h"
+#include <gst/video/video.h>
 
 EncoderBin* EncoderBin::getInstance()
 {
@@ -151,6 +152,20 @@ void EncoderBin::setkeyframe(guint16 data)
     g_object_get(re.enc, "set-keyframe", &key, NULL);
     __LOG(LOG_NOTICE, "[GST][%s:%d] ch%d set keyframe : %d", _FILE_, __LINE__, encData.ch, key);
     g_print("rec ch%d set keyframe : %d\n", encData.ch, key);
+}
+
+void EncoderBin::forceKeyframe()
+{
+    if (re.enc == NULL) return;
+
+    // 업스트림 방향으로 force-keyunit 이벤트 전송
+    // timestamp: GST_CLOCK_TIME_NONE (현재 시점), count: 1 (즉시), flags: 0
+    GstEvent *event = gst_video_event_new_upstream_force_key_unit(GST_CLOCK_TIME_NONE, TRUE, 0);
+    if (gst_element_send_event(re.enc, event)) {
+        __LOG(LOG_INFO, "[GST][%s:%d] ch%d Force keyframe event sent", _FILE_, __LINE__, encData.ch);
+    } else {
+        __LOG(LOG_ERR, "[GST][%s:%d] ch%d Failed to send force keyframe event", _FILE_, __LINE__, encData.ch);
+    }
 }
 
 GstState EncoderBin::getState()
