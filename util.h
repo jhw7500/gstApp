@@ -191,6 +191,7 @@ typedef struct _CmdArg
     CaptureConfig cap;
     gint wdt_timeout_short;
     gint wdt_timeout_long;
+    gboolean srt_en;
 } CmdArg;
 
 #pragma pack(pop)

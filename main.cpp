@@ -28,6 +28,7 @@
 // #include <signal.h>
 
 #define APP_VERSION "1.3"
+#define MAX_SNAPBACK_DRIFT_MS 59000
 
 #define SEGFAULT_DEBUG
 #define RECORDBIN_ENABLE
@@ -206,8 +207,9 @@ gboolean bus_message_parse(GstBus *bus, GstMessage *message, gpointer data) {
     // gst_structure_to_string(gst_message_get_structure(message)));
     const GstStructure *structure = gst_message_get_structure(message);
     if (gst_structure_has_name(structure, "splitmuxsink-fragment-opened")) {
-      //__LOG(LOG_NOTICE, "[GST][%s:%d] fragment-opened: %s", __FILE__, __LINE__, \
-                    g_value_get_string(gst_structure_get_value(structure, "location")));
+      //__LOG(LOG_NOTICE, "[GST][%s:%d] fragment-opened: %s", __FILE__,
+      //__LINE__, g_value_get_string(gst_structure_get_value(structure,
+      //"location")));
     } else if (gst_structure_has_name(structure,
                                       "splitmuxsink-fragment-closed")) {
       const gchar *location =
@@ -461,101 +463,89 @@ static void splitCheck(gpointer data, guint8 startSec) {
   gint sec = g_date_time_get_second(datetime);
   gint min = g_date_time_get_minute(datetime);
 
-  // g_print("%s\n", __FUNCTION__);
-  //__LOG(LOG_NOTICE, "[GST][%s:%d] %s", _FILE_, __LINE__, __FUNCTION__);
   if (start_flag == 0) {
     for (i = 0; i < MAX_CHANNEL; i++) {
-      if (!cmdArg.cam[i].enable)
-        continue;
+      if (!cmdArg.cam[i].enable) continue;
       if (muxSinkBin[i].getStartFlag() == 0) {
         g_date_time_unref(datetime);
         return;
       }
     }
-
-    if (sec != startSec) {
-      target_min = g_date_time_get_minute(g_date_time_add_minutes(datetime, 1));
-    } else
-      target_min = min;
-    // target_min = min + 1;
-    // if(target_min >= 60) target_min = 0;
-    __LOG(LOG_NOTICE, "[GST][%s:%d] next split time : %02dm %02ds", _FILE_,
-          __LINE__, target_min, startSec);
+    target_min = (sec != startSec) ? g_date_time_get_minute(g_date_time_add_minutes(datetime, 1)) : min;
+    __LOG(LOG_NOTICE, "[GST][%s:%d] next split time : %02dm %02ds", _FILE_, __LINE__, target_min, startSec);
     start_flag = 1;
   }
 
-  if (target_min != min || startSec != sec) {
-    g_date_time_unref(datetime);
-    return;
-  }
+  gint current_total_sec = min * 60 + sec;
+  gint target_total_sec = target_min * 60 + startSec;
+  gint diff = current_total_sec - target_total_sec;
 
-#ifdef SPLIT_TIME_RECOVERY
-  gint splitMax = 0, splitMin = 59999;
+  if (diff < -1800) diff += 3600;
+  else if (diff > 1800) diff -= 3600;
 
-  for (i = 0; i < MAX_CHANNEL; i++) {
-    if (!cmdArg.cam[i].enable)
-      continue;
+  if (diff >= 0) {
+    gboolean is_misaligned = FALSE;
+    gint splitMax = 0, splitMin = 59999;
+    gint active_count = 0;
 
-    gint splitMsec = muxSinkBin[i].getSplitMsec();
-    __LOG(LOG_DEBUG, "[GST][%s:%d] splitMsec[%d] : %d", _FILE_, __LINE__, i,
-          splitMsec);
-    if (splitMsec > splitMax)
-      splitMax = splitMsec;
-    if (splitMsec < splitMin)
-      splitMin = splitMsec;
+    // 1. 각 채널 상태 확인 및 스큐(Skew) 계산
+    for (i = 0; i < MAX_CHANNEL; i++) {
+      if (!cmdArg.cam[i].enable) continue;
+      gint sm = muxSinkBin[i].getSplitMsec();
+      active_count++;
+      if (sm >= cmdArg.split_max_msec) is_misaligned = TRUE;
+      if (sm > splitMax) splitMax = sm;
+      if (sm < splitMin) splitMin = sm;
+    }
 
-    muxSinkBin[i].setSplitMsec(DEFAULT_SPLIT_MAX_MSEC);
-  }
-  __LOG(LOG_INFO, "[GST][%s:%d] splitMax : %d, splitMin : %d", _FILE_, __LINE__,
-        splitMax, splitMin);
+    if (active_count > 1 && (splitMax - splitMin >= cmdArg.split_diff_msec)) {
+      __LOG(LOG_NOTICE, "[GST][%s:%d] Inter-channel skew detected: %dms", _FILE_, __LINE__, splitMax - splitMin);
+      is_misaligned = TRUE;
+    }
 
-  do {
-    if (splitMax - splitMin >= cmdArg.split_diff_msec ||
-        (splitMax >= cmdArg.split_max_msec)) {
-      // if(cmdArg.audio_en && splitMax >= cmdArg.split_audio_min_msec) break;
+    // 2. 정시 분할 성공 시 다음 주기로 이동
+    if (!is_misaligned) {
+      target_min = (target_min + cmdArg.duration) % 60;
+      __LOG(LOG_NOTICE, "[GST][%s:%d] All channels aligned to 00s. Next target : %02dm %02ds", 
+            _FILE_, __LINE__, target_min, startSec);
+      g_date_time_unref(datetime);
+      return;
+    }
 
-      __LOG(
-          LOG_ERR,
-          "[GST][%s:%d] split time check error : splitMax : %d, splitMin : %d",
-          _FILE_, __LINE__, splitMax, splitMin);
+    // 3. 비정상 상태 시 강제 분할(do_force) 시점 결정
+    gboolean do_force = FALSE;
+    for (i = 0; i < MAX_CHANNEL; i++) {
+      if (!cmdArg.cam[i].enable) continue;
+      gint sm = muxSinkBin[i].getSplitMsec();
+      // CASE A: 이미 지연 시작됨 (0~30s 사이의 늦은 시작)
+      if (sm >= cmdArg.split_max_msec && sm < MAX_SNAPBACK_DRIFT_MS) {
+        do_force = TRUE; break;
+      }
+      // CASE B: 아직 이전 파일을 쓰는 중 (타임아웃 도달)
+      if (diff * 1000 >= cmdArg.split_max_msec) {
+        do_force = TRUE; break;
+      }
+    }
 
-      // Use safe_write_file instead of system("echo ...")
-      GDateTime *split_datetime = g_date_time_new_now_local();
-      gchar *date_str = g_date_time_format(split_datetime, "%Y%m%d %H:%M:%S");
-      if (safe_write_file(DEFAULT_START_VIDEO_TIME_PATH, date_str) < 0)
-        __LOG(LOG_ERR, "[GST][%s:%d] Failed to write split time to %s in %s",
-              _FILE_, __LINE__, DEFAULT_START_VIDEO_TIME_PATH, __FUNCTION__);
-      else
-        __LOG(LOG_NOTICE, "[GST][%s:%d] Wrote split time to %s in %s", _FILE_,
-              __LINE__, DEFAULT_START_VIDEO_TIME_PATH, __FUNCTION__);
-
+    if (do_force) {
+      __LOG(LOG_ERR, "[GST][%s:%d] Forced split to restore sync (Drift:%dms, Skew:%dms)", 
+            _FILE_, __LINE__, splitMax, (active_count > 1 ? splitMax - splitMin : 0));
+      gchar *date_str = g_date_time_format(datetime, "%Y%m%d %H:%M:%S");
+      safe_write_file(DEFAULT_START_VIDEO_TIME_PATH, date_str);
       g_free(date_str);
-      g_date_time_unref(split_datetime);
-
-      __LOG(LOG_NOTICE, "[GST][%s:%d] split now", _FILE_, __LINE__);
-      for (i = 0; i < MAX_CHANNEL; i++)
-        if (cmdArg.cam[i].enable)
+      for (i = 0; i < MAX_CHANNEL; i++) {
+        if (cmdArg.cam[i].enable) {
           muxSinkBin[i].splitNow(NULL, FALSE);
+          muxSinkBin[i].setSplitMsec(DEFAULT_SPLIT_MAX_MSEC); 
+        }
+      }
+      target_min = (target_min + cmdArg.duration) % 60;
+      __LOG(LOG_NOTICE, "[GST][%s:%d] Next target : %02dm %02ds (after snap-back)", 
+            _FILE_, __LINE__, target_min, startSec);
     }
-  } while (0);
+  }
 
-#endif
-  target_min = g_date_time_get_minute(
-      g_date_time_add_minutes(datetime, cmdArg.duration));
-  // target_min += cmdArg.duration;
-  // if(target_min >= 60) target_min -= 60;
-  __LOG(LOG_NOTICE, "[GST][%s:%d] next split time : %02dm %02ds", _FILE_,
-        __LINE__, target_min, startSec);
-#if 0
-    if ((access("/tmp/sd_mount_flag", F_OK) != 0) && g_strcmp0(cmdArg.mntDir, FALLBACKDIR) != 0)
-    {
-        cmdArg.mntDir = FALLBACKDIR;
-        __LOG(LOG_ERR, "[GST][%s:%d] sd card no mount...file dir fallback : %s", _FILE_, __LINE__, FALLBACKDIR);
-    }
-#endif
-  if (datetime)
-    g_date_time_unref(datetime);
-
+  if (datetime) g_date_time_unref(datetime);
   return;
 }
 
@@ -1174,9 +1164,9 @@ gint main(gint argc, gchar *argv[]) {
   }
 
   if (cmdArg.stream_en[STREAM_REC] || cmdArg.audio_en) {
-    __LOG(LOG_INFO, "[GST][%s:%d] split timer start (1 second interval)",
-          _FILE_, __LINE__);
-    g_timeout_add_seconds(1, split_timer_callback, muxSinkBin);
+    __LOG(LOG_INFO, "[GST][%s:%d] split timer start (500ms interval)", _FILE_,
+          __LINE__);
+    g_timeout_add(500, (GSourceFunc)split_timer_callback, muxSinkBin);
   }
 
   if (cmdArg.overlay_en) {
