@@ -55,6 +55,7 @@ public :
     void getGop();
     void getKeyframe();
     void setkeyframe(guint16 data);
+    void forceKeyframe();
     void setDualBps(gboolean val);
     gboolean addBinRtspSrcPad();
     GstPad* getBinRtspSrcPad();
