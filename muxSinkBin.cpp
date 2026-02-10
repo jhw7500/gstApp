@@ -215,10 +215,13 @@ void MuxSinkBin::handleFragmentClosed(const gchar *location) {
       fclose(fp);
     g_free(video_flag);
 
-    // 전체 완료 확인
+    // 전체 완료 확인 및 마커 생성 시도
     check_and_mark_all_done(timestamp);
 
-    // 세션 정리
+    // [P1 이슈 해결] 세션 즉시 삭제 시의 경합 방지
+    // .all_done이 생성되지 않았더라도(SRT 대기 중), 영상 쪽 처리는 끝났으므로 
+    // 메모리 세션은 정리하되 파일 플래그(.video_done)가 상태를 유지함.
+    // vcm이 나중에 완료되면 vcm의 check_and_mark_all_done이 .all_done을 생성할 것임.
     g_mutex_unlock(&session->mutex);
     g_mutex_lock(&sessions_mutex);
     g_hash_table_remove(recording_sessions, timestamp);
