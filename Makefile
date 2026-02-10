@@ -25,64 +25,82 @@ LIBS += gstreamer-1.0 gstreamer-rtsp-server-1.0 glib-2.0 gstreamer-plugins-base-
 #LIBS += gstreamer-audio-1.0
 #LIBS += gstreamer-pbutils-1.0
 LDFLAGS+="-Wl,--copy-dt-needed-entries"
+
+# 성능 최적화 플래그 (아키텍처 감지 및 조건부 적용)
+ARCH := $(shell uname -m)
+ifeq ($(ARCH),aarch64)
+    # i.MX8MP / Cortex-A53 (Native/Cross Build)
+    OPT_FLAGS = -O3 -flto -march=armv8-a+crc+crypto -mtune=cortex-a53
+else
+    # x86_64 or others (Dev Host)
+    OPT_FLAGS = -O3 -flto
+endif
+
+# C++ 오버헤드 제거
+CPP_PERF_FLAGS = -fno-exceptions -fno-rtti
+
 LDFLAGS+=$(shell pkg-config --libs $(LIBS))
 LDFLAGS+=-L/opt/desktop/gitlab/gst-jhw/gstapp/gstapp/app/rnnoise/lib -lrnnoise
+# LDFLAGS+=$(OPT_FLAGS) # 컴파일러가 링크 시 자동 처리하므로 중복 제거
 ALL_LDFLAGS=$(LDFLAGS)
 
 CFLAGS+=-Wall
 CFLAGS+=$(shell pkg-config --cflags $(LIBS))
 CFLAGS+=-I/opt/desktop/gitlab/gst-jhw/gstapp/gstapp/app/rnnoise/include
+CFLAGS+=$(OPT_FLAGS)
 ALL_CFLAGS=-I$(IDIR) $(CFLAGS)
+
+CXXFLAGS += $(ALL_CFLAGS) $(CPP_PERF_FLAGS)
 
 ALLFLAGS=$(ALL_CFLAGS) $(ALL_LDFLAGS) -lturbojpeg
 #OBJS = videoBin.o recordBin.o muxSinkBin.o rtspServerBin.o audioBin.o muxBin.o
 OBJS = videoBin.o recordBin.o muxSinkBin.o rtspServerBin.o testBin.o captureBin.o util.o parser.o aes.o tcpServer.o audioBin.o ipc.o encoderBin.o
 
 $(OUTPUT)/gstApp : $(OBJS) main.cpp
-	$(CXX) -o $@ $^ $(ALLFLAGS)
+	$(CXX) $(CPP_PERF_FLAGS) -o $@ $^ $(ALLFLAGS)
 	mv *.o $(OBJ)
 
 videoBin.o : videoBin.cpp videoBin.h
-	$(CXX) $(ALLFLAGS) -c videoBin.cpp
+	$(CXX) $(CXXFLAGS) -c videoBin.cpp
 
 recordBin.o : recordBin.cpp recordBin.h
-	$(CXX) $(ALLFLAGS) -c recordBin.cpp
+	$(CXX) $(CXXFLAGS) -c recordBin.cpp
 
 muxSinkBin.o : muxSinkBin.cpp muxSinkBin.h
-	$(CXX) $(ALLFLAGS) -c muxSinkBin.cpp
+	$(CXX) $(CXXFLAGS) -c muxSinkBin.cpp
 
 rtspServerBin.o : rtspServerBin.cpp rtspServerBin.h
-	$(CXX) $(ALLFLAGS) -c rtspServerBin.cpp
+	$(CXX) $(CXXFLAGS) -c rtspServerBin.cpp
 
 #muxBin.o : muxBin.cpp muxBin.h
-#	$(CXX) $(ALLFLAGS) -c muxBin.cpp
+#	$(CXX) $(CXXFLAGS) -c muxBin.cpp
 
 testBin.o : testBin.cpp testBin.h
-	$(CXX) $(ALLFLAGS) -c testBin.cpp
+	$(CXX) $(CXXFLAGS) -c testBin.cpp
 
 captureBin.o : captureBin.cpp captureBin.h
-	$(CXX) $(ALLFLAGS) -c captureBin.cpp
+	$(CXX) $(CXXFLAGS) -c captureBin.cpp
 
 util.o : util.cpp util.h
-	$(CXX) $(ALLFLAGS) -c util.cpp
+	$(CXX) $(CXXFLAGS) -c util.cpp
 
 parser.o : parser.cpp parser.h
-	$(CXX) $(ALLFLAGS) -c parser.cpp
+	$(CXX) $(CXXFLAGS) -c parser.cpp
 
 aes.o : aes.cpp aes.h
-	$(CXX) $(ALLFLAGS) -c aes.cpp
+	$(CXX) $(CXXFLAGS) -c aes.cpp
 
 tcpServer.o : tcpServer.cpp tcpServer.h
-	$(CXX) $(ALLFLAGS) -c tcpServer.cpp
+	$(CXX) $(CXXFLAGS) -c tcpServer.cpp
 
 audioBin.o : audioBin.cpp audioBin.h
-	$(CXX) $(ALLFLAGS) -c audioBin.cpp
+	$(CXX) $(CXXFLAGS) -c audioBin.cpp
 
 ipc.o : ipc.cpp ipc.h
-	$(CXX) $(ALLFLAGS) -c ipc.cpp
+	$(CXX) $(CXXFLAGS) -c ipc.cpp
 
 encoderBin.o : encoderBin.cpp encoderBin.h
-	$(CXX) $(ALLFLAGS) -c encoderBin.cpp
+	$(CXX) $(CXXFLAGS) -c encoderBin.cpp
 
 #json_c.o : json_c.cpp json_c.h
 #	$(CXX) $(ALLFLAGS) -c json_c.cpp
