@@ -31,6 +31,12 @@ typedef struct _RecordingSession {
 static GHashTable *recording_sessions = NULL;
 static GMutex sessions_mutex;
 
+// 파일명 및 타임스탬프 문자열 캐시 (B항목 최적화)
+static GMutex timestamp_cache_mutex;
+static gint64 last_cache_unix_sec = -1;
+static gchar cached_date_str[32];      // YYYYMMDD_HHMM00
+static gchar cached_timestamp_str[32]; // YYYYMMDD_HHMM
+
 // 세션 관리 함수
 static RecordingSession *get_or_create_session(const gchar *timestamp) {
   g_mutex_lock(&sessions_mutex);
@@ -440,52 +446,68 @@ gchararray format_location(GstElement *sink, guint arg0, gpointer data) {
   gint sec = g_date_time_get_second(datetime);
   gint usec = g_date_time_get_microsecond(datetime);
   gchararray file_name;
-  gchar *date_str;
-  gchar *timestamp_str;
+  gchar *date_str_ptr = NULL;
+  gchar *ts_str_ptr = NULL;
 
-  // info->split_msec = sec;
   info->split_msec = sec * 1000 + usec / 1000;
-  //__LOG(LOG_NOTICE, "[GST][%s:%d] ch%d, %d*1000+%d/1000=%d", _FILE_, __LINE__,
-  //info->ch, sec, msec, info->split_msec);
 
   if (cmdArg.audio_en && info->split_msec >= cmdArg.split_audio_min_msec) {
     __LOG(LOG_NOTICE, "[GST][%s:%d] audio limit %d msec over..", _FILE_,
           __LINE__, cmdArg.split_audio_min_msec);
-    // datetime = g_date_time_add_minutes(datetime, 1);
   }
 
-  // [파일명 조기 분할 방지] 1초를 더해 분 단위를 추출하여 59.x초 분할 시에도 다음 분 이름을 갖게 함
-  GDateTime *round_time = g_date_time_add_seconds(datetime, 1);
-  date_str = g_date_time_format(round_time, "%Y%m%d_%H%M00");
-  timestamp_str = g_date_time_format(round_time, "%Y%m%d_%H%M");
-  g_date_time_unref(round_time);
+  // [캐싱 최적화] 1초 내 중복 요청은 캐시된 문자열 재사용
+  gint64 current_unix_sec = g_date_time_to_unix(datetime);
+  g_mutex_lock(&timestamp_cache_mutex);
+  if (current_unix_sec != last_cache_unix_sec) {
+    GDateTime *round_time = g_date_time_add_seconds(datetime, 1);
+    gchar *tmp_date = g_date_time_format(round_time, "%Y%m%d_%H%M00");
+    gchar *tmp_ts = g_date_time_format(round_time, "%Y%m%d_%H%M");
+    
+    strncpy(cached_date_str, tmp_date, sizeof(cached_date_str) - 1);
+    strncpy(cached_timestamp_str, tmp_ts, sizeof(cached_timestamp_str) - 1);
+    last_cache_unix_sec = current_unix_sec;
 
-  // .part 확장자 추가
-  if (g_strcmp0(cmdArg.muxer, "ts") == 0)
-    file_name = g_strdup_printf("%s/%s_%s-ch%d.ts.part", cmdArg.mntDir,
-                                cmdArg.ohtName, date_str, info->ch);
-  else
-    file_name = g_strdup_printf("%s/%s_%s-ch%d.mp4.part", cmdArg.mntDir,
-                                cmdArg.ohtName, date_str, info->ch);
+    g_free(tmp_date);
+    g_free(tmp_ts);
+    g_date_time_unref(round_time);
+  }
+  date_str_ptr = cached_date_str;
+  ts_str_ptr = cached_timestamp_str;
 
-  // 시작 시간 기록 (chk_cam_operate.sh에서 사용)
-  // 파일 락을 사용하여 동시 쓰기 방지
-  int fd =
-      open("/tmp/start_video_time_chk", O_WRONLY | O_CREAT | O_TRUNC, 0644);
-  if (fd >= 0) {
-    if (flock(fd, LOCK_EX) == 0) {
-      gchar *time_str = g_date_time_format(datetime, "%Y%m%d %H:%M:%S");
-      write(fd, time_str, strlen(time_str));
-      flock(fd, LOCK_UN);
-      g_free(time_str);
+  // [snprintf 최적화] 안전한 버퍼 경로 생성
+  char path_buf[1024];
+  int written;
+  const char *ext = (g_strcmp0(cmdArg.muxer, "ts") == 0) ? "ts" : "mp4";
+  
+  written = snprintf(path_buf, sizeof(path_buf), "%s/%s_%s-ch%d.%s.part", 
+                     cmdArg.mntDir, cmdArg.ohtName, date_str_ptr, info->ch, ext);
+  
+  if (written >= (int)sizeof(path_buf)) {
+    __LOG(LOG_ERR, "[GST][%s:%d] Path truncated! Increase buffer size", _FILE_, __LINE__);
+  }
+  file_name = g_strdup(path_buf);
+
+  // 타임스탬프 저장 (fragment-closed에서 사용)
+  if (info->last_timestamp) g_free(info->last_timestamp);
+  info->last_timestamp = g_strdup(ts_str_ptr);
+  g_mutex_unlock(&timestamp_cache_mutex);
+
+  // 시작 시간 기록 (chk_cam_operate.sh용 - 1채널에서만 수행하여 부하 감소)
+  if (info->ch == 0) {
+    int fd = open("/tmp/start_video_time_chk", O_WRONLY | O_CREAT | O_TRUNC, 0644);
+    if (fd >= 0) {
+      if (flock(fd, LOCK_EX | LOCK_NB) == 0) {
+        gchar *time_str = g_date_time_format(datetime, "%Y%m%d %H:%M:%S");
+        write(fd, time_str, strlen(time_str));
+        flock(fd, LOCK_UN);
+        g_free(time_str);
+      }
+      close(fd);
     }
-    close(fd);
   }
 
   g_date_time_unref(datetime);
-  g_free(date_str);
-  g_free(timestamp_str);
-
   return file_name;
 }
 
