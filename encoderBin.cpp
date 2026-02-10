@@ -351,7 +351,8 @@ gboolean EncoderBin::init(guint8 ch)
     //g_object_set(re.rate, "max-rate", MAIN_FPS, "drop-only", FALSE, NULL);
     //g_object_set(re.queue, "max-size-time", GST_SECOND, "max-size-buffers", cmdArg.fps[STREAM_REC][ch], "leaky", LEAKY_DOWNSTREAM, NULL);
     //g_object_set(re.queue, "max-size-time", GST_SECOND, "max-size-buffers", cmdArg.fps[STREAM_RTSP][ch], "leaky", LEAKY_DOWNSTREAM, NULL);
-    g_object_set(re.queue, "max-size-time", GST_SECOND/2, "leaky", LEAKY_DOWNSTREAM, NULL);
+    // [Queue 최적화] 지연 최소화 (500ms -> 100ms)
+    g_object_set(re.queue, "max-size-time", 100*GST_MSECOND, "max-size-buffers", 3, "leaky", LEAKY_DOWNSTREAM, NULL);
     if(cmdArg.levelMode == MODE_TEST)
     {
         gst_pad_add_probe(gst_element_get_static_pad(re.enc, "src"), GST_PAD_PROBE_TYPE_BUFFER, (GstPadProbeCallback)probe_function, re.enc, NULL);
