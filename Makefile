@@ -26,15 +26,22 @@ LIBS += gstreamer-1.0 gstreamer-rtsp-server-1.0 glib-2.0 gstreamer-plugins-base-
 #LIBS += gstreamer-pbutils-1.0
 LDFLAGS+="-Wl,--copy-dt-needed-entries"
 
-# 성능 최적화 플래그 추가 (i.MX8MP / Cortex-A53 특화)
-# aarch64에서는 neon/float-abi 옵션이 불필요하므로 제거
-OPT_FLAGS = -O3 -flto -march=armv8-a+crc+crypto -mtune=cortex-a53
+# 성능 최적화 플래그 (아키텍처 감지 및 조건부 적용)
+ARCH := $(shell uname -m)
+ifeq ($(ARCH),aarch64)
+    # i.MX8MP / Cortex-A53 (Native/Cross Build)
+    OPT_FLAGS = -O3 -flto -march=armv8-a+crc+crypto -mtune=cortex-a53
+else
+    # x86_64 or others (Dev Host)
+    OPT_FLAGS = -O3 -flto
+endif
+
 # C++ 오버헤드 제거
 CPP_PERF_FLAGS = -fno-exceptions -fno-rtti
 
 LDFLAGS+=$(shell pkg-config --libs $(LIBS))
 LDFLAGS+=-L/opt/desktop/gitlab/gst-jhw/gstapp/gstapp/app/rnnoise/lib -lrnnoise
-LDFLAGS+=$(OPT_FLAGS)
+# LDFLAGS+=$(OPT_FLAGS) # 컴파일러가 링크 시 자동 처리하므로 중복 제거
 ALL_LDFLAGS=$(LDFLAGS)
 
 CFLAGS+=-Wall
@@ -50,7 +57,7 @@ ALLFLAGS=$(ALL_CFLAGS) $(ALL_LDFLAGS) -lturbojpeg
 OBJS = videoBin.o recordBin.o muxSinkBin.o rtspServerBin.o testBin.o captureBin.o util.o parser.o aes.o tcpServer.o audioBin.o ipc.o encoderBin.o
 
 $(OUTPUT)/gstApp : $(OBJS) main.cpp
-	$(CXX) $(CXXFLAGS) -o $@ $^ $(ALLFLAGS)
+	$(CXX) $(CPP_PERF_FLAGS) -o $@ $^ $(ALLFLAGS)
 	mv *.o $(OBJ)
 
 videoBin.o : videoBin.cpp videoBin.h
