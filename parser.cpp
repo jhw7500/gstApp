@@ -88,6 +88,11 @@ void ParserClass::init_arg(gchar *argv) {
   arg.rtsp_factory_queue_max_buffers = DEFAULT_RTSP_FACTORY_QUEUE_MAX_BUFFERS;
   arg.rtsp_bin_queue_max_time_ms = DEFAULT_RTSP_BIN_QUEUE_MAX_TIME_MS;
 
+  arg.queue_main_src_time_ms = DEFAULT_QUEUE_MAIN_SRC_TIME_MS;
+  arg.queue_enc_src_time_ms = DEFAULT_QUEUE_ENC_SRC_TIME_MS;
+  arg.queue_rec_sink_time_ms = DEFAULT_QUEUE_REC_SINK_TIME_MS;
+  arg.queue_cap_src_time_ms = DEFAULT_QUEUE_CAP_SRC_TIME_MS;
+
   arg.v4l_subdev_csi0 = DEFAULT_V4L_SUBDEV_CSI0;
   arg.v4l_subdev_csi1 = DEFAULT_V4L_SUBDEV_CSI1;
   arg.v4l_video_csi0 = DEFAULT_V4L_VIDEO_CSI0;
@@ -410,6 +415,18 @@ gint ParserClass::json_parser(const gchar *path, const gchar *header) {
                                    &arg.rtsp_factory_queue_max_buffers);
       json_object_get_int_optional(tune_obj, "rtsp_bin_queue_max_time_ms",
                                    &arg.rtsp_bin_queue_max_time_ms);
+    }
+
+    // [Queue Tuning] Common/Record/Capture pipeline settings
+    {
+      json_object *queue_obj = json_object_object_get(hobj, "queue_tune");
+      // Fallback to main object if queue_tune block is missing (optional)
+      json_object *target_obj = queue_obj ? queue_obj : hobj;
+      
+      json_object_get_int_optional(target_obj, "main_src_time_ms", &arg.queue_main_src_time_ms);
+      json_object_get_int_optional(target_obj, "enc_src_time_ms", &arg.queue_enc_src_time_ms);
+      json_object_get_int_optional(target_obj, "rec_sink_time_ms", &arg.queue_rec_sink_time_ms);
+      json_object_get_int_optional(target_obj, "cap_src_time_ms", &arg.queue_cap_src_time_ms);
     }
 
     // Optional platform device mapping overrides.
@@ -827,6 +844,11 @@ gint ParserClass::check_arg() {
           arg.rtsp_appsink_max_buffers, arg.rtsp_factory_queue_max_buffers,
           arg.rtsp_bin_queue_max_time_ms);
   }
+  __LOG(LOG_NOTICE,
+        "[%s][%s:%d] queue_tune main_src:%dms enc_src:%dms rec_sink:%dms cap_src:%dms",
+        LOG_KEY, _FILE_, __LINE__, arg.queue_main_src_time_ms,
+        arg.queue_enc_src_time_ms, arg.queue_rec_sink_time_ms,
+        arg.queue_cap_src_time_ms);
 
   if (arg.stream_en[STREAM_CAP]) {
     if (arg.cap.queue_size <= 0) {

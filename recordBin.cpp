@@ -481,8 +481,9 @@ gboolean RecordBin::init(guint8 num, gboolean crop_en)
     //g_object_set(re.enc, "quant", 35, NULL);
     //g_object_set(re.parse, "config-interval", -1, NULL);
     //g_object_set(re.rate, "max-rate", MAIN_FPS, "drop-only", FALSE, NULL);
-    g_object_set(re.queue, "max-size-time", 500*GST_MSECOND, "leaky", LEAKY_DOWNSTREAM, NULL);
-    g_object_set(re.queue2, "max-size-time", 500*GST_MSECOND, "leaky", LEAKY_DOWNSTREAM, NULL);
+    // [Queue 최적화] I/O 지연 대비 시간 기반 버퍼링 (JSON 설정값 사용)
+    g_object_set(re.queue, "max-size-time", cmdArg.queue_rec_sink_time_ms*GST_MSECOND, "max-size-buffers", 0, "leaky", LEAKY_DOWNSTREAM, NULL);
+    g_object_set(re.queue2, "max-size-time", cmdArg.queue_rec_sink_time_ms*GST_MSECOND, "max-size-buffers", 0, "leaky", LEAKY_DOWNSTREAM, NULL);
     //g_object_set(re.convert, "videocrop-meta-enable", TRUE, NULL);
     //g_object_set(re.enc, "bitrate", cmdArg.rtsp_bitrate, NULL);
 

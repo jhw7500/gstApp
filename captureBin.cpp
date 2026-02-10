@@ -1435,9 +1435,9 @@ gboolean CaptureBin::init(guint8 ch)
     //probe_id = gst_pad_add_probe(queue_src_pad, GST_PAD_PROBE_TYPE_BLOCK_DOWNSTREAM, NULL, NULL, NULL);
     //g_object_set(re.enc, "bitrate", cmdArg.rtsp_bitrate, NULL);
     
-    // Queue properties: increased buffer time (2s), no leaky during capture
-    g_object_set(be.queue, "max-size-time", 2*GST_SECOND, "leaky", 0, NULL);
-    g_object_set(be.queue2, "max-size-time", 2*GST_SECOND, "leaky", 0, NULL);
+    // [Queue 최적화] CaptureBin 대기열 축소 (JSON 설정값 사용), 최신 프레임 우선 (Leaky)
+    g_object_set(be.queue, "max-size-time", cmdArg.queue_cap_src_time_ms*GST_MSECOND, "leaky", LEAKY_DOWNSTREAM, NULL);
+    g_object_set(be.queue2, "max-size-time", cmdArg.queue_cap_src_time_ms*GST_MSECOND, "leaky", LEAKY_DOWNSTREAM, NULL);
     //g_object_set(re.capsfilter, "max-size-time", 5*GST_SECOND, "max-size-buffers", 60, "leaky", 1, NULL);
     //g_object_set(pipe->sink, "max-lateness", 1*GST_SECOND, NULL);
     //g_object_set(pipe->sink, "render-delay", 100*GST_MSECOND, NULL);

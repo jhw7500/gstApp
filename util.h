@@ -192,6 +192,12 @@ typedef struct _CmdArg
     gint wdt_timeout_short;
     gint wdt_timeout_long;
     gboolean srt_en;
+
+    // Queue tuning parameters
+    gint queue_main_src_time_ms;
+    gint queue_enc_src_time_ms;
+    gint queue_rec_sink_time_ms;
+    gint queue_cap_src_time_ms;
 } CmdArg;
 
 #pragma pack(pop)

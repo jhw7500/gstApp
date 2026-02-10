@@ -369,8 +369,10 @@ gboolean VideoBin::init(guint8 csiNum) {
   // g_object_set(be.src, "pixel-aspect-ratio", "1/1", NULL);
   g_signal_connect(be.src, "prepare-format", G_CALLBACK(prepare_format),
                    &csiNum);
-  g_object_set(be.queue_main, "max-size-time", 300 * GST_MSECOND,
-               "max-size-buffers", cmdArg.main_fps[csiNum], "leaky",
+  // [Queue 최적화] 시간 기반 고정 버퍼링 (JSON 설정값 사용)
+  // max-size-buffers=0 (무제한)으로 설정하여 시간 기준으로만 제어
+  g_object_set(be.queue_main, "max-size-time", cmdArg.queue_main_src_time_ms * GST_MSECOND,
+               "max-size-buffers", 0, "leaky",
                LEAKY_DOWNSTREAM, NULL);
   g_object_set(be.watchdog, "timeout", wdt_timeout, NULL);
 
