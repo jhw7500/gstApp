@@ -44,7 +44,12 @@ typedef struct _FragmentClosedEvent {
   gchar *location;
   GstClockTime running_time;
   GstClockTime duration;
+  gboolean in_use; // 풀 관리용 플래그
 } FragmentClosedEvent;
+
+#define MAX_EVENT_POOL_SIZE 16
+static FragmentClosedEvent event_pool[MAX_EVENT_POOL_SIZE];
+static GMutex pool_mutex;
 
 static GAsyncQueue *fragment_closed_queue = NULL;
 static GThread *fragment_closed_thread = NULL;
@@ -59,15 +64,21 @@ static gpointer fragment_closed_worker(gpointer data) {
       continue;
 
     if (ev->ch < 0) {
-      g_free(ev->location);
-      g_free(ev);
+      // 종료 시그널 (이벤트 풀에 속하지 않은 더미 객체인 경우 처리)
+      if (!ev->in_use) g_free(ev); 
       break;
     }
 
     msBin[ev->ch].handleFragmentClosed(ev->location, ev->running_time, ev->duration);
 
-    g_free(ev->location);
-    g_free(ev);
+    // 객체 반환 (풀로 복구)
+    if (ev->location) {
+      g_free(ev->location);
+      ev->location = NULL;
+    }
+    g_mutex_lock(&pool_mutex);
+    ev->in_use = FALSE;
+    g_mutex_unlock(&pool_mutex);
   }
   return NULL;
 }
@@ -108,27 +119,14 @@ void handle_sigint(int sig) {
 }
 
 gboolean bus_message_parse(GstBus *bus, GstMessage *message, gpointer data) {
-  // PipeMain *info = (PipeMain *)data;
   gchar *str = NULL;
   static guint8 cam_cnt = 0;
   static GstState state = GST_STATE_VOID_PENDING;
   GstMessageType mType = GST_MESSAGE_TYPE(message);
 
-  if (mType == GST_MESSAGE_QOS)
+  // [최적화] 고주파 비관심 메시지를 switch문 진입 전 한꺼번에 필터링
+  if (mType & (GST_MESSAGE_QOS | GST_MESSAGE_TAG | GST_MESSAGE_STREAM_STATUS))
     return TRUE;
-
-  if (mType == GST_MESSAGE_TAG)
-    return TRUE;
-
-  // if(mType == GST_MESSAGE_ELEMENT) return TRUE;
-
-  if (mType == GST_MESSAGE_STREAM_STATUS)
-    return TRUE;
-  // printf("Got %s message\n", GST_MESSAGE_TYPE_NAME(message));
-  // if(mType == GST_MESSAGE_STATE_CHANGED) return TRUE;
-
-  //__LOG(LOG_NOTICE, "[GST][%s:%d] Got %s message from %s", _FILE_, __LINE__,
-  // GST_MESSAGE_TYPE_NAME(message), GST_OBJECT_NAME (message->src));
 
   switch (mType) {
   case GST_MESSAGE_STATE_CHANGED: {
@@ -136,11 +134,6 @@ gboolean bus_message_parse(GstBus *bus, GstMessage *message, gpointer data) {
     gst_message_parse_state_changed(message, &old_state, &new_state,
                                     &pending_state);
     if (state != old_state) {
-      //__LOG(LOG_NOTICE, "[GST][%s:%d] from %s to %s in %s", _FILE_, __LINE__,
-      // gst_element_state_get_name(old_state),
-      // gst_element_state_get_name(new_state), GST_OBJECT_NAME (message->src));
-      // g_print("from %s to %s at %s\n", gst_element_state_get_name(old_state),
-      // gst_element_state_get_name(new_state), GST_OBJECT_NAME (message->src));
       state = old_state;
       const gchar *oldn = gst_element_state_get_name(old_state);
       const gchar *newn = gst_element_state_get_name(new_state);
@@ -163,7 +156,6 @@ gboolean bus_message_parse(GstBus *bus, GstMessage *message, gpointer data) {
     if (err) {
       __LOG(LOG_ERR, "[GST][%s:%d] err(%d) %s from element(%s)", _FILE_,
             __LINE__, err->code, err->message, GST_MESSAGE_SRC_NAME(message));
-      // Use safe_write_file instead of system("echo ...")
       if (safe_write_file("/tmp/gst_err", err->message) < 0)
         __LOG(LOG_ERR, "[GST][%s:%d] err writing to /tmp/gst_err", _FILE_,
               __LINE__);
@@ -172,44 +164,28 @@ gboolean bus_message_parse(GstBus *bus, GstMessage *message, gpointer data) {
     if (debug) {
       __LOG(LOG_ERR, "[GST][%s:%d] error debug : %s\n", __FILE__, __LINE__,
             (debug) ? debug : "none");
-      // Use safe_write_file instead of system("echo ...")
       if (safe_write_file("/tmp/gst_err", debug) < 0)
         __LOG(LOG_ERR, "[GST][%s:%d] err writing to /tmp/gst_err", _FILE_,
               __LINE__);
       g_free(debug);
     }
-    // destroy();
     gst_element_send_event(pipeline, gst_event_new_eos());
     break;
   }
 
   case GST_MESSAGE_EOS: {
-    // printf("GST_MESSAGE_EOS (index:%d sigflag:%d)\n", info->index, sigflag);
     __LOG(LOG_EMERG, "[GST][%s:%d] GST_MESSAGE_EOS", _FILE_, __LINE__);
     if (is_interrupted) {
       cam_cnt++;
       g_main_loop_quit(loop);
-      // if(cam_cnt >= MAX_PIPELINE) destroy();
     } else {
       is_interrupted = TRUE;
       g_main_loop_quit(loop);
-      // gst_element_set_state(pipeline, GST_STATE_READY);
-      // gst_element_set_state(pipeline, GST_STATE_PLAYING);
-      // gst_element_get_state(pipeline[info->index], NULL, NULL,
-      // GST_CLOCK_TIME_NONE); gst_element_seek(pipeline[info->index], 1.0,
-      // GST_FORMAT_TIME, GST_SEEK_FLAG_FLUSH, GST_SEEK_TYPE_SET, 0,
-      // GST_SEEK_TYPE_SET, -1); gst_element_set_state(pipeline[info->index],
-      // GST_STATE_NULL); change_file_datetime(NULL);
     }
-
     break;
   }
 
   case GST_MESSAGE_ELEMENT: {
-    //__LOG(LOG_INFO, "[GST][%s:%d] %s", __FILE__, __LINE__,
-    // gst_structure_to_string(gst_message_get_structure(message)));
-    // g_print("%s\n",
-    // gst_structure_to_string(gst_message_get_structure(message)));
     const GstStructure *structure = gst_message_get_structure(message);
     if (gst_structure_has_name(structure, "splitmuxsink-fragment-opened")) {
       const gchar *location =
@@ -241,20 +217,34 @@ gboolean bus_message_parse(GstBus *bus, GstMessage *message, gpointer data) {
       const GValue *dv = gst_structure_get_value(structure, "duration");
       if (dv) duration = g_value_get_uint64(dv);
 
-      // 어떤 채널의 splitmuxsink인지 찾아서 핸들러 호출
       ThreadArgs *tArgs = (ThreadArgs *)data;
       MuxSinkBin *msBin = (MuxSinkBin *)tArgs->arg3;
-
       GstElement *src_element = (GstElement *)GST_MESSAGE_SRC(message);
       for (int i = 0; i < MAX_CHANNEL; i++) {
         if (msBin[i].be.sink == src_element) {
           if (fragment_closed_queue) {
-            FragmentClosedEvent *ev = g_new0(FragmentClosedEvent, 1);
-            ev->ch = i;
-            ev->location = g_strdup(location);
-            ev->running_time = running_time;
-            ev->duration = duration;
-            g_async_queue_push(fragment_closed_queue, ev);
+            // [최적화] 객체 풀링 사용
+            FragmentClosedEvent *ev = NULL;
+            g_mutex_lock(&pool_mutex);
+            for (int k = 0; k < MAX_EVENT_POOL_SIZE; k++) {
+              if (!event_pool[k].in_use) {
+                ev = &event_pool[k];
+                ev->in_use = TRUE;
+                break;
+              }
+            }
+            g_mutex_unlock(&pool_mutex);
+
+            if (ev) {
+              ev->ch = i;
+              ev->location = g_strdup(location);
+              ev->running_time = running_time;
+              ev->duration = duration;
+              g_async_queue_push(fragment_closed_queue, ev);
+            } else {
+              __LOG(LOG_ERR, "[GST][%s:%d] Event pool exhausted! direct handle", _FILE_, __LINE__);
+              msBin[i].handleFragmentClosed(location, running_time, duration);
+            }
           } else {
             msBin[i].handleFragmentClosed(location, running_time, duration);
           }
@@ -264,176 +254,28 @@ gboolean bus_message_parse(GstBus *bus, GstMessage *message, gpointer data) {
     } else
       __LOG(LOG_INFO, "[GST][%s:%d] %s", __FILE__, __LINE__,
             gst_structure_to_string(gst_message_get_structure(message)));
-
-    break;
-  }
-
-  case GST_MESSAGE_STREAM_STATUS: {
-    GstStreamStatusType type;
-    GstElement *owner;
-    const GValue *val;
-    gchar *path;
-    GstTask *task = NULL;
-
-    g_message("received STREAM_STATUS");
-    gst_message_parse_stream_status(message, &type, &owner);
-
-    val = gst_message_get_stream_status_object(message);
-
-    g_message("type:   %d", type);
-    path = gst_object_get_path_string(GST_MESSAGE_SRC(message));
-    g_message("source: %s", path);
-    g_free(path);
-    path = gst_object_get_path_string(GST_OBJECT(owner));
-    g_message("owner:  %s", path);
-    g_free(path);
-    g_message("object: type %s, value %p", G_VALUE_TYPE_NAME(val),
-              g_value_get_object(val));
-
-    /* see if we know how to deal with this object */
-    if (G_VALUE_TYPE(val) == GST_TYPE_TASK) {
-      task = (GstTask *)g_value_get_object(val);
-    }
-
-    switch (type) {
-    case GST_STREAM_STATUS_TYPE_CREATE:
-      g_message("created task %p", task);
-      break;
-    case GST_STREAM_STATUS_TYPE_ENTER:
-      /* g_message ("raising task priority"); */
-      /* setpriority (PRIO_PROCESS, 0, -10); */
-      break;
-    case GST_STREAM_STATUS_TYPE_LEAVE:
-      break;
-    default:
-      break;
-    }
-    break;
-  }
-
-  case GST_MESSAGE_QOS: {
-#if 1
-    gboolean live;
-    guint64 running_time, stream_time, timestamp, duration;
-    gst_message_parse_qos(message, &live, &running_time, &stream_time,
-                          &timestamp, &duration);
-    g_warning("GOt a QOS event %lu %lu %lu %lu", running_time, stream_time,
-              timestamp, duration);
-    gint64 jitter;
-    gdouble prop;
-    gint qual;
-    gst_message_parse_qos_values(message, &jitter, &prop, &qual);
-    g_warning("gotQoSE %lu %f %d", jitter, prop, qual);
-
-    GstFormat format;
-    guint64 processed;
-    guint64 dropped;
-    gst_message_parse_qos_stats(message, &format, &processed, &dropped);
-
-    g_print("QoS Message:\n");
-    g_print("Format: %s\n", gst_format_get_name(format));
-    g_print("Processed: %lu\n", processed);
-    g_print("Dropped: %lu\n", dropped);
-#endif
-    break;
-  }
-
-  case GST_MESSAGE_TAG: {
-#if 1
-    GstTagList *tags = NULL;
-    gst_message_parse_tag(message, &tags);
-    g_print("Got tags from element %s\n", GST_OBJECT_NAME(message->src));
-    gst_tag_list_foreach(tags, print_tag, NULL);
-    gst_tag_list_free(tags);
-    // handle_tags (tags);
-    // gst_tag_list_unref (tags);
-#endif
-    break;
-  }
-  case GST_MESSAGE_CLOCK_PROVIDE: {
-    g_print("Clock provide event from element %s\n",
-            GST_OBJECT_NAME(message->src));
-    break;
-  }
-
-  case GST_MESSAGE_CLOCK_LOST: {
-    /* Get a new clock */
-    // g_print ("GST_MESSAGE_CLOCK_LOST\r");
-    g_print("Clock lost event from element %s\n",
-            GST_OBJECT_NAME(message->src));
-    gst_element_set_state(pipeline, GST_STATE_PAUSED);
-    gst_element_set_state(pipeline, GST_STATE_PLAYING);
-    break;
-  }
-
-  case GST_MESSAGE_LATENCY: {
-    // when pipeline latency is changed, this msg is posted on the bus. we then
-    // have to explicitly tell the pipeline to recalculate its latency
-    // FIXME: this never works!
-#if 1
-    if (!gst_bin_recalculate_latency(GST_BIN(pipeline)))
-      g_print("Could not reconfigure latency.\n");
-    else
-      g_print("Reconfigured latency.\n");
-    break;
-#endif
-  }
-
-  case GST_MESSAGE_APPLICATION: {
-    const GstStructure *s;
-    s = gst_message_get_structure(message);
-    if (gst_structure_has_name(s, "GstLaunchInterrupt")) {
-      /* this application message is posted when we caught an interrupt and
-       * we need to stop the pipeline. */
-      g_print(("Interrupt: Stopping pipeline ...\n"));
-      // res = ELR_INTERRUPT;
-      // goto exit;
-    }
     break;
   }
 
   case GST_MESSAGE_NEW_CLOCK: {
     if (cmdArg.stream_en[STREAM_REC] || cmdArg.audio_en) {
-      // Use safe_write_file instead of system("echo ...")
       GDateTime *datetime = g_date_time_new_now_local();
       gchar *date_str = g_date_time_format(datetime, "%Y%m%d %H:%M:%S");
       if (safe_write_file(DEFAULT_START_VIDEO_TIME_PATH, date_str) < 0)
-        __LOG(LOG_ERR, "[GST][%s:%d] Failed to write start time to %s in %s",
-              _FILE_, __LINE__, DEFAULT_START_VIDEO_TIME_PATH, __FUNCTION__);
-      else
-        __LOG(LOG_NOTICE, "[GST][%s:%d] Wrote start time to %s in %s", _FILE_,
-              __LINE__, DEFAULT_START_VIDEO_TIME_PATH, __FUNCTION__);
+        __LOG(LOG_ERR, "[GST][%s:%d] Failed write start time", _FILE_, __LINE__);
       g_free(date_str);
       g_date_time_unref(datetime);
     }
     break;
   }
 
-  case GST_MESSAGE_ASYNC_DONE: {
+  case GST_MESSAGE_ASYNC_DONE:
+  case GST_MESSAGE_STREAM_START:
     __LOG(LOG_NOTICE, "[GST][%s:%d] Got %s message from %s", _FILE_, __LINE__,
           GST_MESSAGE_TYPE_NAME(message), GST_OBJECT_NAME(message->src));
     break;
-  }
-
-  case GST_MESSAGE_WARNING: {
-    GError *gerror;
-    gchar *debug;
-    gst_message_parse_warning(message, &gerror, &debug);
-    gst_object_default_error(GST_MESSAGE_SRC(message), gerror, debug);
-    g_error_free(gerror);
-    g_free(debug);
-    break;
-  }
-
-  case GST_MESSAGE_STREAM_START: {
-    __LOG(LOG_NOTICE, "[GST][%s:%d] Got %s message from %s", _FILE_, __LINE__,
-          GST_MESSAGE_TYPE_NAME(message), GST_OBJECT_NAME(message->src));
-    break;
-  }
 
   default:
-    __LOG(LOG_NOTICE, "[GST][%s:%d] Got %s message from %s", _FILE_, __LINE__,
-          GST_MESSAGE_TYPE_NAME(message), GST_OBJECT_NAME(message->src));
     break;
   }
 
