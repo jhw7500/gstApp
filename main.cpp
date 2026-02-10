@@ -30,6 +30,7 @@
 #define APP_VERSION "1.3"
 #define MAX_SNAPBACK_DRIFT_MS 30000
 #define MIN_SPLIT_INTERVAL_SEC 5
+#define SNAP_BACK_GRACE_PERIOD_MS 58000
 
 #define SEGFAULT_DEBUG
 #define RECORDBIN_ENABLE
@@ -502,7 +503,7 @@ static void splitCheck(gpointer data, guint8 startSec) {
     __LOG(LOG_NOTICE, "[GST][%s:%d] next split time : %02dm %02ds", _FILE_, __LINE__, target_min, startSec);
     start_flag = 1;
     last_split_ts = g_get_monotonic_time();
-    last_split_min = min; // 앱 시작 시점의 분 저장
+    last_split_min = min;
   }
 
   gint current_total_sec = min * 60 + sec;
@@ -517,22 +518,18 @@ static void splitCheck(gpointer data, guint8 startSec) {
     gint splitMax = 0, splitMin = 59999;
     gint active_count = 0;
 
-    // 1. 각 채널 상태 확인 및 스큐(Skew) 데이터 수집
     for (i = 0; i < MAX_CHANNEL; i++) {
       if (!cmdArg.cam[i].enable) continue;
       gint sm = muxSinkBin[i].getSplitMsec();
       active_count++;
-      
       if (diff < 5) {
         __LOG(LOG_DEBUG, "[GST][%s:%d] ch%d sm:%dms, diff:%ds", _FILE_, __LINE__, i, sm, diff);
       }
-
       if (sm >= cmdArg.split_max_msec) any_misaligned = TRUE;
       if (sm > splitMax) splitMax = sm;
       if (sm < splitMin) splitMin = sm;
     }
 
-    // 2. 정시 분할 성공 판단
     gboolean is_fully_aligned = (!any_misaligned);
     if (active_count > 1 && (splitMax - splitMin >= cmdArg.split_diff_msec)) {
       is_fully_aligned = FALSE;
@@ -548,25 +545,21 @@ static void splitCheck(gpointer data, guint8 startSec) {
       return;
     }
 
-    // 3. 실행 시점 결정: 기본적으로 즉시 강제 정정하되, 정각 직전만 유예
     gboolean do_force = TRUE;
     for (i = 0; i < MAX_CHANNEL; i++) {
       if (!cmdArg.cam[i].enable) continue;
       gint sm = muxSinkBin[i].getSplitMsec();
-      if (sm >= 58000 && (diff * 1000 < cmdArg.split_max_msec)) {
+      if (sm >= SNAP_BACK_GRACE_PERIOD_MS && (diff * 1000 < cmdArg.split_max_msec)) {
         do_force = FALSE;
         break;
       }
     }
 
-    // [보호 로직 개선] 
-    // 분(Minute)이 달라졌다면(파일명이 달라짐) 5초 보호 없이 즉시 실행.
-    // 같은 분 내에서만 5초 보호를 적용하여 무한 루프 방지.
     if (do_force) {
       gint64 now_ts = g_get_monotonic_time();
       if (min == last_split_min && (now_ts - last_split_ts) < (MIN_SPLIT_INTERVAL_SEC * 1000000)) {
         __LOG(LOG_NOTICE, "[GST][%s:%d] Skip forced split (Same minute interval protection: %ldms)", 
-              _FILE_, __LINE__, (now_ts - last_split_ts) / 1000);
+              _FILE_, __LINE__, (long)((now_ts - last_split_ts) / 1000));
         do_force = FALSE;
       }
     }
@@ -575,11 +568,12 @@ static void splitCheck(gpointer data, guint8 startSec) {
       __LOG(LOG_ERR, "[GST][%s:%d] Snap-back split (diff:%ds, smMax:%dms, skew:%dms)", 
             _FILE_, __LINE__, diff, splitMax, (active_count > 1 ? splitMax - splitMin : 0));
       
-      // 모든 인코더에 키프레임 생성 강제 요청 (분할 시점 일치 극대화)
-      EncoderBin *eBin = (EncoderBin *)tArgs->arg5;
-      for (i = 0; i < MAX_CHANNEL; i++) {
-        if (cmdArg.cam[i].enable) {
-          eBin[i].forceKeyframe();
+      // [P1 해결] dual_enc=FALSE일 때만 encoder 객체(eBin)에 접근
+      if (cmdArg.dual_enc == FALSE && eBin != NULL) {
+        for (i = 0; i < MAX_CHANNEL; i++) {
+          if (cmdArg.cam[i].enable) {
+            eBin[i].forceKeyframe();
+          }
         }
       }
 
