@@ -39,6 +39,8 @@
 typedef struct _FragmentClosedEvent {
   gint ch;
   gchar *location;
+  GstClockTime running_time;
+  GstClockTime duration;
 } FragmentClosedEvent;
 
 static GAsyncQueue *fragment_closed_queue = NULL;
@@ -59,7 +61,7 @@ static gpointer fragment_closed_worker(gpointer data) {
       break;
     }
 
-    msBin[ev->ch].handleFragmentClosed(ev->location);
+    msBin[ev->ch].handleFragmentClosed(ev->location, ev->running_time, ev->duration);
 
     g_free(ev->location);
     g_free(ev);
@@ -207,31 +209,51 @@ gboolean bus_message_parse(GstBus *bus, GstMessage *message, gpointer data) {
     // gst_structure_to_string(gst_message_get_structure(message)));
     const GstStructure *structure = gst_message_get_structure(message);
     if (gst_structure_has_name(structure, "splitmuxsink-fragment-opened")) {
-      //__LOG(LOG_NOTICE, "[GST][%s:%d] fragment-opened: %s", __FILE__,
-      //__LINE__, g_value_get_string(gst_structure_get_value(structure,
-      //"location")));
+      const gchar *location =
+          g_value_get_string(gst_structure_get_value(structure, "location"));
+      GstClockTime running_time = GST_CLOCK_TIME_NONE;
+      const GValue *rv = gst_structure_get_value(structure, "running-time");
+      if (rv)
+        running_time = g_value_get_uint64(rv);
+
+      // 해당 채널의 MuxSinkBin에 전달하여 통합 로그 출력 및 시간 기록
+      ThreadArgs *tArgs = (ThreadArgs *)data;
+      MuxSinkBin *msBin = (MuxSinkBin *)tArgs->arg3;
+      GstElement *src_element = (GstElement *)GST_MESSAGE_SRC(message);
+      for (int i = 0; i < MAX_CHANNEL; i++) {
+        if (msBin[i].be.sink == src_element) {
+          msBin[i].handleFragmentOpened(location, running_time);
+          break;
+        }
+      }
     } else if (gst_structure_has_name(structure,
                                       "splitmuxsink-fragment-closed")) {
       const gchar *location =
           g_value_get_string(gst_structure_get_value(structure, "location"));
-      //__LOG(LOG_NOTICE, "[GST][%s:%d] fragment-closed: %s", __FILE__,
-      //__LINE__, location);
+      GstClockTime running_time = GST_CLOCK_TIME_NONE;
+      GstClockTime duration = GST_CLOCK_TIME_NONE;
+
+      const GValue *rv = gst_structure_get_value(structure, "running-time");
+      if (rv) running_time = g_value_get_uint64(rv);
+      const GValue *dv = gst_structure_get_value(structure, "duration");
+      if (dv) duration = g_value_get_uint64(dv);
 
       // 어떤 채널의 splitmuxsink인지 찾아서 핸들러 호출
       ThreadArgs *tArgs = (ThreadArgs *)data;
       MuxSinkBin *msBin = (MuxSinkBin *)tArgs->arg3;
 
       GstElement *src_element = (GstElement *)GST_MESSAGE_SRC(message);
-      // 이름으로 찾거나 포인터로 찾기 (포인터가 더 확실함)
       for (int i = 0; i < MAX_CHANNEL; i++) {
         if (msBin[i].be.sink == src_element) {
           if (fragment_closed_queue) {
             FragmentClosedEvent *ev = g_new0(FragmentClosedEvent, 1);
             ev->ch = i;
             ev->location = g_strdup(location);
+            ev->running_time = running_time;
+            ev->duration = duration;
             g_async_queue_push(fragment_closed_queue, ev);
           } else {
-            msBin[i].handleFragmentClosed(location);
+            msBin[i].handleFragmentClosed(location, running_time, duration);
           }
           break;
         }
