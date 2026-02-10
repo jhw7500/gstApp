@@ -97,12 +97,50 @@ static void check_and_mark_all_done(const gchar *timestamp) {
   g_free(srt_flag);
 }
 
-void MuxSinkBin::handleFragmentClosed(const gchar *location) {
+void MuxSinkBin::handleFragmentOpened(const gchar *location, GstClockTime running_time) {
+  // 이전 파일 통계 정보가 있는지 확인하여 통합 로그 출력 (time: 새 파일 시작, duration: 이전 파일 길이)
+  // GST_TIME_ARGS는 나노초까지 출력하므로 ms까지 수동 포맷팅 (H:MM:SS.mmm)
+  if (GST_CLOCK_TIME_IS_VALID(muxSinkData.last_end_time)) {
+    __LOG(LOG_NOTICE, "[GST][%s:%d] ch%d Fragment opened: %s, time: %u:%02u:%02u.%03u, duration: %u:%02u:%02u.%03u",
+          _FILE_, __LINE__, muxSinkData.ch, location,
+          (guint) (running_time / (GST_SECOND * 60 * 60)),
+          (guint) ((running_time / (GST_SECOND * 60)) % 60),
+          (guint) ((running_time / GST_SECOND) % 60),
+          (guint) ((running_time / GST_MSECOND) % 1000),
+          (guint) (muxSinkData.last_duration / (GST_SECOND * 60 * 60)),
+          (guint) ((muxSinkData.last_duration / (GST_SECOND * 60)) % 60),
+          (guint) ((muxSinkData.last_duration / GST_SECOND) % 60),
+          (guint) ((muxSinkData.last_duration / GST_MSECOND) % 1000));
+  } else {
+    __LOG(LOG_NOTICE, "[GST][%s:%d] ch%d Fragment opened: %s, time: %u:%02u:%02u.%03u",
+          _FILE_, __LINE__, muxSinkData.ch, location,
+          (guint) (running_time / (GST_SECOND * 60 * 60)),
+          (guint) ((running_time / (GST_SECOND * 60)) % 60),
+          (guint) ((running_time / GST_SECOND) % 60),
+          (guint) ((running_time / GST_MSECOND) % 1000));
+  }
+
+  // 시작 시간 기록
+  muxSinkData.last_running_time = running_time;
+}
+
+void MuxSinkBin::handleFragmentClosed(const gchar *location, GstClockTime running_time, GstClockTime duration) {
   // MuxSinkData *info = (MuxSinkData *)user_data;
   // this->muxSinkData를 사용
 
-  __LOG(LOG_INFO, "[GST][%s:%d] ch%d Fragment closed (Bus): %s", _FILE_,
-        __LINE__, muxSinkData.ch, location);
+  GstClockTime calculated_duration = duration;
+  if (!GST_CLOCK_TIME_IS_VALID(calculated_duration) && GST_CLOCK_TIME_IS_VALID(muxSinkData.last_running_time) && GST_CLOCK_TIME_IS_VALID(running_time)) {
+    if (running_time > muxSinkData.last_running_time) {
+      calculated_duration = running_time - muxSinkData.last_running_time;
+    }
+  }
+
+  // [통계 저장] 이전 파일의 정보를 메모리에 보관
+  muxSinkData.last_end_time = running_time;
+  muxSinkData.last_duration = calculated_duration;
+
+  // 다음 파일의 시작점으로 업데이트 (중요!)
+  muxSinkData.last_running_time = running_time;
 
   // 타임스탬프 추출 (예: /mnt/sd_cam/tmp/VD3001_20260127_143000-ch0.mp4.part)
   const gchar *filename = strrchr(location, '/');
@@ -390,6 +428,10 @@ gboolean MuxSinkBin::splitNow(gpointer data, gboolean timer_en) {
 
 void MuxSinkBin::setSplitMsec(gint msec) { muxSinkData.split_msec = msec; }
 
+void MuxSinkBin::setLastRunningTime(GstClockTime rt) {
+  muxSinkData.last_running_time = rt;
+}
+
 gint MuxSinkBin::getSplitMsec() { return muxSinkData.split_msec; }
 
 gchararray format_location(GstElement *sink, guint arg0, gpointer data) {
@@ -423,12 +465,6 @@ gchararray format_location(GstElement *sink, guint arg0, gpointer data) {
     file_name = g_strdup_printf("%s/%s_%s-ch%d.mp4.part", cmdArg.mntDir,
                                 cmdArg.ohtName, date_str, info->ch);
 
-  // 타임스탬프 저장 (fragment-closed에서 사용)
-  if (info->last_timestamp) {
-    g_free(info->last_timestamp);
-  }
-  info->last_timestamp = g_strdup(timestamp_str);
-
   // 시작 시간 기록 (chk_cam_operate.sh에서 사용)
   // 파일 락을 사용하여 동시 쓰기 방지
   int fd =
@@ -442,9 +478,6 @@ gchararray format_location(GstElement *sink, guint arg0, gpointer data) {
     }
     close(fd);
   }
-
-  __LOG(LOG_NOTICE, "[GST][%s:%d] ch%d Recording started: %s", _FILE_, __LINE__,
-        info->ch, file_name);
 
   g_date_time_unref(datetime);
   g_free(date_str);
@@ -494,6 +527,9 @@ MuxSinkBin::MuxSinkBin() {
   muxSinkData.start_f = 0;
   muxSinkData.split_msec = 0;
   muxSinkData.last_timestamp = NULL;
+  muxSinkData.last_running_time = GST_CLOCK_TIME_NONE;
+  muxSinkData.last_end_time = GST_CLOCK_TIME_NONE;
+  muxSinkData.last_duration = GST_CLOCK_TIME_NONE;
 }
 
 MuxSinkBin::~MuxSinkBin() {

@@ -33,6 +33,9 @@ typedef struct _MuxSinkData
     guint8 start_f;
     gint split_msec;
     gchar *last_timestamp;  // 마지막 녹화 타임스탬프 (예: "20260127_143000")
+    GstClockTime last_running_time; // 이전 분할 시점의 running-time
+    GstClockTime last_end_time;     // 마지막으로 닫힌 파일의 종료 시간
+    GstClockTime last_duration;     // 마지막으로 닫힌 파일의 실제 녹화 길이
 } MuxSinkData;
 
 class MuxSinkBin
@@ -51,8 +54,10 @@ public :
     guint8 getStartFlag();
     gint getSplitMsec();
     void setSplitMsec(gint msec);
+    void setLastRunningTime(GstClockTime rt);
     void handle_last_sample();
-    void handleFragmentClosed(const gchar *location);
+    void handleFragmentOpened(const gchar *location, GstClockTime running_time);
+    void handleFragmentClosed(const gchar *location, GstClockTime running_time, GstClockTime duration);
     GstPad* getBinQueuePad();
     //gchararray format_location(GstElement *sink, guint arg0, gpointer data);
 private :
