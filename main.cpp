@@ -31,6 +31,7 @@
 #define MAX_SNAPBACK_DRIFT_MS 30000
 #define MIN_SPLIT_INTERVAL_SEC 5
 #define SNAP_BACK_GRACE_PERIOD_MS 58000
+#define MILLISECONDS_IN_MINUTE 60000
 
 #define SEGFAULT_DEBUG
 #define RECORDBIN_ENABLE
@@ -523,16 +524,17 @@ static void splitCheck(gpointer data, guint8 startSec) {
       gint sm = muxSinkBin[i].getSplitMsec();
       active_count++;
       
-      // 오차 절대값 계산 (Wrap-around 대응: 59.9s = 0.1s 오차)
+      // [리뷰 반영] Wrap-around를 고려한 오차 절대 거리 계산 (예: 59.9s = 0.1s 오차)
       gint drift_ms = sm;
-      if (drift_ms > 30000) drift_ms = 60000 - drift_ms;
-      drift_ms = abs(drift_ms);
+      if (drift_ms > MAX_SNAPBACK_DRIFT_MS) {
+          drift_ms = MILLISECONDS_IN_MINUTE - drift_ms;
+      }
 
       if (diff < 5) {
         __LOG(LOG_DEBUG, "[GST][%s:%d] ch%d sm:%dms, drift:%dms, diff:%ds", _FILE_, __LINE__, i, sm, drift_ms, diff);
       }
 
-      // 정시성 판단: 오차가 허용 범위 이내인가?
+      // 정시성 판단: 절대 오차가 허용 범위 이내인가?
       if (drift_ms >= cmdArg.split_max_msec) is_fully_aligned = FALSE;
 
       if (sm > splitMax) splitMax = sm;
@@ -554,14 +556,12 @@ static void splitCheck(gpointer data, guint8 startSec) {
       return;
     }
 
-    // 3. 실행 시점 결정 (do_force)
+    // 3. 실행 시점 결정: 기본적으로 즉시 강제 정정하되, 정각 직전만 유예
     gboolean do_force = TRUE;
     for (i = 0; i < MAX_CHANNEL; i++) {
       if (!cmdArg.cam[i].enable) continue;
       gint sm = muxSinkBin[i].getSplitMsec();
-      
-      // 자연 분할 유예 조건: 아직 이전 파일을 쓰고 있고(sm >= 30s), 타임아웃 전일 때
-      if (sm >= 30000 && (diff * 1000 < cmdArg.split_max_msec)) {
+      if (sm >= SNAP_BACK_GRACE_PERIOD_MS && (diff * 1000 < cmdArg.split_max_msec)) {
         do_force = FALSE; break;
       }
     }
