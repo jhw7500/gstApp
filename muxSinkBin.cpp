@@ -454,8 +454,11 @@ gchararray format_location(GstElement *sink, guint arg0, gpointer data) {
     // datetime = g_date_time_add_minutes(datetime, 1);
   }
 
-  date_str = g_date_time_format(datetime, "%Y%m%d_%H%M00");
-  timestamp_str = g_date_time_format(datetime, "%Y%m%d_%H%M");
+  // [파일명 조기 분할 방지] 1초를 더해 분 단위를 추출하여 59.x초 분할 시에도 다음 분 이름을 갖게 함
+  GDateTime *round_time = g_date_time_add_seconds(datetime, 1);
+  date_str = g_date_time_format(round_time, "%Y%m%d_%H%M00");
+  timestamp_str = g_date_time_format(round_time, "%Y%m%d_%H%M");
+  g_date_time_unref(round_time);
 
   // .part 확장자 추가
   if (g_strcmp0(cmdArg.muxer, "ts") == 0)
