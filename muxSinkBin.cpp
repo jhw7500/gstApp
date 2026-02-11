@@ -107,7 +107,7 @@ void MuxSinkBin::handleFragmentOpened(const gchar *location, GstClockTime runnin
   // 이전 파일 통계 정보가 있는지 확인하여 통합 로그 출력 (time: 새 파일 시작, duration: 이전 파일 길이)
   // GST_TIME_ARGS는 나노초까지 출력하므로 ms까지 수동 포맷팅 (H:MM:SS.mmm)
   if (GST_CLOCK_TIME_IS_VALID(muxSinkData.last_end_time)) {
-    __LOG(LOG_NOTICE, "[GST][%s:%d] ch%d Fragment opened: %s, time: %u:%02u:%02u.%03u, duration: %u:%02u:%02u.%03u",
+    __LOG(LOG_INFO, "[GST][%s:%d] ch%d Fragment opened: %s, time: %u:%02u:%02u.%03u, duration: %u:%02u:%02u.%03u",
           _FILE_, __LINE__, muxSinkData.ch, location,
           (guint) (running_time / (GST_SECOND * 60 * 60)),
           (guint) ((running_time / (GST_SECOND * 60)) % 60),
