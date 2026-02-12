@@ -538,6 +538,12 @@ static GstFlowReturn on_new_sample_from_sink(GstElement *sink, gpointer userData
         return GST_FLOW_OK;
     }
 
+    // [Crash 방지] appsrc 또는 필수 컴포넌트가 NULL이면 즉시 리턴
+    if (!info || !info->appsrc) {
+        if (sample) gst_sample_unref(sample);
+        return GST_FLOW_ERROR;
+    }
+
     // Default behavior: forward every sample to appsrc
     g_signal_emit_by_name(info->appsrc, "push-buffer", buffer, &ret);
     if (ret != GST_FLOW_OK)
@@ -559,6 +565,12 @@ static GstFlowReturn on_new_sample_to_file(GstElement *sink, gpointer userData)
 
     sample = gst_app_sink_pull_sample(GST_APP_SINK(sink));
     if(!sample) {
+        return GST_FLOW_ERROR;
+    }
+
+    // [Crash 방지] 유효하지 않은 데이터 접근 차단
+    if (!info || !info->queue_mutex) {
+        if (sample) gst_sample_unref(sample);
         return GST_FLOW_ERROR;
     }
 

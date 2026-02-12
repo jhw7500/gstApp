@@ -228,6 +228,10 @@ void attachInterruptHandlers()
   //signal(SIGINT, sigHandler);
   signal(SIGKILL, kill_handler);
   signal(SIGTERM, term_handler);
+  
+  // [추가] Segfault 발생 시 로그 및 백트레이스 출력
+  extern void handle_sigsegv(int sig);
+  signal(SIGSEGV, handle_sigsegv);
 }
 
 void cleanup()

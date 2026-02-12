@@ -25,7 +25,7 @@
 #include "videoBin.h"
 #include <fcntl.h>
 #include <unistd.h>
-// #include <signal.h>
+#include <execinfo.h> // For backtrace
 
 #define APP_VERSION "1.3"
 #define MAX_SNAPBACK_DRIFT_MS 30000
@@ -110,6 +110,22 @@ static void stop_fragment_closed_worker() {
 }
 // MuxSinkBin muxSinkBin[MAX_CHANNEL];
 gboolean config_camera(gpointer user_data);
+
+void handle_sigsegv(int sig) {
+  void *array[10];
+  size_t size;
+
+  __LOG(LOG_EMERG, "[GST][%s:%d] Caught Segmentation Fault (signal %d)!", _FILE_, __LINE__, sig);
+  
+  // get void*'s for all entries on the stack
+  size = backtrace(array, 10);
+
+  // print out all the frames to stderr
+  fprintf(stderr, "Error: signal %d:\n", sig);
+  backtrace_symbols_fd(array, size, STDERR_FILENO);
+  
+  exit(1);
+}
 
 void handle_sigint(int sig) {
   // g_print("Caught signal %d, sending EOS to pipeline\n", sig);
@@ -749,11 +765,15 @@ gint main(gint argc, gchar *argv[]) {
       continue;
     // chNum = i;
     csiNum = (i / 2);
-    __LOG(LOG_INFO, "[GST][%s:%d] ch[%d] enable", _FILE_, __LINE__, i);
+    __LOG(LOG_INFO, "[GST][%s:%d] ch[%d] enable (CSI%d)", _FILE_, __LINE__, i, csiNum);
+    
+    // [CSI 기반 초기화 방어] 해당 CSI 드라이버가 실패하면 관련 모든 구성을 건너뜀
     if (!videoBin[csiNum].init(csiNum)) {
-      __LOG(LOG_CRIT, "[GST][%s:%d] csi%d video bin init err", _FILE_, __LINE__,
-            csiNum);
-      // goto main_end;
+      __LOG(LOG_CRIT, "[GST][%s:%d] csi%d init failed. Disabling all related channels.", _FILE_, __LINE__, csiNum);
+      // 해당 CSI에 속한 채널들의 설정을 강제로 비활성화하여 하부 구성 방지
+      cmdArg.cam[csiNum*2].enable = FALSE;
+      cmdArg.cam[csiNum*2+1].enable = FALSE;
+      continue; 
     }
 // #if !defined(CHANNEL_EACH_CROP)
 #ifndef CHANNEL_EACH_CROP
@@ -798,8 +818,8 @@ gint main(gint argc, gchar *argv[]) {
     if (cmdArg.dual_enc == FALSE &&
         (cmdArg.stream_en[STREAM_REC] || cmdArg.stream_en[STREAM_RTSP])) {
       if (!encoderBin[i].init(i)) {
-        __LOG(LOG_CRIT, "[GST][%s:%d] ch%d init err in encoderBin", _FILE_,
-              __LINE__, i, csiNum);
+        __LOG(LOG_CRIT, "[GST][%s:%d] ch%d init err in encoderBin. Aborting.", _FILE_,
+              __LINE__, i);
         goto main_end;
       }
 
@@ -820,7 +840,7 @@ gint main(gint argc, gchar *argv[]) {
 
     if (cmdArg.stream_en[STREAM_REC]) {
       if (!muxSinkBin[i].init(i)) {
-        __LOG(LOG_CRIT, "[GST][%s:%d] ch%d record sink init err", _FILE_,
+        __LOG(LOG_CRIT, "[GST][%s:%d] ch%d record sink init err. Aborting.", _FILE_,
               __LINE__, i);
         goto main_end;
       }
