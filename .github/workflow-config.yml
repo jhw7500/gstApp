@@ -42,7 +42,7 @@ workflows:
   gemini-review:
     enabled: true
   gemini-scheduled-triage:
-    enabled: true
+    enabled: false
   gemini-triage:
     enabled: true
 
