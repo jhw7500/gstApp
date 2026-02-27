@@ -14,6 +14,17 @@
 #include <gst/app/gstappsink.h>
 #include <gst/app/gstappsrc.h>
 #include <gst/rtsp-server/rtsp-server.h>
+
+static GstPadProbeReturn
+drop_no_pts_probe_rtsp(GstPad *pad, GstPadProbeInfo *info, gpointer user_data)
+{
+    GstBuffer *buf = GST_PAD_PROBE_INFO_BUFFER(info);
+    if (buf && !GST_BUFFER_PTS_IS_VALID(buf)) {
+        __LOG(LOG_WARNING, "[GST][%s:%d] dropping buffer without PTS (rtsp enc src)", _FILE_, __LINE__);
+        return GST_PAD_PROBE_DROP;
+    }
+    return GST_PAD_PROBE_OK;
+}
 // #include <rnnoise.h>
 // static DenoiseState *den;
 
@@ -1154,6 +1165,13 @@ gboolean RtspServerBin::init(guint8 ch, gboolean crop_en) {
   if (!ret) {
     __LOG(LOG_CRIT, "[GST][%s:%d] rtsp link err", _FILE_, __LINE__);
     return ret;
+  }
+
+  /* videorate 없을 때 PTS 없는 버퍼 드롭 (dual_enc에서 enc가 있는 경우만) */
+  if (!cmdArg.videorate_en && re.enc) {
+    gst_pad_add_probe(gst_element_get_static_pad(re.enc, "src"),
+                      GST_PAD_PROBE_TYPE_BUFFER,
+                      (GstPadProbeCallback)drop_no_pts_probe_rtsp, NULL, NULL);
   }
 
   // g_object_set(re.convert, "composition-meta-enable", TRUE, NULL);
