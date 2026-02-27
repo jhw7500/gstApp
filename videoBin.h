@@ -40,6 +40,8 @@ typedef struct _VideoElement
     GstElement *bin;
 } VideoElement;
 
+int set_v4l2_subdev_fps(int csiNum, int fps);
+
 class VideoBin
 {
 public :
@@ -56,6 +58,7 @@ public :
     GstPad* getBinCaptureSrcPad(guint8 ch);
     void getIoMode();
     void setIoMode(guint16 data);
+    void setFps(guint16 fps);
 
 private :
 	

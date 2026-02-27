@@ -559,6 +559,14 @@ void RtspServerBin::getFps() {
 void RtspServerBin::setFps(guint16 data) {
   // gint fps;
   GstCaps *caps;
+  gchar *caps_str;
+
+  /* Check if properly initialized (rtspServerData.ch is set during init) */
+  if (rtspServerData.ch >= MAX_CHANNEL) {
+    __LOG(LOG_ERR, "[GST][%s:%d] rtspServerBin not initialized (ch=%d)", _FILE_, __LINE__, rtspServerData.ch);
+    g_print("rtsp ch%d not initialized\n", rtspServerData.ch);
+    return;
+  }
 
 #if 0
     g_object_get(re.rate, "max-rate", &fps, NULL);
@@ -568,21 +576,22 @@ void RtspServerBin::setFps(guint16 data) {
     __LOG(LOG_NOTICE, "[GST][%s:%d] ch%d set max-rate : %d", _FILE_, __LINE__, rtspServerData.ch, fps);
 #endif
 
-  // g_object_get(re.capsfilter, "caps", caps, NULL);
-  // caps_str = gst_caps_to_string(caps);
-  //__LOG(LOG_NOTICE, "[GST][%s:%d] ch%d get caps : %s", _FILE_, __LINE__, ch,
-  //caps_str);
-  caps = gst_caps_new_simple("video/x-raw", "framerate", GST_TYPE_FRACTION,
-                             data, 1, NULL);
-  g_object_set(re.capsfilter, "caps", caps, NULL);
-  // g_object_get(re.capsfilter, "caps", caps, NULL);
-  __LOG(LOG_NOTICE, "[GST][%s:%d] ch%d set fps : %s", _FILE_, __LINE__,
-        rtspServerData.ch, gst_caps_to_string(caps));
-  g_print("rtsp ch%d set fps : %s\n", rtspServerData.ch,
-          gst_caps_to_string(caps));
-  rtspServerData.caps = NULL;
+  /* Check if properly initialized - verify videorate element exists */
+  if (re.rate == NULL) {
+    __LOG(LOG_ERR, "[GST][%s:%d] ch%d videorate not initialized, cannot set fps", 
+            _FILE_, __LINE__, rtspServerData.ch);
+    return;
+  }
 
-  gst_caps_unref(caps);
+  /* Only change videorate max-rate, don't touch capsfilter to avoid renegotiation */
+  gint current_fps;
+  g_object_get(re.rate, "max-rate", &current_fps, NULL);
+  __LOG(LOG_NOTICE, "[GST][%s:%d] ch%d current max-rate=%d, setting to %d", 
+          _FILE_, __LINE__, rtspServerData.ch, current_fps, data);
+  g_object_set(re.rate, "max-rate", data, NULL);
+  
+  __LOG(LOG_NOTICE, "[GST][%s:%d] ch%d set max-rate=%d (videorate only, no caps renegotiation)", 
+          _FILE_, __LINE__, rtspServerData.ch, data);
 }
 
 void RtspServerBin::getCaps() {
@@ -1078,6 +1087,13 @@ gboolean RtspServerBin::init(guint8 ch, gboolean crop_en) {
       gst_bin_remove_many(GST_BIN(re.bin), re.crop, re.convert, re.rate,
                           re.capsfilter, re.enc, re.capsfilter2, re.parse,
                           NULL);
+      re.crop = NULL;
+      re.convert = NULL;
+      re.rate = NULL;
+      re.capsfilter = NULL;
+      re.enc = NULL;
+      re.capsfilter2 = NULL;
+      re.parse = NULL;
       ret = gst_element_link_many(re.queue, re.sink, NULL);
     }
   } else {
@@ -1088,6 +1104,13 @@ gboolean RtspServerBin::init(guint8 ch, gboolean crop_en) {
       gst_bin_remove_many(GST_BIN(re.bin), re.crop, re.convert, re.rate,
                           re.capsfilter, re.enc, re.capsfilter2, re.parse,
                           NULL);
+      re.crop = NULL;
+      re.convert = NULL;
+      re.rate = NULL;
+      re.capsfilter = NULL;
+      re.enc = NULL;
+      re.capsfilter2 = NULL;
+      re.parse = NULL;
       ret = gst_element_link_many(re.queue, re.sink, NULL);
     }
   }

@@ -14,6 +14,7 @@
 #include <errno.h>
 #include <fcntl.h>
 #include <linux/videodev2.h>
+#include <linux/v4l2-subdev.h>
 #include <stdio.h>
 #include <string.h>
 #include <sys/ioctl.h>
@@ -115,6 +116,40 @@ static int set_v4l2_subdev_control(int csiNum, unsigned int ctrl_id,
   return ret;
 }
 
+int set_v4l2_subdev_fps(int csiNum, int fps) {
+  char dev_path[32];
+  int fd, ret;
+  struct v4l2_subdev_frame_interval fi;
+
+  int subdev_idx =
+      (csiNum == 0) ? cmdArg.v4l_subdev_csi0 : cmdArg.v4l_subdev_csi1;
+  snprintf(dev_path, sizeof(dev_path), "/dev/v4l-subdev%d", subdev_idx);
+
+  fd = open(dev_path, O_RDWR);
+  if (fd < 0) {
+    __LOG(LOG_ERR, "[GST][%s:%d] Failed to open %s: %s", _FILE_, __LINE__,
+          dev_path, strerror(errno));
+    return -1;
+  }
+
+  memset(&fi, 0, sizeof(fi));
+  fi.pad = 0;
+  fi.interval.numerator = 1;
+  fi.interval.denominator = fps;
+
+  ret = ioctl(fd, VIDIOC_SUBDEV_S_FRAME_INTERVAL, &fi);
+  if (ret < 0) {
+    __LOG(LOG_ERR, "[GST][%s:%d] S_FRAME_INTERVAL failed on %s: %s", _FILE_,
+          __LINE__, dev_path, strerror(errno));
+  } else {
+    __LOG(LOG_NOTICE, "[GST][%s:%d] Set subdev fps=%d on %s", _FILE_,
+          __LINE__, fps, dev_path);
+  }
+
+  close(fd);
+  return ret;
+}
+
 void VideoBin::getIoMode() {
   gint ioMode;
 
@@ -122,6 +157,36 @@ void VideoBin::getIoMode() {
   //__LOG(LOG_NOTICE, "[GST][%s:%d] csi%d get io-mode : %d", _FILE_, __LINE__,
   // csi, ioMode);
   g_print("csi%d get io-mode : %d\n", videoData.csi, ioMode);
+}
+
+void VideoBin::setFps(guint16 fps) {
+  if (be.capsfilter == NULL) {
+    __LOG(LOG_ERR, "[GST][%s:%d] csi%d capsfilter not initialized", _FILE_, __LINE__, videoData.csi);
+    return;
+  }
+
+  GstCaps *old_caps = NULL;
+  g_object_get(be.capsfilter, "caps", &old_caps, NULL);
+  if (!old_caps) {
+    __LOG(LOG_ERR, "[GST][%s:%d] csi%d failed to get current caps", _FILE_, __LINE__, videoData.csi);
+    return;
+  }
+
+  GstStructure *s = gst_caps_get_structure(old_caps, 0);
+  gint width = 0, height = 0;
+  gst_structure_get_int(s, "width", &width);
+  gst_structure_get_int(s, "height", &height);
+  gst_caps_unref(old_caps);
+
+  GstCaps *new_caps = gst_caps_new_simple("video/x-raw",
+      "width", G_TYPE_INT, width,
+      "height", G_TYPE_INT, height,
+      "framerate", GST_TYPE_FRACTION, (gint)fps, 1, NULL);
+  g_object_set(be.capsfilter, "caps", new_caps, NULL);
+  gst_caps_unref(new_caps);
+
+  __LOG(LOG_NOTICE, "[GST][%s:%d] csi%d set capsfilter fps=%d (%dx%d)",
+        _FILE_, __LINE__, videoData.csi, fps, width, height);
 }
 
 void VideoBin::setIoMode(guint16 data) {

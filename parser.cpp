@@ -13,6 +13,7 @@
 #include "parser.h"
 #include <unistd.h>
 #include "captureBin.h"
+#include "encoderBin.h"
 #include "ipc.h"
 #include "muxSinkBin.h"
 #include "recordBin.h"
@@ -1110,6 +1111,7 @@ gint ParserClass::cmd_parser(gchar *buffer, gint len, gpointer data) {
   RtspServerBin *rtspServerBin = (RtspServerBin *)(thraedArgs->arg2);
   MuxSinkBin *muxSinkBin = (MuxSinkBin *)(thraedArgs->arg3);
   CaptureBin *captureBin = (CaptureBin *)(thraedArgs->arg4);
+  EncoderBin *encoderBin = (EncoderBin *)(thraedArgs->arg5);
   GstState state;
   // GstStateChangeReturn stateRet;
   // GstPadLinkReturn linkRet;
@@ -1342,6 +1344,42 @@ gint ParserClass::cmd_parser(gchar *buffer, gint len, gpointer data) {
         // for (i = 0; i < MAX_CHANNEL; i++)
         // if (cmdArg.cam[i].enable && cmdArg.stream_en[STREAM_RTSP])
         // rtspServerBin[i].setFps(key);
+      } else if (compareBuf(token, "main", 4)) {
+        token = strtok(NULL, SPLIT_CHAR);
+        key = charArrayToInt(token);
+
+        if (key < 1 || key > 120) {
+          g_print("fps %d not supported (valid: 1~120)\n", key);
+          return -1;
+        }
+
+        /* 1) Driver FSYNC change via v4l2 subdev ioctl */
+        set_v4l2_subdev_fps(0, key);
+        if (cmdArg.v4l_subdev_csi1 != cmdArg.v4l_subdev_csi0)
+          set_v4l2_subdev_fps(1, key);
+
+        /* 2) Update videoBin capsfilter framerate */
+        for (i = 0; i < MAX_VIDEO_SRC; i++) {
+          if (videoBin[i].be.bin != NULL)
+            videoBin[i].setFps(key);
+        }
+
+        /* 3) Update encoder videorate max-rate */
+        for (i = 0; i < MAX_CHANNEL; i++) {
+          if (!cmdArg.cam[i].enable)
+            continue;
+          if (cmdArg.dual_enc) {
+            if (cmdArg.stream_en[STREAM_REC])
+              recordBin[i].setFps(key);
+            if (cmdArg.stream_en[STREAM_RTSP])
+              rtspServerBin[i].setFps(key);
+          } else {
+            if (encoderBin && encoderBin[i].re.rate)
+              g_object_set(encoderBin[i].re.rate, "max-rate", (gint)key, NULL);
+          }
+        }
+
+        __LOG(LOG_NOTICE, "[GST][%s:%d] set main fps=%d (driver + videoBin + enc)", __FILE__, __LINE__, key);
       } else
         g_print("wrong cmd!\n");
     } else if (compareBuf(token, "rotate", 6)) {
