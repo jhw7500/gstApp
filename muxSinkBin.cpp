@@ -13,6 +13,19 @@
 #include "muxSinkBin.h"
 #include <fcntl.h>
 #include <string.h>
+
+static GstPadProbeReturn
+drop_no_pts_probe_mux(GstPad *pad, GstPadProbeInfo *info, gpointer user_data)
+{
+    GstBuffer *buf = GST_PAD_PROBE_INFO_BUFFER(info);
+    if (buf && !GST_BUFFER_PTS_IS_VALID(buf)) {
+        guint8 *ch = (guint8 *)user_data;
+        __LOG(LOG_WARNING, "[GST][%s:%d] ch%d dropping buffer without PTS before muxer",
+              _FILE_, __LINE__, ch ? *ch : -1);
+        return GST_PAD_PROBE_DROP;
+    }
+    return GST_PAD_PROBE_OK;
+}
 #include <sys/file.h>
 #include <unistd.h>
 
@@ -751,6 +764,18 @@ gboolean MuxSinkBin::init(guint8 num) {
 
   gst_object_unref(muxsrcpad);
   gst_object_unref(muxsinkpad);
+
+  /* videorate 없을 때 PTS 없는 버퍼가 mp4mux에 도달하면 크래시.
+   * capsfilter src (= splitmuxsink 직전)에서 드롭. */
+  if (!cmdArg.videorate_en) {
+    GstPad *cf_srcpad = gst_element_get_static_pad(be.capsfilter, "src");
+    if (cf_srcpad) {
+      gst_pad_add_probe(cf_srcpad, GST_PAD_PROBE_TYPE_BUFFER,
+                        (GstPadProbeCallback)drop_no_pts_probe_mux,
+                        &muxSinkData.ch, NULL);
+      gst_object_unref(cf_srcpad);
+    }
+  }
 #endif
 
   guint64 duration;
