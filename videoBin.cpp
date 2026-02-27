@@ -412,18 +412,27 @@ gboolean VideoBin::init(guint8 csiNum) {
   be.teeCrop = gst_element_factory_make("tee", "teeCrop");
   be.queue_main = gst_element_factory_make(QUEUE_TYPE, "queue_main");
   be.deinterlace = gst_element_factory_make("deinterlace", "deinterlace");
-  be.rate = gst_element_factory_make("videorate", "videorate");
+  if (cmdArg.videorate_en)
+    be.rate = gst_element_factory_make("videorate", "videorate");
+  else
+    be.rate = NULL;
   be.watchdog = gst_element_factory_make("watchdog", "watchdog");
 
   if (!be.bin || !be.src || !be.capsfilter || !be.teeCrop || !be.convert ||
-      !be.queue_main || !be.deinterlace || !be.rate || !be.watchdog) {
+      !be.queue_main || !be.deinterlace || !be.watchdog ||
+      (cmdArg.videorate_en && !be.rate)) {
     __LOG(LOG_CRIT, "[GST][%s:%d] video main element create error", _FILE_,
           __LINE__);
     return ret;
   }
-  gst_bin_add_many(GST_BIN(be.bin), be.src, be.convert, be.capsfilter,
-                   be.teeCrop, be.queue_main, be.deinterlace, be.rate,
-                   be.watchdog, NULL);
+  if (cmdArg.videorate_en)
+    gst_bin_add_many(GST_BIN(be.bin), be.src, be.convert, be.capsfilter,
+                     be.teeCrop, be.queue_main, be.deinterlace, be.rate,
+                     be.watchdog, NULL);
+  else
+    gst_bin_add_many(GST_BIN(be.bin), be.src, be.convert, be.capsfilter,
+                     be.teeCrop, be.queue_main, be.deinterlace,
+                     be.watchdog, NULL);
 
   g_object_set(
       be.src, "io-mode", cmdArg.ioMode,

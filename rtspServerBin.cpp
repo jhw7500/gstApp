@@ -1017,9 +1017,14 @@ gboolean RtspServerBin::init(guint8 ch, gboolean crop_en) {
     return ret;
   }
 
-  gst_bin_add_many(GST_BIN(re.bin), re.queue, re.rate, re.convert, re.parse,
-                   re.sink, re.capsfilter, re.crop, re.overlay, re.enc,
-                   re.capsfilter2, NULL);
+  if (cmdArg.videorate_en)
+    gst_bin_add_many(GST_BIN(re.bin), re.queue, re.rate, re.convert, re.parse,
+                     re.sink, re.capsfilter, re.crop, re.overlay, re.enc,
+                     re.capsfilter2, NULL);
+  else
+    gst_bin_add_many(GST_BIN(re.bin), re.queue, re.convert, re.parse,
+                     re.sink, re.capsfilter, re.crop, re.overlay, re.enc,
+                     re.capsfilter2, NULL);
 
   // gst_bin_add_many(GST_BIN(re.bin), re.convert2, re.compositor,
   // re.capsfilter2, re.videoflip, re.convert2, NULL);
@@ -1074,22 +1079,35 @@ gboolean RtspServerBin::init(guint8 ch, gboolean crop_en) {
                "leaky", LEAKY_DOWNSTREAM, NULL);
 
 #ifdef CHANNEL_EACH_CROP
-  if (crop_en && cmdArg.overlay_en)
-    ret = gst_element_link_many(re.queue, re.crop, re.overlay, re.convert,
-                                re.rate, re.capsfilter, re.enc, re.capsfilter2,
-                                re.parse, re.sink, NULL);
-  else if (crop_en) {
-    if (cmdArg.dual_enc == TRUE)
-      ret = gst_element_link_many(re.queue, re.crop, re.convert, re.rate,
+  if (crop_en && cmdArg.overlay_en) {
+    if (cmdArg.videorate_en)
+      ret = gst_element_link_many(re.queue, re.crop, re.overlay, re.convert,
+                                  re.rate, re.capsfilter, re.enc, re.capsfilter2,
+                                  re.parse, re.sink, NULL);
+    else
+      ret = gst_element_link_many(re.queue, re.crop, re.overlay, re.convert,
                                   re.capsfilter, re.enc, re.capsfilter2,
                                   re.parse, re.sink, NULL);
-    else {
-      gst_bin_remove_many(GST_BIN(re.bin), re.crop, re.convert, re.rate,
+  } else if (crop_en) {
+    if (cmdArg.dual_enc == TRUE) {
+      if (cmdArg.videorate_en)
+        ret = gst_element_link_many(re.queue, re.crop, re.convert, re.rate,
+                                    re.capsfilter, re.enc, re.capsfilter2,
+                                    re.parse, re.sink, NULL);
+      else
+        ret = gst_element_link_many(re.queue, re.crop, re.convert,
+                                    re.capsfilter, re.enc, re.capsfilter2,
+                                    re.parse, re.sink, NULL);
+    } else {
+      gst_bin_remove_many(GST_BIN(re.bin), re.crop, re.convert,
                           re.capsfilter, re.enc, re.capsfilter2, re.parse,
                           NULL);
+      if (re.rate) {
+        gst_bin_remove(GST_BIN(re.bin), re.rate);
+        re.rate = NULL;
+      }
       re.crop = NULL;
       re.convert = NULL;
-      re.rate = NULL;
       re.capsfilter = NULL;
       re.enc = NULL;
       re.capsfilter2 = NULL;
@@ -1097,16 +1115,23 @@ gboolean RtspServerBin::init(guint8 ch, gboolean crop_en) {
       ret = gst_element_link_many(re.queue, re.sink, NULL);
     }
   } else {
-    if (cmdArg.dual_enc == TRUE)
-      ret = gst_element_link_many(re.queue, re.rate, re.capsfilter, re.enc,
-                                  re.capsfilter2, re.parse, re.sink, NULL);
-    else {
-      gst_bin_remove_many(GST_BIN(re.bin), re.crop, re.convert, re.rate,
+    if (cmdArg.dual_enc == TRUE) {
+      if (cmdArg.videorate_en)
+        ret = gst_element_link_many(re.queue, re.rate, re.capsfilter, re.enc,
+                                    re.capsfilter2, re.parse, re.sink, NULL);
+      else
+        ret = gst_element_link_many(re.queue, re.capsfilter, re.enc,
+                                    re.capsfilter2, re.parse, re.sink, NULL);
+    } else {
+      gst_bin_remove_many(GST_BIN(re.bin), re.crop, re.convert,
                           re.capsfilter, re.enc, re.capsfilter2, re.parse,
                           NULL);
+      if (re.rate) {
+        gst_bin_remove(GST_BIN(re.bin), re.rate);
+        re.rate = NULL;
+      }
       re.crop = NULL;
       re.convert = NULL;
-      re.rate = NULL;
       re.capsfilter = NULL;
       re.enc = NULL;
       re.capsfilter2 = NULL;

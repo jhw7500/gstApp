@@ -192,6 +192,7 @@ typedef struct _CmdArg
     gint wdt_timeout_short;
     gint wdt_timeout_long;
     gboolean srt_en;
+    gboolean videorate_en;
 
     // Queue tuning parameters
     gint queue_main_src_time_ms;

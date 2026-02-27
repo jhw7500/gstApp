@@ -83,6 +83,7 @@ void ParserClass::init_arg(gchar *argv) {
   arg.dual_enc = FALSE;
   arg.wdt_timeout_long = DEFAULT_WDT_TIMEOUT_LONG;
   arg.wdt_timeout_short = DEFAULT_WDT_TIMEOUT_SHORT;
+  arg.videorate_en = FALSE;
 
   arg.rtsp_factory_latency_ms = DEFAULT_RTSP_FACTORY_LATENCY_MS;
   arg.rtsp_appsink_max_buffers = DEFAULT_RTSP_APPSINK_MAX_BUFFERS;
@@ -614,6 +615,8 @@ gint ParserClass::arg_parser(int *argc, char **argv[]) {
        "ipc message id, default(0x65)", "INT"},
       {"dual_enc", 'U', 0, G_OPTION_ARG_INT, &arg.dual_enc,
        "dual encoder, default(FALSE)", "INT"},
+      {"evrate", 'V', 0, G_OPTION_ARG_INT, &arg.videorate_en,
+       "videorate enable, default(FALSE)", "INT"},
       {"wdt_l", 'B', 0, G_OPTION_ARG_INT, &arg.wdt_timeout_long,
        "watchdog timeout long, default(30000)", "INT"},
       {"wdt_s", 'b', 0, G_OPTION_ARG_INT, &arg.wdt_timeout_short,
@@ -1159,6 +1162,35 @@ gint ParserClass::cmd_parser(gchar *buffer, gint len, gpointer data) {
         for (i = 0; i < MAX_CHANNEL; i++)
           if (cmdArg.cam[i].enable && cmdArg.stream_en[STREAM_RTSP])
             rtspServerBin[i].getFps();
+      } else if (compareBuf(token, "cam", 3)) {
+        g_print("cam fps: csi0=%d csi1=%d (v4l2 subdev)\n",
+                cmdArg.main_fps[CSI_1], cmdArg.main_fps[CSI_2]);
+      } else if (compareBuf(token, "video", 5)) {
+        for (i = 0; i < MAX_VIDEO_SRC; i++)
+          if (videoBin[i].be.bin != NULL) {
+            GstCaps *caps = NULL;
+            g_object_get(videoBin[i].be.capsfilter, "caps", &caps, NULL);
+            if (caps) {
+              gchar *caps_str = gst_caps_to_string(caps);
+              g_print("video csi%d caps: %s\n", i, caps_str);
+              g_free(caps_str);
+              gst_caps_unref(caps);
+            }
+          }
+      } else if (compareBuf(token, "rate", 4)) {
+        if (!cmdArg.videorate_en) {
+          g_print("videorate disabled (use --evrate 1)\n");
+        } else {
+          for (i = 0; i < MAX_CHANNEL; i++) {
+            if (!cmdArg.cam[i].enable)
+              continue;
+            if (!cmdArg.dual_enc && encoderBin && encoderBin[i].re.rate) {
+              gint max_rate;
+              g_object_get(encoderBin[i].re.rate, "max-rate", &max_rate, NULL);
+              g_print("enc ch%d videorate max-rate: %d\n", i, max_rate);
+            }
+          }
+        }
       } else
         g_print("wrong cmd!\n");
     } else if (compareBuf(token, "cap", 3)) {
@@ -1344,6 +1376,78 @@ gint ParserClass::cmd_parser(gchar *buffer, gint len, gpointer data) {
         // for (i = 0; i < MAX_CHANNEL; i++)
         // if (cmdArg.cam[i].enable && cmdArg.stream_en[STREAM_RTSP])
         // rtspServerBin[i].setFps(key);
+      } else if (compareBuf(token, "cam", 3)) {
+        token = strtok(NULL, SPLIT_CHAR);
+        key = charArrayToInt(token);
+
+        if (key < 1 || key > 120) {
+          g_print("fps %d not supported (valid: 1~120)\n", key);
+          return -1;
+        }
+
+        set_v4l2_subdev_fps(0, key);
+        if (cmdArg.v4l_subdev_csi1 != cmdArg.v4l_subdev_csi0)
+          set_v4l2_subdev_fps(1, key);
+
+        cmdArg.main_fps[CSI_1] = key;
+        cmdArg.main_fps[CSI_2] = key;
+
+        __LOG(LOG_NOTICE, "[GST][%s:%d] set cam fps=%d (v4l2 subdev FSYNC)", _FILE_, __LINE__, key);
+      } else if (compareBuf(token, "video", 5)) {
+        token = strtok(NULL, SPLIT_CHAR);
+        key = charArrayToInt(token);
+
+        if (key < 1 || key > 120) {
+          g_print("fps %d not supported (valid: 1~120)\n", key);
+          return -1;
+        }
+
+        for (i = 0; i < MAX_VIDEO_SRC; i++) {
+          if (videoBin[i].be.bin != NULL)
+            videoBin[i].setFps(key);
+        }
+
+        __LOG(LOG_NOTICE, "[GST][%s:%d] set video fps=%d (videoBin capsfilter)", _FILE_, __LINE__, key);
+      } else if (compareBuf(token, "rate", 4)) {
+        if (!cmdArg.videorate_en) {
+          g_print("videorate disabled (use --evrate 1)\n");
+          return -1;
+        }
+
+        token = strtok(NULL, SPLIT_CHAR);
+        i = charArrayToInt(token);
+
+        if (i < 0 || i > 3) {
+          g_print("channel %d not supported\n", i);
+          return -1;
+        }
+
+        token = strtok(NULL, SPLIT_CHAR);
+        key = charArrayToInt(token);
+
+        if (key < 1 || key > 120) {
+          g_print("fps %d not supported (valid: 1~120)\n", key);
+          return -1;
+        }
+
+        if (!cmdArg.cam[i].enable) {
+          g_print("channel %d not enabled\n", i);
+          return -1;
+        }
+
+        if (cmdArg.dual_enc) {
+          if (cmdArg.stream_en[STREAM_REC])
+            recordBin[i].setFps(key);
+          if (cmdArg.stream_en[STREAM_RTSP])
+            rtspServerBin[i].setFps(key);
+        } else {
+          if (encoderBin && encoderBin[i].re.rate)
+            g_object_set(encoderBin[i].re.rate, "max-rate", (gint)key, NULL);
+          else
+            g_print("ch%d videorate not available\n", i);
+        }
+
+        __LOG(LOG_NOTICE, "[GST][%s:%d] set rate ch%d fps=%d (videorate max-rate)", _FILE_, __LINE__, i, key);
       } else if (compareBuf(token, "main", 4)) {
         token = strtok(NULL, SPLIT_CHAR);
         key = charArrayToInt(token);
@@ -1358,28 +1462,33 @@ gint ParserClass::cmd_parser(gchar *buffer, gint len, gpointer data) {
         if (cmdArg.v4l_subdev_csi1 != cmdArg.v4l_subdev_csi0)
           set_v4l2_subdev_fps(1, key);
 
+        cmdArg.main_fps[CSI_1] = key;
+        cmdArg.main_fps[CSI_2] = key;
+
         /* 2) Update videoBin capsfilter framerate */
         for (i = 0; i < MAX_VIDEO_SRC; i++) {
           if (videoBin[i].be.bin != NULL)
             videoBin[i].setFps(key);
         }
 
-        /* 3) Update encoder videorate max-rate */
-        for (i = 0; i < MAX_CHANNEL; i++) {
-          if (!cmdArg.cam[i].enable)
-            continue;
-          if (cmdArg.dual_enc) {
-            if (cmdArg.stream_en[STREAM_REC])
-              recordBin[i].setFps(key);
-            if (cmdArg.stream_en[STREAM_RTSP])
-              rtspServerBin[i].setFps(key);
-          } else {
-            if (encoderBin && encoderBin[i].re.rate)
-              g_object_set(encoderBin[i].re.rate, "max-rate", (gint)key, NULL);
+        /* 3) Update encoder videorate max-rate (only when videorate is enabled) */
+        if (cmdArg.videorate_en) {
+          for (i = 0; i < MAX_CHANNEL; i++) {
+            if (!cmdArg.cam[i].enable)
+              continue;
+            if (cmdArg.dual_enc) {
+              if (cmdArg.stream_en[STREAM_REC])
+                recordBin[i].setFps(key);
+              if (cmdArg.stream_en[STREAM_RTSP])
+                rtspServerBin[i].setFps(key);
+            } else {
+              if (encoderBin && encoderBin[i].re.rate)
+                g_object_set(encoderBin[i].re.rate, "max-rate", (gint)key, NULL);
+            }
           }
         }
 
-        __LOG(LOG_NOTICE, "[GST][%s:%d] set main fps=%d (driver + videoBin + enc)", __FILE__, __LINE__, key);
+        __LOG(LOG_NOTICE, "[GST][%s:%d] set main fps=%d (cam + video + rate)", _FILE_, __LINE__, key);
       } else
         g_print("wrong cmd!\n");
     } else if (compareBuf(token, "rotate", 6)) {
