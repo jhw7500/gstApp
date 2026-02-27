@@ -342,6 +342,7 @@ static void splitCheck(gpointer data, guint8 startSec) {
   MuxSinkBin *muxSinkBin = (MuxSinkBin *)tArgs->arg3;
   EncoderBin *eBin = (EncoderBin *)tArgs->arg5;
   static gboolean start_flag = 0;
+  static gboolean need_first_split = FALSE;
   static gint target_min;
   static gint64 last_split_ts = 0; // 마지막 분할 시점 (Microseconds)
   static gint last_split_min = -1; // 마지막 분할 시점의 '분'
@@ -359,6 +360,7 @@ static void splitCheck(gpointer data, guint8 startSec) {
       }
     }
     target_min = (sec != startSec) ? g_date_time_get_minute(g_date_time_add_minutes(datetime, 1)) : min;
+    need_first_split = (sec != startSec);
     __LOG(LOG_NOTICE, "[GST][%s:%d] next split time : %02dm %02ds", _FILE_, __LINE__, target_min, startSec);
     start_flag = 1;
     last_split_ts = g_get_monotonic_time();
@@ -405,6 +407,15 @@ static void splitCheck(gpointer data, guint8 startSec) {
     }
 
     if (is_fully_aligned) {
+      if (need_first_split) {
+        for (i = 0; i < MAX_CHANNEL; i++) {
+          if (cmdArg.cam[i].enable) {
+            muxSinkBin[i].splitNow(NULL, FALSE);
+            muxSinkBin[i].setSplitMsec(DEFAULT_SPLIT_MAX_MSEC);
+          }
+        }
+        need_first_split = FALSE;
+      }
       target_min = (target_min + cmdArg.duration) % 60;
       __LOG(LOG_NOTICE, "[GST][%s:%d] All channels aligned to 00s. Next target : %02dm %02ds", 
             _FILE_, __LINE__, target_min, startSec);
@@ -1111,47 +1122,6 @@ gint main(gint argc, gchar *argv[]) {
   }
   __LOG(LOG_INFO, "[GST][%s:%d] Main loop exit", _FILE_, __LINE__);
 
-  if (gst_element_set_state(pipeline, GST_STATE_NULL) !=
-      GST_STATE_CHANGE_SUCCESS) {
-    for (i = 0; i < MAX_CHANNEL; i++) {
-      // if(muxSinkBin[i].getBinVideoSinkPad())
-      // muxSinkBin[i].handle_last_sample();
-      if (muxSinkBin[i].getBinAudioSinkPad())
-        gst_pad_send_event(muxSinkBin[i].getBinAudioSinkPad(),
-                           gst_event_new_eos());
-      if (muxSinkBin[i].getBinVideoSinkPad()) {
-        gst_pad_send_event(muxSinkBin[i].getBinVideoSinkPad(),
-                           gst_event_new_eos());
-        gst_element_send_event(muxSinkBin[i].be.bin, gst_event_new_eos());
-      }
-      if (rtspServerBin[i].getBinSinkPad()) {
-        gst_pad_send_event(rtspServerBin[i].getBinSinkPad(),
-                           gst_event_new_eos());
-        gst_element_send_event(rtspServerBin[i].re.bin, gst_event_new_eos());
-      }
-      if (captureBin[i].getBinSinkPad()) {
-        gst_pad_send_event(captureBin[i].getBinSinkPad(), gst_event_new_eos());
-        gst_element_send_event(captureBin[i].be.bin, gst_event_new_eos());
-      }
-
-      if (videoBin[i / 2].getBinRtspSrcPad(i))
-        gst_pad_send_event(videoBin[i / 2].getBinRtspSrcPad(i),
-                           gst_event_new_eos());
-      if (videoBin[i / 2].getBinRecordSrcPad(i))
-        gst_pad_send_event(videoBin[i / 2].getBinRecordSrcPad(i),
-                           gst_event_new_eos());
-      if (videoBin[i / 2].getBinCaptureSrcPad(i))
-        gst_pad_send_event(videoBin[i / 2].getBinCaptureSrcPad(i),
-                           gst_event_new_eos());
-      // if(captureBin[i].add_cap_f == TRUE)
-      // gst_pad_send_event(captureBin[i].getBinSinkPad(), gst_event_new_eos());
-    }
-  }
-
-  gst_element_send_event(pipeline, gst_event_new_eos());
-
-  // sleep(1);
-
 main_end:
   __LOG(LOG_NOTICE, "[GST][%s:%d] main loop end", _FILE_, __LINE__);
 
@@ -1160,7 +1130,9 @@ main_end:
   if (threadArgs)
     g_free(threadArgs);
 
+  /* 1) Terminal thread 종료 (stdin poll 중지) */
   if (terminalThread) {
+    __LOG(LOG_NOTICE, "[GST][%s:%d] joining terminal thread...", __FILE__, __LINE__);
     g_thread_join(terminalThread);
     g_thread_unref(terminalThread);
   }
@@ -1168,25 +1140,43 @@ main_end:
     g_source_remove(srtTimer_id);
   }
 
+  /* 2) RTSP 서버 중지 (클라이언트 세션 정리) */
+  __LOG(LOG_NOTICE, "[GST][%s:%d] stopping RTSP server...", __FILE__, __LINE__);
   rtspServerStop();
+  __LOG(LOG_NOTICE, "[GST][%s:%d] RTSP server stopped", __FILE__, __LINE__);
 
+  /* 3) Pipeline EOS 전송 후 타임아웃 대기 */
+  __LOG(LOG_NOTICE, "[GST][%s:%d] sending EOS to pipeline...", _FILE_,
+        __LINE__);
+  gst_element_send_event(pipeline, gst_event_new_eos());
+
+  /* 3) Pipeline NULL 전환 (3초 타임아웃) */
   __LOG(LOG_NOTICE, "[GST][%s:%d] pipeline state set NULL...", _FILE_,
         __LINE__);
-
-  if (gst_element_set_state(pipeline, GST_STATE_NULL) ==
-      GST_STATE_CHANGE_FAILURE) {
-    __LOG(LOG_CRIT, "[GST][%s:%d] Failed to unset pipeline state", _FILE_,
-          __LINE__);
-  } else {
-    __LOG(LOG_NOTICE, "[GST][%s:%d] Pipeline unset successfully", _FILE_,
-          __LINE__);
+  gst_element_set_state(pipeline, GST_STATE_NULL);
+  {
+    GstState state;
+    GstStateChangeReturn ret;
+    ret = gst_element_get_state(pipeline, &state, NULL, 3 * GST_SECOND);
+    if (ret == GST_STATE_CHANGE_SUCCESS) {
+      __LOG(LOG_NOTICE, "[GST][%s:%d] Pipeline unset successfully", _FILE_,
+            __LINE__);
+    } else {
+      __LOG(LOG_CRIT, "[GST][%s:%d] Pipeline state change timeout, forcing exit",
+            _FILE_, __LINE__);
+    }
   }
 
-  if (pipeline)
+  if (pipeline) {
+    __LOG(LOG_NOTICE, "[GST][%s:%d] unreferencing pipeline...", __FILE__, __LINE__);
     gst_object_unref(pipeline);
+    __LOG(LOG_NOTICE, "[GST][%s:%d] pipeline unreferenced", __FILE__, __LINE__);
+  }
 
   if (cmdArg.tcp_en) {
+    __LOG(LOG_NOTICE, "[GST][%s:%d] destroying TCP server...", __FILE__, __LINE__);
     tcpServer->destroy();
+    __LOG(LOG_NOTICE, "[GST][%s:%d] TCP server destroyed", __FILE__, __LINE__);
   }
 
   if (cmdArg.ipc_en) {
