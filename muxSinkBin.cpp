@@ -20,7 +20,7 @@ drop_no_pts_probe_mux(GstPad *pad, GstPadProbeInfo *info, gpointer user_data)
     GstBuffer *buf = GST_PAD_PROBE_INFO_BUFFER(info);
     if (buf && !GST_BUFFER_PTS_IS_VALID(buf)) {
         guint8 *ch = (guint8 *)user_data;
-        __LOG(LOG_WARNING, "[GST][%s:%d] ch%d dropping buffer without PTS before muxer",
+        __LOG(LOG_INFO, "[GST][%s:%d] ch%d dropping buffer without PTS before muxer",
               _FILE_, __LINE__, ch ? *ch : -1);
         return GST_PAD_PROBE_DROP;
     }

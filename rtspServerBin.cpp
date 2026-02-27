@@ -20,7 +20,7 @@ drop_no_pts_probe_rtsp(GstPad *pad, GstPadProbeInfo *info, gpointer user_data)
 {
     GstBuffer *buf = GST_PAD_PROBE_INFO_BUFFER(info);
     if (buf && !GST_BUFFER_PTS_IS_VALID(buf)) {
-        __LOG(LOG_WARNING, "[GST][%s:%d] dropping buffer without PTS (rtsp enc src)", _FILE_, __LINE__);
+        __LOG(LOG_INFO, "[GST][%s:%d] dropping buffer without PTS (rtsp enc src)", _FILE_, __LINE__);
         return GST_PAD_PROBE_DROP;
     }
     return GST_PAD_PROBE_OK;
