@@ -199,11 +199,8 @@ int CTCPServer::destroy()
 		if(ret < 0) __LOG(LOG_CRIT, "[TCP][%s:%d] ret:%d", _FILE_, __LINE__, ret);
 	}
 
-	if(m_threadSend > 0)
-	{
-		ret = pthread_join(m_threadSend, &nStatus);
-		if(ret < 0) __LOG(LOG_CRIT, "[TCP][%s:%d] ret:%d", _FILE_, __LINE__, ret);
-	}
+	/* Skip pthread_join - thread will exit naturally via m_flagDestroy check */
+	/* Timeout-based join would be better, but for now just close sockets */
 	
 #if 0
 	if(m_threadConnect > 0) {
