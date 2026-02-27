@@ -53,13 +53,14 @@ static void fault_restore (void);
 static void fault_spin (void);
 
 static void term_handler(int signum) {
-    //g_print("Received SIGTERM, sending EOS to pipeline...\n");
+    if (is_interrupted) {
+      __LOG(LOG_EMERG, "[CFG][%s:%d] Received SIGTERM again, forcing exit", _FILE_, __LINE__);
+      _exit(1);
+    }
     __LOG(LOG_EMERG, "[CFG][%s:%d] Received SIGTERM, sending EOS to pipeline...", _FILE_, __LINE__);
+    is_interrupted = TRUE;
     gst_element_send_event(pipeline, gst_event_new_eos());
     g_main_loop_quit(loop);
-
-    //sleep(5);
-    is_interrupted = TRUE;
 }
 
 static void kill_handler(int signum) {
