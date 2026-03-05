@@ -49,6 +49,22 @@ static GMutex timestamp_cache_mutex;
 static gint64 last_cache_unix_sec = -1;
 static gchar cached_date_str[32];      // YYYYMMDD_HHMM00
 static gchar cached_timestamp_str[32]; // YYYYMMDD_HHMM
+G_LOCK_DEFINE_STATIC(split_target_lock);
+static gint64 split_target_epoch_sec = 0;
+
+void setSplitTargetEpoch(gint64 epoch_sec) {
+  G_LOCK(split_target_lock);
+  split_target_epoch_sec = epoch_sec;
+  G_UNLOCK(split_target_lock);
+}
+
+gint64 getSplitTargetEpoch() {
+  gint64 epoch_sec;
+  G_LOCK(split_target_lock);
+  epoch_sec = split_target_epoch_sec;
+  G_UNLOCK(split_target_lock);
+  return epoch_sec;
+}
 
 // 세션 관리 함수
 static RecordingSession *get_or_create_session(const gchar *timestamp) {
@@ -487,16 +503,31 @@ gchararray format_location(GstElement *sink, guint arg0, gpointer data) {
   gchar local_date_str[32];
   gchar local_ts_str[32];
   gint64 current_unix_sec = g_date_time_to_unix(datetime);
+  gint64 split_target_epoch = getSplitTargetEpoch();
+  gint64 naming_epoch_sec = current_unix_sec + 1;
+
+  if (split_target_epoch > 0) {
+    gint64 duration_sec = (cmdArg.duration > 0) ? ((gint64)cmdArg.duration * 60) : 60;
+    gint64 delta_sec = split_target_epoch - current_unix_sec;
+
+    naming_epoch_sec = split_target_epoch;
+    if (delta_sec > (duration_sec / 2)) {
+      naming_epoch_sec = split_target_epoch - duration_sec;
+    }
+  }
   
   g_mutex_lock(&timestamp_cache_mutex);
-  if (current_unix_sec != last_cache_unix_sec) {
-    GDateTime *round_time = g_date_time_add_seconds(datetime, 1);
+  if (naming_epoch_sec != last_cache_unix_sec) {
+    GDateTime *round_time = g_date_time_new_from_unix_local(naming_epoch_sec);
+    if (!round_time) {
+      round_time = g_date_time_add_seconds(datetime, 1);
+    }
     gchar *tmp_date = g_date_time_format(round_time, "%Y%m%d_%H%M00");
     gchar *tmp_ts = g_date_time_format(round_time, "%Y%m%d_%H%M");
     
     g_strlcpy(cached_date_str, tmp_date, sizeof(cached_date_str));
     g_strlcpy(cached_timestamp_str, tmp_ts, sizeof(cached_timestamp_str));
-    last_cache_unix_sec = current_unix_sec;
+    last_cache_unix_sec = naming_epoch_sec;
 
     g_free(tmp_date);
     g_free(tmp_ts);

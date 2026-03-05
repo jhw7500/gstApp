@@ -54,10 +54,10 @@ static void fault_spin (void);
 
 static void term_handler(int signum) {
     if (is_interrupted) {
-      __LOG(LOG_EMERG, "[CFG][%s:%d] Received SIGTERM again, forcing exit", _FILE_, __LINE__);
+      __LOG(LOG_CRIT, "[CFG][%s:%d] Received SIGTERM again, forcing exit", _FILE_, __LINE__);
       _exit(1);
     }
-    __LOG(LOG_EMERG, "[CFG][%s:%d] Received SIGTERM, sending EOS to pipeline...", _FILE_, __LINE__);
+    __LOG(LOG_CRIT, "[CFG][%s:%d] Received SIGTERM, sending EOS to pipeline...", _FILE_, __LINE__);
     is_interrupted = TRUE;
     gst_element_send_event(pipeline, gst_event_new_eos());
     g_main_loop_quit(loop);
@@ -65,7 +65,7 @@ static void term_handler(int signum) {
 
 static void kill_handler(int signum) {
     //g_print("Received SIGKILL, sending EOS to pipeline...\n");
-    __LOG(LOG_EMERG, "[CFG][%s:%d] Received SIGKILL, sending EOS to pipeline...", _FILE_, __LINE__);
+    __LOG(LOG_CRIT, "[CFG][%s:%d] Received SIGKILL, sending EOS to pipeline...", _FILE_, __LINE__);
     gst_element_send_event(pipeline, gst_event_new_eos());
     g_main_loop_quit(loop);
 
@@ -98,7 +98,7 @@ static gboolean hup_handler (gpointer user_data)
 {
   GstElement *pipeline = (GstElement *) user_data;
 
-  __LOG(LOG_EMERG, "[CFG][%s:%d] Received SIGHUP, sending EOS to pipeline...", _FILE_, __LINE__);
+  __LOG(LOG_CRIT, "[CFG][%s:%d] Received SIGHUP, sending EOS to pipeline...", _FILE_, __LINE__);
 
   if (g_getenv ("GST_DEBUG_DUMP_DOT_DIR") != NULL) {
     g_print("SIGHUP: dumping dot file snapshot ...\n");
@@ -182,7 +182,7 @@ void fault_setup (void)
 void sigHandler(int sig)
 {
   static guint8 cnt = 0;
-  __LOG(LOG_EMERG, "[GST][%s:%d] sigHandler(%d)", _FILE_, __LINE__, sig);
+  __LOG(LOG_CRIT, "[GST][%s:%d] sigHandler(%d)", _FILE_, __LINE__, sig);
   //is_interrupted = TRUE;
 
   gst_element_send_event(pipeline, gst_event_new_eos());

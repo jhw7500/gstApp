@@ -115,7 +115,7 @@ void handle_sigsegv(int sig) {
   void *array[10];
   size_t size;
 
-  __LOG(LOG_EMERG, "[GST][%s:%d] Caught Segmentation Fault (signal %d)!", _FILE_, __LINE__, sig);
+  __LOG(LOG_CRIT, "[GST][%s:%d] Caught Segmentation Fault (signal %d)!", _FILE_, __LINE__, sig);
   
   // get void*'s for all entries on the stack
   size = backtrace(array, 10);
@@ -373,6 +373,8 @@ static void splitCheck(gpointer data, guint8 startSec) {
 
   if (diff < -1800) diff += 3600;
   else if (diff > 1800) diff -= 3600;
+
+  setSplitTargetEpoch(g_date_time_to_unix(datetime) - diff);
 
   if (diff >= 0) {
     gboolean is_fully_aligned = TRUE;

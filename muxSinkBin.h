@@ -38,6 +38,9 @@ typedef struct _MuxSinkData
     GstClockTime last_duration;     // 마지막으로 닫힌 파일의 실제 녹화 길이
 } MuxSinkData;
 
+void setSplitTargetEpoch(gint64 epoch_sec);
+gint64 getSplitTargetEpoch();
+
 class MuxSinkBin
 {
 public :
