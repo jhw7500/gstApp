@@ -150,12 +150,21 @@ void RecordBin::setDualBps(gboolean val)
 
 void RecordBin::setOverlayText(gchar *text)
 {
+    if (re.overlay == NULL) {
+        __LOG(LOG_ERR, "[GST][%s:%d] ch%d overlay not initialized", _FILE_, __LINE__, ch);
+        return;
+    }
     g_object_set(re.overlay, "text", text, NULL);
 }
 
 void RecordBin::getBitrate()
 {
     gint bps;
+
+    if (re.enc == NULL) {
+        __LOG(LOG_ERR, "[GST][%s:%d] ch%d encoder not initialized", _FILE_, __LINE__, ch);
+        return;
+    }
 
     //g_object_get(re.enc, "bitrate", &bps, NULL);
     g_object_get(re.enc, "bitrate", &bps, NULL);
@@ -166,6 +175,11 @@ void RecordBin::getBitrate()
 void RecordBin::setBitrate(guint16 data)
 {
     gint bps;
+
+    if (re.enc == NULL) {
+        __LOG(LOG_ERR, "[GST][%s:%d] ch%d encoder not initialized", _FILE_, __LINE__, ch);
+        return;
+    }
 
     //g_object_get(re.enc, "bitrate", &bps, NULL);
     g_object_set(re.enc, "bitrate", data, NULL);
@@ -179,6 +193,11 @@ void RecordBin::getFps()
     //gint fps;
     GstCaps *caps;
     gchar *caps_str;
+
+    if (re.capsfilter == NULL) {
+        __LOG(LOG_ERR, "[GST][%s:%d] ch%d capsfilter not initialized", _FILE_, __LINE__, ch);
+        return;
+    }
 
     g_object_get(re.capsfilter, "caps", &caps, NULL);
     caps_str = gst_caps_to_string(caps);
@@ -195,6 +214,11 @@ void RecordBin::setFps(guint16 data)
     //gint fps;
     GstCaps *caps;
     gchar *caps_str;
+
+    if (re.capsfilter == NULL) {
+        __LOG(LOG_ERR, "[GST][%s:%d] ch%d capsfilter not initialized", _FILE_, __LINE__, ch);
+        return;
+    }
 
 #if 0
     g_object_get(re.rate, "max-rate", &fps, NULL);
@@ -222,6 +246,11 @@ void RecordBin::setRotation(guint16 data)
 {
     gint rotation;
 
+    if (re.convert == NULL) {
+        __LOG(LOG_ERR, "[GST][%s:%d] ch%d converter not initialized", _FILE_, __LINE__, ch);
+        return;
+    }
+
     //g_object_get(re.enc, "bitrate", &bps, NULL);
     //__LOG(LOG_NOTICE, "[GST][%s:%d] ch%d get bitrate : %d", _FILE_, __LINE__, ch, bps);
     g_object_set(re.convert, "rotation", data, NULL);
@@ -234,6 +263,11 @@ void RecordBin::getRotation()
 {
     gint rotation;
 
+    if (re.convert == NULL) {
+        __LOG(LOG_ERR, "[GST][%s:%d] ch%d converter not initialized", _FILE_, __LINE__, ch);
+        return;
+    }
+
     g_object_get(re.convert, "rotation", &rotation, NULL);
     //__LOG(LOG_NOTICE, "[GST][%s:%d] ch%d get rotation : %d", _FILE_, __LINE__, ch, rotation);
     g_print("rec ch%d get rotation : %d\n", ch, rotation);
@@ -242,6 +276,11 @@ void RecordBin::getRotation()
 void RecordBin::setGop(guint16 data)
 {
     gint gop;
+
+    if (re.enc == NULL) {
+        __LOG(LOG_ERR, "[GST][%s:%d] ch%d encoder not initialized", _FILE_, __LINE__, ch);
+        return;
+    }
 
     //g_object_get(re.enc, "bitrate", &bps, NULL);
     //__LOG(LOG_NOTICE, "[GST][%s:%d] ch%d get bitrate : %d", _FILE_, __LINE__, ch, bps);
@@ -255,6 +294,11 @@ void RecordBin::getGop()
 {
     gint gop;
 
+    if (re.enc == NULL) {
+        __LOG(LOG_ERR, "[GST][%s:%d] ch%d encoder not initialized", _FILE_, __LINE__, ch);
+        return;
+    }
+
     g_object_get(re.enc, "gop-size", &gop, NULL);
     //__LOG(LOG_NOTICE, "[GST][%s:%d] ch%d get gop_size : %d", _FILE_, __LINE__, ch, gop);
     g_print("rec ch%d get gop_size : %d\n", ch, gop);
@@ -263,6 +307,11 @@ void RecordBin::getGop()
 void RecordBin::getKeyframe()
 {
     gint key;
+
+    if (re.enc == NULL) {
+        __LOG(LOG_ERR, "[GST][%s:%d] ch%d encoder not initialized", _FILE_, __LINE__, ch);
+        return;
+    }
 
     //g_object_get(re.enc, "bitrate", &bps, NULL);
     //__LOG(LOG_NOTICE, "[GST][%s:%d] ch%d get bitrate : %d", _FILE_, __LINE__, ch, bps);
@@ -274,6 +323,11 @@ void RecordBin::getKeyframe()
 void RecordBin::setkeyframe(guint16 data)
 {
     gint key;
+
+    if (re.enc == NULL) {
+        __LOG(LOG_ERR, "[GST][%s:%d] ch%d encoder not initialized", _FILE_, __LINE__, ch);
+        return;
+    }
 
     //g_object_get(re.enc, "bitrate", &bps, NULL);
     //__LOG(LOG_NOTICE, "[GST][%s:%d] ch%d get bitrate : %d", _FILE_, __LINE__, ch, bps);

@@ -527,6 +527,11 @@ static GstFlowReturn new_preroll_handler(GstElement *sink, gpointer data) {
 gboolean RtspServerBin::getStartFlag() { return rtspServerData.start_f; }
 
 void RtspServerBin::setOverlayText(gchar *text) {
+  if (re.overlay == NULL) {
+    __LOG(LOG_ERR, "[GST][%s:%d] ch%d overlay not initialized", _FILE_,
+          __LINE__, rtspServerData.ch);
+    return;
+  }
   g_object_set(re.overlay, "text", text, NULL);
 }
 
@@ -537,6 +542,12 @@ void RtspServerBin::setTimeStampDebug() {
 void RtspServerBin::getBitrate() {
   gint bps;
 
+  if (re.enc == NULL) {
+    __LOG(LOG_ERR, "[GST][%s:%d] ch%d encoder not initialized", _FILE_,
+          __LINE__, rtspServerData.ch);
+    return;
+  }
+
   g_object_get(re.enc, "bitrate", &bps, NULL);
   //__LOG(LOG_NOTICE, "[GST][%s:%d] ch%d get bitrate : %d", _FILE_, __LINE__,
   //ch, bps);
@@ -545,6 +556,12 @@ void RtspServerBin::getBitrate() {
 
 void RtspServerBin::setBitrate(guint16 data) {
   gint bps;
+
+  if (re.enc == NULL) {
+    __LOG(LOG_ERR, "[GST][%s:%d] ch%d encoder not initialized", _FILE_,
+          __LINE__, rtspServerData.ch);
+    return;
+  }
 
   g_object_set(re.enc, "bitrate", data, NULL);
   g_object_get(re.enc, "bitrate", &bps, NULL);
@@ -557,6 +574,12 @@ void RtspServerBin::setBitrate(guint16 data) {
 void RtspServerBin::getFps() {
   // gint fps;
   GstCaps *caps;
+
+  if (re.capsfilter == NULL) {
+    __LOG(LOG_ERR, "[GST][%s:%d] ch%d capsfilter not initialized", _FILE_,
+          __LINE__, rtspServerData.ch);
+    return;
+  }
 
   g_object_get(re.capsfilter, "caps", &caps, NULL);
   //__LOG(LOG_NOTICE, "[GST][%s:%d] ch%d get fps : %s", _FILE_, __LINE__, ch,
@@ -623,6 +646,12 @@ void RtspServerBin::getCaps() {
 void RtspServerBin::setRotation(guint16 data) {
   gint rotation;
 
+  if (re.convert == NULL) {
+    __LOG(LOG_ERR, "[GST][%s:%d] ch%d converter not initialized", _FILE_,
+          __LINE__, rtspServerData.ch);
+    return;
+  }
+
   // g_object_get(re.enc, "bitrate", &bps, NULL);
   //__LOG(LOG_NOTICE, "[GST][%s:%d] ch%d get bitrate : %d", _FILE_, __LINE__,
   //ch, bps);
@@ -636,6 +665,12 @@ void RtspServerBin::setRotation(guint16 data) {
 void RtspServerBin::getRotation() {
   gint rotation;
 
+  if (re.convert == NULL) {
+    __LOG(LOG_ERR, "[GST][%s:%d] ch%d converter not initialized", _FILE_,
+          __LINE__, rtspServerData.ch);
+    return;
+  }
+
   g_object_get(re.convert, "rotation", &rotation, NULL);
   //__LOG(LOG_NOTICE, "[GST][%s:%d] ch%d get rotation : %d", _FILE_, __LINE__,
   //ch, rotation);
@@ -644,6 +679,12 @@ void RtspServerBin::getRotation() {
 
 void RtspServerBin::setGop(guint16 data) {
   gint gop;
+
+  if (re.enc == NULL) {
+    __LOG(LOG_ERR, "[GST][%s:%d] ch%d encoder not initialized", _FILE_,
+          __LINE__, rtspServerData.ch);
+    return;
+  }
 
   // g_object_get(re.enc, "bitrate", &bps, NULL);
   //__LOG(LOG_NOTICE, "[GST][%s:%d] ch%d get bitrate : %d", _FILE_, __LINE__,
@@ -658,6 +699,12 @@ void RtspServerBin::setGop(guint16 data) {
 void RtspServerBin::getGop() {
   gint gop;
 
+  if (re.enc == NULL) {
+    __LOG(LOG_ERR, "[GST][%s:%d] ch%d encoder not initialized", _FILE_,
+          __LINE__, rtspServerData.ch);
+    return;
+  }
+
   g_object_get(re.enc, "gop-size", &gop, NULL);
   //__LOG(LOG_NOTICE, "[GST][%s:%d] ch%d get gop_size : %d", _FILE_, __LINE__,
   //ch, gop);
@@ -666,6 +713,12 @@ void RtspServerBin::getGop() {
 
 void RtspServerBin::getKeyframe() {
   gint key;
+
+  if (re.enc == NULL) {
+    __LOG(LOG_ERR, "[GST][%s:%d] ch%d encoder not initialized", _FILE_,
+          __LINE__, rtspServerData.ch);
+    return;
+  }
 
   // g_object_get(re.enc, "bitrate", &bps, NULL);
   //__LOG(LOG_NOTICE, "[GST][%s:%d] ch%d get bitrate : %d", _FILE_, __LINE__,
@@ -678,6 +731,12 @@ void RtspServerBin::getKeyframe() {
 
 void RtspServerBin::setkeyframe(guint16 data) {
   gint key;
+
+  if (re.enc == NULL) {
+    __LOG(LOG_ERR, "[GST][%s:%d] ch%d encoder not initialized", _FILE_,
+          __LINE__, rtspServerData.ch);
+    return;
+  }
 
   // g_object_get(re.enc, "bitrate", &bps, NULL);
   //__LOG(LOG_NOTICE, "[GST][%s:%d] ch%d get bitrate : %d", _FILE_, __LINE__,

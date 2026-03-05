@@ -354,11 +354,19 @@ gboolean EncoderBin::init(guint8 ch)
     }
 #endif
 
+    gint enc_fps = cmdArg.fps[STREAM_RTSP][ch];
+    if (!cmdArg.dual_enc) {
+        if (cmdArg.stream_en[STREAM_REC])
+            enc_fps = cmdArg.fps[STREAM_REC][ch];
+        else if (cmdArg.stream_en[STREAM_RTSP])
+            enc_fps = cmdArg.fps[STREAM_RTSP][ch];
+    }
+
     GstCaps *caps = gst_caps_new_simple("video/x-raw", 
                                         //"format", G_TYPE_STRING, "RGBx",
                                         //"width", G_TYPE_INT, cmdArg.width,
                                         //"height", G_TYPE_INT, cmdArg.height,
-                                        "framerate", GST_TYPE_FRACTION, cmdArg.fps[STREAM_RTSP][ch], 1,
+                                        "framerate", GST_TYPE_FRACTION, enc_fps, 1,
                                         NULL);
 
     g_object_set(re.capsfilter, "caps", caps, NULL);
