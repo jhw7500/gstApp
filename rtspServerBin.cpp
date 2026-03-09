@@ -332,6 +332,17 @@ static void media_configure(GstRTSPMediaFactory *factory, GstRTSPMedia *media,
       gst_bin_get_by_name_recurse_up(GST_BIN(element), info->appSrcName);
   if (info->appsrc == NULL) {
     __LOG(LOG_ERR, "[GST][%s:%d] appsrc is null", _FILE_, __LINE__);
+    goto media_configure_out;
+  }
+  if (info->caps)
+    g_object_set(info->appsrc, "caps", info->caps, NULL);
+  else {
+    GstCaps *fallback_caps = gst_caps_from_string(
+        "video/x-h264,stream-format=byte-stream,alignment=au");
+    if (fallback_caps) {
+      g_object_set(info->appsrc, "caps", fallback_caps, NULL);
+      gst_caps_unref(fallback_caps);
+    }
   }
   // queue_name = g_strdup_printf("%s", QUEUE_NAME, info->ch);
   //__LOG(LOG_NOTICE, "[GST][%s:%d] appsrc name : %s", _FILE_, __LINE__,
@@ -374,7 +385,9 @@ media_configure_out:
   gst_object_unref(element);
 
   g_signal_connect(media, "prepared", (GCallback)media_prepared_cb, factory);
-  g_signal_connect(info->appsrc, "enough-data", (GCallback)enough_data, info);
+  if (info->appsrc)
+    g_signal_connect(info->appsrc, "enough-data", (GCallback)enough_data,
+                     info);
 
   // g_object_set(element, "rtcp-min-interval", 10.0, NULL);
   // g_object_set(element, "rtcp-max-interval", 60.0, NULL);
@@ -418,7 +431,7 @@ static GstFlowReturn new_sample_handler(GstElement *sink, gpointer userData) {
   GstSample *sample;
   GstBuffer *buffer;
   RtspServerData *info = (RtspServerData *)userData;
-  GstMapInfo map;
+  GstCaps *sample_caps;
 
   //__LOG(LOG_NOTICE, "[GST][%s:%d] %s", _FILE_, __LINE__, __FUNCTION__);
 #ifdef DYNAMIC_CAPS
@@ -440,6 +453,15 @@ static GstFlowReturn new_sample_handler(GstElement *sink, gpointer userData) {
   buffer = gst_sample_get_buffer(sample);
   // gst_sample_unref(sample);
 
+  sample_caps = gst_sample_get_caps(sample);
+  if (sample_caps) {
+    if (!info->caps || !gst_caps_is_equal(info->caps, sample_caps)) {
+      if (info->caps)
+        gst_caps_unref(info->caps);
+      info->caps = gst_caps_copy(sample_caps);
+    }
+  }
+
 #if 0
     GstFlowReturn ret;
     g_signal_emit_by_name(info->appsrc, "push-buffer", buffer, &ret);
@@ -450,13 +472,15 @@ static GstFlowReturn new_sample_handler(GstElement *sink, gpointer userData) {
 #endif
 
 #if 1
-  if (info->appsrc == NULL ||
-      GST_STATE(GST_ELEMENT(info->appsrc)) != GST_STATE_PLAYING) {
+  if (info->appsrc == NULL) {
     // if(info->ch == 0) g_print("ch%d appsrc null return!\n", info->ch);
     gst_sample_unref(sample);
     return GST_FLOW_OK;
   }
 #endif
+
+  if (info->caps)
+    g_object_set(info->appsrc, "caps", info->caps, NULL);
 
   if (!buffer) {
     __LOG(LOG_CRIT, "[RTSP][%s:%d] ch%d buffer cannot get from sample", _FILE_,
@@ -508,7 +532,12 @@ static GstFlowReturn new_sample_handler(GstElement *sink, gpointer userData) {
       gst_buffer_copy_region(buffer, GST_BUFFER_COPY_MEMORY, 0, -1);
 
   // Push the buffer (takes ownership)
-  gst_app_src_push_buffer(GST_APP_SRC(info->appsrc), out_buffer);
+  GstFlowReturn push_ret =
+      gst_app_src_push_buffer(GST_APP_SRC(info->appsrc), out_buffer);
+  if (push_ret != GST_FLOW_OK) {
+    __LOG(LOG_WARNING, "[RTSP][%s:%d] ch%d appsrc push failed: %d", _FILE_,
+          __LINE__, info->ch, push_ret);
+  }
 
   gst_sample_unref(sample);
 
@@ -1116,9 +1145,7 @@ gboolean RtspServerBin::init(guint8 ch, gboolean crop_en) {
   g_object_set(re.capsfilter, "caps", caps, NULL);
   gst_caps_unref(caps);
 
-  GstCaps *caps2 =
-      gst_caps_new_simple("video/x-h264", "stream-format", G_TYPE_STRING, "avc",
-                          "profile", G_TYPE_STRING, "baseline", NULL);
+  GstCaps *caps2 = gst_caps_new_simple("video/x-h264", NULL);
   g_object_set(re.capsfilter2, "caps", caps2, NULL);
   gst_caps_unref(caps2);
 
@@ -1251,7 +1278,7 @@ gboolean RtspServerBin::init(guint8 ch, gboolean crop_en) {
                NULL);
   // g_object_set(re.convert, "videocrop-meta-enable", TRUE, NULL);
 
-  g_signal_connect(re.sink, "eos", G_CALLBACK(eos_callback), NULL);
+  g_signal_connect(re.sink, "eos", G_CALLBACK(eos_callback), &rtspServerData);
   g_signal_connect(re.sink, "new-sample", G_CALLBACK(new_sample_handler),
                    &rtspServerData);
   g_signal_connect(re.sink, "new-preroll", G_CALLBACK(new_preroll_handler),
@@ -1283,7 +1310,7 @@ gboolean RtspServerBin::init(guint8 ch, gboolean crop_en) {
   gchar *launch_str = g_strdup_printf(
       "( appsrc name=%s do-timestamp=1 is-live=1 format=3 ! queue "
       "max-size-buffers=%d max-size-time=0 max-size-bytes=0 leaky=2 ! "
-      "h264parse ! rtph264pay name=pay0 config-interval=-1 )",
+      "h264parse config-interval=-1 ! rtph264pay name=pay0 config-interval=-1 )",
       rtspServerData.appSrcName, q_max_buffers);
   // gchar *launch_str = g_strdup_printf("( appsrc name=%s do-timestamp=1
   // is-live=1 block=true ! queue max-size-buffers=5 leaky=2
