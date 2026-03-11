@@ -478,17 +478,24 @@ gchararray format_location(GstElement *sink, guint arg0, gpointer data) {
   gchar *date_str_ptr = NULL;
   gchar *ts_str_ptr = NULL;
   
-  // [I/O 최적화] 마커 파일을 기록할 대표 채널 선정 (최초 1회만 계산)
+  // [I/O 최적화] 마커 파일을 기록할 대표 채널 선정
+  // disconnect 시 활성 채널로 재선정
   static gint marker_channel = -1;
-  if (marker_channel == -1) {
+  if (marker_channel == -1 || ((g_link_disconnect_mask >> marker_channel) & 1)) {
+    gint new_marker = -1;
     for (int i = 0; i < MAX_CHANNEL; i++) {
-      if (cmdArg.cam[i].enable) {
-        marker_channel = i;
+      if (cmdArg.cam[i].enable && !((g_link_disconnect_mask >> i) & 1)) {
+        new_marker = i;
         break;
       }
     }
-    // 활성 채널이 없으면 0번으로 fallback
-    if (marker_channel == -1) marker_channel = 0;
+    if (new_marker != -1 && new_marker != marker_channel) {
+      __LOG(LOG_NOTICE, "[GST][%s:%d] marker_channel changed: ch%d -> ch%d (disconnect_mask=0x%x)",
+            _FILE_, __LINE__, marker_channel, new_marker, g_link_disconnect_mask);
+      marker_channel = new_marker;
+    } else if (new_marker == -1 && marker_channel == -1) {
+      marker_channel = 0;  // 모든 채널 disconnect 시 fallback
+    }
   }
 
   info->split_msec = sec * 1000 + usec / 1000;

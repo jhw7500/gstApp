@@ -210,6 +210,7 @@ extern GMainLoop *loop;
 extern volatile sig_atomic_t is_interrupted;
 extern CmdArg cmdArg;
 extern gboolean is_live;
+extern int g_link_disconnect_mask;
 
 void fault_setup (void);
 void addSignalHandler();

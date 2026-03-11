@@ -51,6 +51,9 @@ typedef struct _FragmentClosedEvent {
 static FragmentClosedEvent event_pool[MAX_EVENT_POOL_SIZE];
 static GMutex pool_mutex;
 
+// 드라이버 sysfs에서 읽은 disconnect 비트마스크 (bit0=ch0, bit1=ch1, bit2=ch2, bit3=ch3)
+int g_link_disconnect_mask = 0;
+
 static GAsyncQueue *fragment_closed_queue = NULL;
 static GThread *fragment_closed_thread = NULL;
 
@@ -354,6 +357,7 @@ static void splitCheck(gpointer data, guint8 startSec) {
   if (start_flag == 0) {
     for (i = 0; i < MAX_CHANNEL; i++) {
       if (!cmdArg.cam[i].enable) continue;
+      if ((g_link_disconnect_mask >> i) & 1) continue;  // disconnect 채널 skip
       if (muxSinkBin[i].getStartFlag() == 0) {
         g_date_time_unref(datetime);
         return;
@@ -383,9 +387,10 @@ static void splitCheck(gpointer data, guint8 startSec) {
 
     for (i = 0; i < MAX_CHANNEL; i++) {
       if (!cmdArg.cam[i].enable) continue;
+      if ((g_link_disconnect_mask >> i) & 1) continue;  // disconnect 채널 skip
       gint sm = muxSinkBin[i].getSplitMsec();
       active_count++;
-      
+
       // [리뷰 반영] Wrap-around를 고려한 오차 절대 거리 계산 (예: 59.9s = 0.1s 오차)
       gint drift_ms = sm;
       if (drift_ms > MAX_SNAPBACK_DRIFT_MS) {
@@ -411,10 +416,10 @@ static void splitCheck(gpointer data, guint8 startSec) {
     if (is_fully_aligned) {
       if (need_first_split) {
         for (i = 0; i < MAX_CHANNEL; i++) {
-          if (cmdArg.cam[i].enable) {
-            muxSinkBin[i].splitNow(NULL, FALSE);
-            muxSinkBin[i].setSplitMsec(DEFAULT_SPLIT_MAX_MSEC);
-          }
+          if (!cmdArg.cam[i].enable) continue;
+          if ((g_link_disconnect_mask >> i) & 1) continue;
+          muxSinkBin[i].splitNow(NULL, FALSE);
+          muxSinkBin[i].setSplitMsec(DEFAULT_SPLIT_MAX_MSEC);
         }
         need_first_split = FALSE;
       }
@@ -431,6 +436,7 @@ static void splitCheck(gpointer data, guint8 startSec) {
     gboolean do_force = TRUE;
     for (i = 0; i < MAX_CHANNEL; i++) {
       if (!cmdArg.cam[i].enable) continue;
+      if ((g_link_disconnect_mask >> i) & 1) continue;
       gint sm = muxSinkBin[i].getSplitMsec();
       if (sm >= SNAP_BACK_GRACE_PERIOD_MS && (diff * 1000 < cmdArg.split_max_msec)) {
         do_force = FALSE; break;
@@ -453,7 +459,9 @@ static void splitCheck(gpointer data, guint8 startSec) {
       
       if (cmdArg.dual_enc == FALSE && eBin != NULL) {
         for (i = 0; i < MAX_CHANNEL; i++) {
-          if (cmdArg.cam[i].enable) eBin[i].forceKeyframe();
+          if (!cmdArg.cam[i].enable) continue;
+          if ((g_link_disconnect_mask >> i) & 1) continue;
+          eBin[i].forceKeyframe();
         }
       }
 
@@ -462,10 +470,10 @@ static void splitCheck(gpointer data, guint8 startSec) {
       g_free(date_str);
 
       for (i = 0; i < MAX_CHANNEL; i++) {
-        if (cmdArg.cam[i].enable) {
-          muxSinkBin[i].splitNow(NULL, FALSE);
-          muxSinkBin[i].setSplitMsec(DEFAULT_SPLIT_MAX_MSEC); 
-        }
+        if (!cmdArg.cam[i].enable) continue;
+        if ((g_link_disconnect_mask >> i) & 1) continue;
+        muxSinkBin[i].splitNow(NULL, FALSE);
+        muxSinkBin[i].setSplitMsec(DEFAULT_SPLIT_MAX_MSEC);
       }
       target_min = (target_min + cmdArg.duration) % 60;
       last_split_ts = g_get_monotonic_time();
@@ -1069,6 +1077,34 @@ gint main(gint argc, gchar *argv[]) {
   }
 #endif
 
+  // delay 후 link_status sysfs 읽어 disconnect된 CSI의 watchdog 비활성화
+  {
+    const char *sysfs_link[] = {
+      "/sys/bus/i2c/devices/2-0048/link_status",  // CSI0 (i2c2, ch0/ch1)
+      "/sys/bus/i2c/devices/1-0048/link_status",  // CSI1 (i2c1, ch2/ch3)
+    };
+    for (int idx = 0; idx < MAX_VIDEO_SRC; idx++) {
+      if (videoBin[idx].be.bin == NULL) continue;
+      int fd = open(sysfs_link[idx], O_RDONLY);
+      if (fd < 0) continue;
+      char buf[16] = {0};
+      int n = read(fd, buf, sizeof(buf) - 1);
+      close(fd);
+      if (n <= 0) continue;
+      int link_val = atoi(buf);
+      if (link_val > 0) {
+        // CSI0(idx=0) → ch0/ch1 (bit0,bit1), CSI1(idx=1) → ch2/ch3 (bit2,bit3)
+        g_link_disconnect_mask |= (0x3 << (idx * 2));
+        if (videoBin[idx].be.watchdog != NULL) {
+          __LOG(LOG_WARNING,
+                "[GST][%s:%d] CSI%d link_status=%d (disconnect)",
+                _FILE_, __LINE__, idx, link_val);
+          //g_object_set(videoBin[idx].be.watchdog, "timeout", 0, NULL);
+        }
+      }
+    }
+  }
+
   sd_mount_flag = check_sd_mount_flag();
   if (sd_mount_flag == 0) {
     cmdArg.mntDir = FALLBACKDIR;
@@ -1122,10 +1158,10 @@ gint main(gint argc, gchar *argv[]) {
     __LOG(LOG_INFO, "[GST][%s:%d] mainLoop start", _FILE_, __LINE__);
     g_main_loop_run(loop);
   }
-  __LOG(LOG_INFO, "[GST][%s:%d] Main loop exit", _FILE_, __LINE__);
+  //__LOG(LOG_INFO, "[GST][%s:%d] Main loop exit", _FILE_, __LINE__);
 
 main_end:
-  __LOG(LOG_NOTICE, "[GST][%s:%d] main loop end", _FILE_, __LINE__);
+  __LOG(LOG_INFO, "[GST][%s:%d] main loop end", _FILE_, __LINE__);
 
   stop_fragment_closed_worker();
 
@@ -1134,7 +1170,7 @@ main_end:
 
   /* 1) Terminal thread 종료 (stdin poll 중지) */
   if (terminalThread) {
-    __LOG(LOG_NOTICE, "[GST][%s:%d] joining terminal thread...", __FILE__, __LINE__);
+    __LOG(LOG_INFO, "[GST][%s:%d] joining terminal thread...", __FILE__, __LINE__);
     g_thread_join(terminalThread);
     g_thread_unref(terminalThread);
   }
@@ -1143,25 +1179,22 @@ main_end:
   }
 
   /* 2) RTSP 서버 중지 (클라이언트 세션 정리) */
-  __LOG(LOG_NOTICE, "[GST][%s:%d] stopping RTSP server...", __FILE__, __LINE__);
+  __LOG(LOG_INFO, "[GST][%s:%d] stopping RTSP server...", __FILE__, __LINE__);
   rtspServerStop();
-  __LOG(LOG_NOTICE, "[GST][%s:%d] RTSP server stopped", __FILE__, __LINE__);
 
   /* 3) Pipeline EOS 전송 후 타임아웃 대기 */
-  __LOG(LOG_NOTICE, "[GST][%s:%d] sending EOS to pipeline...", _FILE_,
+  __LOG(LOG_INFO, "[GST][%s:%d] sending EOS to pipeline...", _FILE_,
         __LINE__);
   gst_element_send_event(pipeline, gst_event_new_eos());
 
   /* 3) Pipeline NULL 전환 (3초 타임아웃) */
-  __LOG(LOG_NOTICE, "[GST][%s:%d] pipeline state set NULL...", _FILE_,
-        __LINE__);
   gst_element_set_state(pipeline, GST_STATE_NULL);
   {
     GstState state;
     GstStateChangeReturn ret;
     ret = gst_element_get_state(pipeline, &state, NULL, 3 * GST_SECOND);
     if (ret == GST_STATE_CHANGE_SUCCESS) {
-      __LOG(LOG_NOTICE, "[GST][%s:%d] Pipeline unset successfully", _FILE_,
+      __LOG(LOG_INFO, "[GST][%s:%d] Pipeline unset successfully", _FILE_,
             __LINE__);
     } else {
       __LOG(LOG_CRIT, "[GST][%s:%d] Pipeline state change timeout, forcing exit",
@@ -1172,13 +1205,12 @@ main_end:
   if (pipeline) {
     __LOG(LOG_NOTICE, "[GST][%s:%d] unreferencing pipeline...", __FILE__, __LINE__);
     gst_object_unref(pipeline);
-    __LOG(LOG_NOTICE, "[GST][%s:%d] pipeline unreferenced", __FILE__, __LINE__);
+    __LOG(LOG_CRIT, "[GST][%s:%d] pipeline unreferenced", __FILE__, __LINE__);
   }
 
   if (cmdArg.tcp_en) {
-    __LOG(LOG_NOTICE, "[GST][%s:%d] destroying TCP server...", __FILE__, __LINE__);
+    __LOG(LOG_INFO, "[GST][%s:%d] destroying TCP server...", __FILE__, __LINE__);
     tcpServer->destroy();
-    __LOG(LOG_NOTICE, "[GST][%s:%d] TCP server destroyed", __FILE__, __LINE__);
   }
 
   if (cmdArg.ipc_en) {

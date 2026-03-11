@@ -790,7 +790,7 @@ gint ParserClass::check_arg() {
         arg.height, arg.main_fps[CSI_1], arg.main_fps[CSI_2],
         arg.wdt_timeout_long, arg.wdt_timeout_short);
 
-  __LOG(LOG_NOTICE,
+  __LOG(LOG_INFO,
         "[%s][%s:%d] v4l_map subdev(csi0=%d,csi1=%d) video(csi0=%d,csi1=%d)",
         LOG_KEY, _FILE_, __LINE__, arg.v4l_subdev_csi0, arg.v4l_subdev_csi1,
         arg.v4l_video_csi0, arg.v4l_video_csi1);
@@ -805,7 +805,7 @@ gint ParserClass::check_arg() {
         arg.ipc_en, arg.ipc_mid);
 
   for (i = 0; i < MAX_CHANNEL; i++) {
-    __LOG(LOG_NOTICE,
+    __LOG(LOG_INFO,
           "[%s][%s:%d] ch%d en:%s, vflip:%s, hflip:%s, bps:%d,%d, ae_on:%d, "
           "ae_gain:%d, exp_time:%d",
           LOG_KEY, _FILE_, __LINE__, i, arg.cam[i].enable ? "true" : "false",
@@ -935,7 +935,7 @@ gint ParserClass::check_arg() {
     return -1;
   }
 
-  __LOG(LOG_NOTICE, "[%s][%s:%d] total_fps : %d", LOG_KEY, _FILE_, __LINE__,
+  __LOG(LOG_INFO, "[%s][%s:%d] total_fps : %d", LOG_KEY, _FILE_, __LINE__,
         total_fps);
 
   return 0;

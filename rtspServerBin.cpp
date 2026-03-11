@@ -422,7 +422,7 @@ media_configure_out:
 static void eos_callback(GstAppSink *appsink, gpointer user_data) {
   RtspServerData *info = (RtspServerData *)user_data;
 
-  __LOG(LOG_NOTICE, "[GST][%s:%d] ch%d %s", _FILE_, __LINE__, info->ch,
+  __LOG(LOG_INFO, "[GST][%s:%d] ch%d %s", _FILE_, __LINE__, info->ch,
         __FUNCTION__);
   is_interrupted = TRUE;
 }
