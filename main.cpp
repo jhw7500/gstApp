@@ -644,9 +644,7 @@ gboolean config_camera(gpointer user_data) {
           __LOG(LOG_ERR, "[CFG][%s:%d] ch%d rotation fail", __FILE__, __LINE__,
       ch_num0);
       */
-      if (val[ch_num0] == 0)
-        __LOG(LOG_ERR, "[CFG][%s:%d] swap : ch%d enable but ch%d display",
-              _FILE_, __LINE__, ch_num0, ch_num1);
+      //if (val[ch_num0] == 0) __LOG(LOG_ERR, "[CFG][%s:%d] swap : ch%d enable but ch%d display", _FILE_, __LINE__, ch_num0, ch_num1);
 
       // NOTE: AE/Gain/Exposure now controlled via V4L2 extra-controls in
       // videoBin.cpp Keeping rotation here as V4L2 doesn't have rotation
@@ -664,9 +662,7 @@ gboolean config_camera(gpointer user_data) {
           __LOG(LOG_ERR, "[CFG][%s:%d] ch%d rotation fail", __FILE__, __LINE__,
       ch_num1);
       */
-      if (val[ch_num1] == 0)
-        __LOG(LOG_ERR, "[CFG][%s:%d] swap : ch%d enable but ch%d display",
-              _FILE_, __LINE__, ch_num1, ch_num0);
+      //if (val[ch_num1] == 0) __LOG(LOG_ERR, "[CFG][%s:%d] swap : ch%d enable but ch%d display", _FILE_, __LINE__, ch_num1, ch_num0);
 
       // NOTE: AE/Gain/Exposure now controlled via V4L2 extra-controls in
       // videoBin.cpp Keeping rotation here as V4L2 doesn't have rotation
