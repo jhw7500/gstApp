@@ -27,7 +27,7 @@
 #include <unistd.h>
 #include <execinfo.h> // For backtrace
 
-#define APP_VERSION "1.3"
+#define APP_VERSION "1.5"
 #define MAX_SNAPBACK_DRIFT_MS 30000
 #define MIN_SPLIT_INTERVAL_SEC 5
 #define SNAP_BACK_GRACE_PERIOD_MS 58000
@@ -705,7 +705,7 @@ gint main(gint argc, gchar *argv[]) {
   getPasswdWithAES(&parser->arg);
   // if(!strcmp(parser->arg.rtsp_passwd, DEFAULT_RTSP_PASSWD) == 0)
 
-  __LOG(LOG_INFO,
+  __LOG(LOG_NOTICE,
         "[GST][%s:%d] %s version : %s linked against Gstreamer %d.%d.%d %s",
         __FILE__, __LINE__, parser->arg.appname, APP_VERSION, major, minor,
         micro, nano_str);
