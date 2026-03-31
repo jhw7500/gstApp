@@ -34,10 +34,8 @@
 #define V4L2_CID_VFLIP_CH0 (V4L2_CID_USER_BASE + 0x100A)
 #define V4L2_CID_VFLIP_CH1 (V4L2_CID_USER_BASE + 0x100B)
 
-/* Exposure time controls (custom): ext_time + ext_time_chX */
+/* Exposure time control (custom): shared across both channels per CSI */
 #define V4L2_CID_EXT_TIME (V4L2_CID_USER_BASE + 0x1015)
-#define V4L2_CID_EXT_TIME_CH0 (V4L2_CID_USER_BASE + 0x1013)
-#define V4L2_CID_EXT_TIME_CH1 (V4L2_CID_USER_BASE + 0x1014)
 
 static void prepare_format(GstElement *object, gint arg0, GstCaps *caps,
                            gpointer data) {
@@ -459,6 +457,7 @@ gboolean VideoBin::init(guint8 csiNum) {
   gboolean ch1_enabled = cmdArg.cam[ch1].enable;
   gboolean dual_mode = ch0_enabled && ch1_enabled;
 
+#if 1
   // Exposure time is shared (global) across both channels
   if (ch0_enabled || ch1_enabled) {
     // Use ext_time from i2c config (shared between channels)
@@ -477,10 +476,6 @@ gboolean VideoBin::init(guint8 csiNum) {
     set_v4l2_subdev_control(csiNum, V4L2_CID_EXPOSURE_AUTO_CH0, ae_on_ch0);
     set_v4l2_subdev_control(csiNum, V4L2_CID_AUTOGAIN_CH0,
                             cmdArg.cam[ch0].ae_on ? 1 : 0);
-    if (!cmdArg.cam[ch0].ae_on) {
-      set_v4l2_subdev_control(csiNum, V4L2_CID_EXT_TIME_CH0,
-                              cmdArg.cam[ch0].exp_time);
-    }
     set_v4l2_subdev_control(csiNum, V4L2_CID_GAIN_CH0, cmdArg.cam[ch0].ae_gain);
 
     gint awb_ch0 = (g_strcmp0(cmdArg.cam[ch0].awb, "auto") == 0) ? 1 : 0;
@@ -502,10 +497,6 @@ gboolean VideoBin::init(guint8 csiNum) {
     set_v4l2_subdev_control(csiNum, V4L2_CID_EXPOSURE_AUTO_CH1, ae_on_ch1);
     set_v4l2_subdev_control(csiNum, V4L2_CID_AUTOGAIN_CH1,
                             cmdArg.cam[ch1].ae_on ? 1 : 0);
-    if (!cmdArg.cam[ch1].ae_on) {
-      set_v4l2_subdev_control(csiNum, V4L2_CID_EXT_TIME_CH1,
-                              cmdArg.cam[ch1].exp_time);
-    }
     set_v4l2_subdev_control(csiNum, V4L2_CID_GAIN_CH1, cmdArg.cam[ch1].ae_gain);
 
     gint awb_ch1 = (g_strcmp0(cmdArg.cam[ch1].awb, "auto") == 0) ? 1 : 0;
@@ -541,18 +532,12 @@ gboolean VideoBin::init(guint8 csiNum) {
         (active_ch % 2 == 0) ? V4L2_CID_HFLIP_CH0 : V4L2_CID_HFLIP_CH1;
     unsigned int vflip_id =
         (active_ch % 2 == 0) ? V4L2_CID_VFLIP_CH0 : V4L2_CID_VFLIP_CH1;
-    unsigned int ext_time_ch_id =
-        (active_ch % 2 == 0) ? V4L2_CID_EXT_TIME_CH0 : V4L2_CID_EXT_TIME_CH1;
-
     __LOG(LOG_NOTICE, "[GST][%s:%d] Single-channel mode for csi%d (ch%d)",
           _FILE_, __LINE__, csiNum, active_ch);
 
     set_v4l2_subdev_control(csiNum, V4L2_CID_EXT_TIME, ext_time);
     set_v4l2_subdev_control(csiNum, ae_ctrl_id, ae_on);
     set_v4l2_subdev_control(csiNum, autogain_id, cam_cfg->ae_on ? 1 : 0);
-    if (!cam_cfg->ae_on) {
-      set_v4l2_subdev_control(csiNum, ext_time_ch_id, ext_time);
-    }
     set_v4l2_subdev_control(csiNum, gain_id, cam_cfg->ae_gain);
 
     gint awb_auto = (g_strcmp0(cam_cfg->awb, "auto") == 0) ? 1 : 0;
@@ -567,7 +552,7 @@ gboolean VideoBin::init(guint8 csiNum) {
           _FILE_, __LINE__, csiNum, active_ch, ae_on, cam_cfg->ae_gain,
           cam_cfg->awb, cam_cfg->hflip, cam_cfg->vflip);
   }
-
+#endif
   if (cmdArg.levelMode == MODE_TEST) {
     // GstPad *srcpad = gst_element_get_static_pad(be.src, "src");
     // gst_pad_add_probe(srcpad, GST_PAD_PROBE_TYPE_BUFFER,

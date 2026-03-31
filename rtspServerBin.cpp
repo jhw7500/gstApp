@@ -278,6 +278,16 @@ static gboolean remove_sessions (GstRTSPServer * server)
 }
 #endif
 
+static void media_unprepared_cb(GstRTSPMedia *media, gpointer user_data) {
+  RtspServerData *info = (RtspServerData *)user_data;
+  __LOG(LOG_NOTICE, "[RTSP][%s:%d] ch%d media unprepared — clearing appsrc",
+        _FILE_, __LINE__, info->ch);
+  if (info->appsrc) {
+    gst_object_unref(info->appsrc);
+    info->appsrc = NULL;
+  }
+}
+
 /* signal callback when the media is prepared for streaming. We can get the
  * session manager for each of the streams and connect to some signals. */
 static void media_prepared_cb(GstRTSPMedia *media) {
@@ -385,6 +395,7 @@ media_configure_out:
   gst_object_unref(element);
 
   g_signal_connect(media, "prepared", (GCallback)media_prepared_cb, factory);
+  g_signal_connect(media, "unprepared", (GCallback)media_unprepared_cb, info);
   if (info->appsrc)
     g_signal_connect(info->appsrc, "enough-data", (GCallback)enough_data,
                      info);
