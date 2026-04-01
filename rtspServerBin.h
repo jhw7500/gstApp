@@ -20,6 +20,8 @@
 
 guint rtspServerStart();
 void rtspServerStop();
+void rtspServerCloseAllSessions();
+void rtspServerSendEosToAllAppsrc();
 
 typedef struct _RtspServerData
 {

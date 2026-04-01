@@ -11,6 +11,7 @@
  */
 
 #include "util.h"
+#include "rtspServerBin.h"
 #include <glib-unix.h>
 #include <fcntl.h>
 #include <sys/stat.h>
@@ -52,15 +53,25 @@ gboolean ch_en_array[MAX_CHANNEL] = { TRUE, TRUE, TRUE, TRUE };
 static void fault_restore (void);
 static void fault_spin (void);
 
-static void term_handler(int signum) {
+static gboolean term_handler(gpointer user_data) {
+    GstElement *pipe = (GstElement *)user_data;
     if (is_interrupted) {
       __LOG(LOG_CRIT, "[CFG][%s:%d] Received SIGTERM again, forcing exit", _FILE_, __LINE__);
       _exit(1);
     }
-    __LOG(LOG_CRIT, "[CFG][%s:%d] Received SIGTERM, sending EOS to pipeline...", _FILE_, __LINE__);
+    __LOG(LOG_CRIT, "[CFG][%s:%d] Received SIGTERM, closing RTSP first...", _FILE_, __LINE__);
     is_interrupted = TRUE;
-    gst_element_send_event(pipeline, gst_event_new_eos());
+
+    /* 1) 모든 RTSP appsrc에 EOS → 내부 media 파이프라인 즉시 종료 */
+    rtspServerSendEosToAllAppsrc();
+    /* 2) RTSP 세션 강제 종료 */
+    rtspServerCloseAllSessions();
+
+    gst_element_send_event(pipe, gst_event_new_eos());
     g_main_loop_quit(loop);
+
+    /* 핸들러 유지 — 두 번째 SIGTERM 시 _exit(1) 강제 종료 가능 */
+    return G_SOURCE_CONTINUE;
 }
 
 static void kill_handler(int signum) {
@@ -219,7 +230,7 @@ void removeSignalHandler()
   //__LOG(LOG_NOTICE, "[GST][%s:%d] %s", _FILE_, __LINE__, __FUNCTION__);
   if (signal_watch_intr_id > 0) g_source_remove(signal_watch_intr_id);
   if (signal_watch_hup_id > 0) g_source_remove(signal_watch_hup_id);
-  //if (signal_watch_term_id > 0) g_source_remove(signal_watch_term_id);
+  if (signal_watch_term_id > 0) g_source_remove(signal_watch_term_id);
   //if (signal_watch_kill_id > 0) g_source_remove(signal_watch_kill_id);
 }
 
@@ -228,8 +239,8 @@ void attachInterruptHandlers()
   //signal(SIGUSR1, ipcHandler);
   //signal(SIGINT, sigHandler);
   signal(SIGKILL, kill_handler);
-  signal(SIGTERM, term_handler);
-  
+  // SIGTERM은 g_unix_signal_add()로만 등록 (term_handler에서 RTSP 세션 정리 필요)
+
   // [추가] Segfault 발생 시 로그 및 백트레이스 출력
   extern void handle_sigsegv(int sig);
   signal(SIGSEGV, handle_sigsegv);

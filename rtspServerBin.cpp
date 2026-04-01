@@ -33,6 +33,11 @@ GstRTSPServer *rtspServer = NULL;
 guint cleanSesson_id = 0;
 guint removeSesson_id = 0;
 
+/* 종료 시 appsrc에 EOS를 보내기 위한 전역 추적 배열 */
+#define MAX_RTSP_APPSRC (MAX_CHANNEL + 1)
+static GstElement *g_rtsp_appsrc[MAX_RTSP_APPSRC] = { NULL };
+static guint8 g_rtsp_appsrc_count = 0;
+
 static gint clamp_int(gint value, gint min_value, gint max_value) {
   if (value < min_value)
     return min_value;
@@ -282,6 +287,9 @@ static void media_unprepared_cb(GstRTSPMedia *media, gpointer user_data) {
   RtspServerData *info = (RtspServerData *)user_data;
   __LOG(LOG_NOTICE, "[RTSP][%s:%d] ch%d media unprepared — clearing appsrc",
         _FILE_, __LINE__, info->ch);
+  /* 전역 추적 배열에서 제거 */
+  if (info->ch < MAX_RTSP_APPSRC)
+    g_rtsp_appsrc[info->ch] = NULL;
   if (info->appsrc) {
     gst_object_unref(info->appsrc);
     info->appsrc = NULL;
@@ -343,6 +351,12 @@ static void media_configure(GstRTSPMediaFactory *factory, GstRTSPMedia *media,
   if (info->appsrc == NULL) {
     __LOG(LOG_ERR, "[GST][%s:%d] appsrc is null", _FILE_, __LINE__);
     goto media_configure_out;
+  }
+  /* 전역 추적 배열에 등록 (종료 시 EOS 전송용) */
+  if (info->ch < MAX_RTSP_APPSRC) {
+    g_rtsp_appsrc[info->ch] = info->appsrc;
+    if (info->ch >= g_rtsp_appsrc_count)
+      g_rtsp_appsrc_count = info->ch + 1;
   }
   if (info->caps)
     g_object_set(info->appsrc, "caps", info->caps, NULL);
@@ -483,7 +497,7 @@ static GstFlowReturn new_sample_handler(GstElement *sink, gpointer userData) {
 #endif
 
 #if 1
-  if (info->appsrc == NULL) {
+  if (info->appsrc == NULL || is_interrupted) {
     // if(info->ch == 0) g_print("ch%d appsrc null return!\n", info->ch);
     gst_sample_unref(sample);
     return GST_FLOW_OK;
@@ -1368,10 +1382,43 @@ gboolean RtspServerBin::init(guint8 ch, gboolean crop_en) {
 #endif
 
 #if 1
+void rtspServerSendEosToAllAppsrc() {
+  for (guint8 i = 0; i < g_rtsp_appsrc_count; i++) {
+    if (g_rtsp_appsrc[i]) {
+      __LOG(LOG_INFO, "[RTSP][%s:%d] sending EOS to appsrc ch%d", _FILE_, __LINE__, i);
+      gst_app_src_end_of_stream(GST_APP_SRC(g_rtsp_appsrc[i]));
+      g_rtsp_appsrc[i] = NULL;
+    }
+  }
+  g_rtsp_appsrc_count = 0;
+}
+
+static GstRTSPFilterResult
+remove_all_sessions_cb(GstRTSPSessionPool *pool, GstRTSPSession *session, gpointer user_data) {
+  (void)pool; (void)session; (void)user_data;
+  return GST_RTSP_FILTER_REMOVE;
+}
+
+void rtspServerCloseAllSessions() {
+  if (!rtspServer)
+    return;
+
+  GstRTSPSessionPool *pool = gst_rtsp_server_get_session_pool(rtspServer);
+  if (!pool)
+    return;
+
+  GList *removed = gst_rtsp_session_pool_filter(pool, remove_all_sessions_cb, NULL);
+  guint count = g_list_length(removed);
+  g_list_free_full(removed, g_object_unref);
+  __LOG(LOG_INFO, "[RTSP][%s:%d] force-closed %u RTSP sessions", _FILE_, __LINE__, count);
+  g_object_unref(pool);
+}
+
 void rtspServerStop() {
   if (rtspServer) {
     __LOG(LOG_INFO, "[RTSP][%s:%d] %s", _FILE_, __LINE__, __FUNCTION__);
     g_object_unref(rtspServer);
+    rtspServer = NULL;
   }
 
   if (cleanSesson_id)
