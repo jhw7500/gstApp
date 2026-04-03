@@ -33,8 +33,8 @@
 #define MIN_SPLIT_INTERVAL_SEC 5
 #define SNAP_BACK_GRACE_PERIOD_MS 58000
 #define MILLISECONDS_IN_MINUTE 60000
-#define DEFAULT_CAM_STATE_JSON_PATH "/tmp/cam_state.json"
-#define CAM_STATE_RECORDING_ACTUAL_KEY "start_video_time_actual"
+#define CAM_STATE_RECORDING_DIR "/tmp/cam_state/recording"
+#define CAM_STATE_RECORDING_ACTUAL_FILE CAM_STATE_RECORDING_DIR "/start_video_time_actual"
 
 #define SEGFAULT_DEBUG
 #define RECORDBIN_ENABLE
@@ -119,59 +119,23 @@ static void mirrorStartVideoTimeActual(const gchar *value) {
   if (value == NULL || value[0] == '\0')
     return;
 
-  json_object *root = json_object_from_file(DEFAULT_CAM_STATE_JSON_PATH);
-  if (root == NULL || json_object_get_type(root) != json_type_object) {
-    if (root)
-      json_object_put(root);
-    __LOG(LOG_ERR, "[GST][%s:%d] cam_state.json open failed: %s", _FILE_, __LINE__,
-          DEFAULT_CAM_STATE_JSON_PATH);
-    return;
-  }
-
-  json_object *recording = NULL;
-  if (!json_object_object_get_ex(root, "recording", &recording) ||
-      recording == NULL || json_object_get_type(recording) != json_type_object) {
-    recording = json_object_new_object();
-    json_object_object_add(root, "recording", recording);
-  }
-
-  json_object *actual = NULL;
-  if (json_object_object_get_ex(recording, CAM_STATE_RECORDING_ACTUAL_KEY, &actual) &&
-      actual != NULL && json_object_get_type(actual) == json_type_string) {
-    const char *existing = json_object_get_string(actual);
-    if (existing != NULL && existing[0] != '\0') {
-      json_object_put(root);
+  /* 이미 값이 있으면 덮어쓰지 않음 (첫 프래그먼트만 기록) */
+  gchar *existing = NULL;
+  if (g_file_get_contents(CAM_STATE_RECORDING_ACTUAL_FILE, &existing, NULL, NULL)) {
+    gboolean has_value = (existing[0] != '\0');
+    g_free(existing);
+    if (has_value)
       return;
-    }
   }
 
-  json_object_object_del(recording, CAM_STATE_RECORDING_ACTUAL_KEY);
-  json_object_object_add(recording, CAM_STATE_RECORDING_ACTUAL_KEY,
-                         json_object_new_string(value));
-
-  const char *serialized = json_object_to_json_string_ext(root, JSON_C_TO_STRING_PRETTY);
-  gchar *tmp_path = g_strdup_printf("%s.tmp.%d", DEFAULT_CAM_STATE_JSON_PATH, getpid());
-  if (tmp_path == NULL) {
-    __LOG(LOG_ERR, "[GST][%s:%d] tmp path alloc failed for cam_state mirror", _FILE_, __LINE__);
-    json_object_put(root);
-    return;
+  /* 파일 기반 cam_state: 단순 파일 쓰기 */
+  GError *err = NULL;
+  if (!g_file_set_contents(CAM_STATE_RECORDING_ACTUAL_FILE, value, -1, &err)) {
+    __LOG(LOG_ERR, "[GST][%s:%d] cam_state actual write failed: %s",
+          _FILE_, __LINE__, err ? err->message : "unknown");
+    if (err)
+      g_error_free(err);
   }
-
-  if (safe_write_file(tmp_path, serialized) < 0) {
-    __LOG(LOG_ERR, "[GST][%s:%d] cam_state tmp write failed: %s", _FILE_, __LINE__, tmp_path);
-    g_free(tmp_path);
-    json_object_put(root);
-    return;
-  }
-
-  if (rename(tmp_path, DEFAULT_CAM_STATE_JSON_PATH) < 0) {
-    __LOG(LOG_ERR, "[GST][%s:%d] cam_state rename failed: %s errno=%d", _FILE_, __LINE__,
-          DEFAULT_CAM_STATE_JSON_PATH, errno);
-    unlink(tmp_path);
-  }
-
-  g_free(tmp_path);
-  json_object_put(root);
 }
 // MuxSinkBin muxSinkBin[MAX_CHANNEL];
 gboolean config_camera(gpointer user_data);
