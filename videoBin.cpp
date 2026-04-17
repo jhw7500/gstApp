@@ -488,9 +488,11 @@ gboolean VideoBin::init(guint8 csiNum) {
 
     __LOG(
         LOG_NOTICE,
-        "[GST][%s:%d] CH0 controls: ae_on=%d gain=%d awb=%d hflip=%d vflip=%d",
-        _FILE_, __LINE__, ae_on_ch0, cmdArg.cam[ch0].ae_gain, awb_ch0,
-        cmdArg.cam[ch0].hflip, cmdArg.cam[ch0].vflip);
+        "[GST][%s:%d] CH0 controls: ae_on=%d gain=%d exp_time=%u awb=%d "
+        "hflip=%d vflip=%d",
+        _FILE_, __LINE__, ae_on_ch0, cmdArg.cam[ch0].ae_gain,
+        cmdArg.cam[ch0].exp_time, awb_ch0, cmdArg.cam[ch0].hflip,
+        cmdArg.cam[ch0].vflip);
 
     // Channel 1 settings
     int ae_on_ch1 = cmdArg.cam[ch1].ae_on ? 1 : 0; // 1=auto, 0=manual
@@ -509,9 +511,11 @@ gboolean VideoBin::init(guint8 csiNum) {
 
     __LOG(
         LOG_NOTICE,
-        "[GST][%s:%d] CH1 controls: ae_on=%d gain=%d awb=%d hflip=%d vflip=%d",
-        _FILE_, __LINE__, ae_on_ch1, cmdArg.cam[ch1].ae_gain, awb_ch1,
-        cmdArg.cam[ch1].hflip, cmdArg.cam[ch1].vflip);
+        "[GST][%s:%d] CH1 controls: ae_on=%d gain=%d exp_time=%u awb=%d "
+        "hflip=%d vflip=%d",
+        _FILE_, __LINE__, ae_on_ch1, cmdArg.cam[ch1].ae_gain,
+        cmdArg.cam[ch1].exp_time, awb_ch1, cmdArg.cam[ch1].hflip,
+        cmdArg.cam[ch1].vflip);
   } else {
     // Single-channel mode: use per-channel custom controls on the active
     // channel
@@ -548,9 +552,9 @@ gboolean VideoBin::init(guint8 csiNum) {
 
     __LOG(LOG_NOTICE,
           "[GST][%s:%d] V4L2 subdev controls set: csi%d ch%d ae_on=%d gain=%d "
-          "awb=%s hflip=%d vflip=%d",
+          "exp_time=%u awb=%s hflip=%d vflip=%d",
           _FILE_, __LINE__, csiNum, active_ch, ae_on, cam_cfg->ae_gain,
-          cam_cfg->awb, cam_cfg->hflip, cam_cfg->vflip);
+          ext_time, cam_cfg->awb, cam_cfg->hflip, cam_cfg->vflip);
   }
 #endif
   if (cmdArg.levelMode == MODE_TEST) {
