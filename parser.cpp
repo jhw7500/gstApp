@@ -477,6 +477,12 @@ gint ParserClass::json_parser(const gchar *path, const gchar *header) {
       json_object_get_value(vobj, "bps", &arg.cam[i].bps);
       json_object_get_value(vobj, "ae_on", &arg.cam[i].ae_on);
       json_object_get_value(vobj, "ae_gain", &arg.cam[i].ae_gain);
+      /* Optional: AWB preset name. Falls back to DEFAULT_AWB when absent. */
+      {
+        json_object *awb_obj = json_object_object_get(vobj, "awb");
+        if (awb_obj && json_object_get_type(awb_obj) == json_type_string)
+          arg.cam[i].awb = json_object_get_string(awb_obj);
+      }
 
       arg.ch_enable |= (arg.cam[i].enable << i);
       arg.ch_rotate |= (arg.cam[i].hflip << (i * 2));

@@ -79,6 +79,27 @@ static void log_v4l_subdev_name_once(int subdev_idx) {
   fclose(fp);
 }
 
+/*
+ * Map AWB preset name (JSON string) to AP1302 AWB_CTRL MODE nibble (0x0~0xf).
+ * Unknown/NULL values default to "auto" to match DEFAULT_AWB semantics.
+ * See max9296.c AP1302_AWB_MODE_* definitions.
+ */
+static gint awb_str_to_mode(const gchar *s) {
+  if (!s)                              return 0xf;
+  if (g_strcmp0(s, "auto")    == 0)    return 0xf;
+  if (g_strcmp0(s, "off")     == 0)    return 0x0;
+  if (g_strcmp0(s, "manual")  == 0)    return 0x0;
+  if (g_strcmp0(s, "horizon") == 0)    return 0x1;
+  if (g_strcmp0(s, "a")       == 0)    return 0x2;
+  if (g_strcmp0(s, "cwf")     == 0)    return 0x3;
+  if (g_strcmp0(s, "d50")     == 0)    return 0x4;
+  if (g_strcmp0(s, "d65")     == 0)    return 0x5;
+  if (g_strcmp0(s, "d75")     == 0)    return 0x6;
+  if (g_strcmp0(s, "temp")    == 0)    return 0x7;
+  if (g_strcmp0(s, "measure") == 0)    return 0x8;
+  return 0xf;
+}
+
 static int set_v4l2_subdev_control(int csiNum, unsigned int ctrl_id,
                                    int value) {
   char dev_path[32];
@@ -478,7 +499,7 @@ gboolean VideoBin::init(guint8 csiNum) {
                             cmdArg.cam[ch0].ae_on ? 1 : 0);
     set_v4l2_subdev_control(csiNum, V4L2_CID_GAIN_CH0, cmdArg.cam[ch0].ae_gain);
 
-    gint awb_ch0 = (g_strcmp0(cmdArg.cam[ch0].awb, "auto") == 0) ? 1 : 0;
+    gint awb_ch0 = awb_str_to_mode(cmdArg.cam[ch0].awb);
     set_v4l2_subdev_control(csiNum, V4L2_CID_AUTO_WHITE_BALANCE_CH0, awb_ch0);
 
     set_v4l2_subdev_control(csiNum, V4L2_CID_HFLIP_CH0,
@@ -488,11 +509,11 @@ gboolean VideoBin::init(guint8 csiNum) {
 
     __LOG(
         LOG_NOTICE,
-        "[GST][%s:%d] CH0 controls: ae_on=%d gain=%d exp_time=%u awb=%d "
-        "hflip=%d vflip=%d",
-        _FILE_, __LINE__, ae_on_ch0, cmdArg.cam[ch0].ae_gain,
-        cmdArg.cam[ch0].exp_time, awb_ch0, cmdArg.cam[ch0].hflip,
-        cmdArg.cam[ch0].vflip);
+        "[GST][%s:%d] ch%d controls (dual, csi%d CH0 slot): ae_on=%d gain=%d "
+        "exp_time=%u awb=%s(0x%x) hflip=%d vflip=%d",
+        _FILE_, __LINE__, ch0, csiNum, ae_on_ch0, cmdArg.cam[ch0].ae_gain,
+        cmdArg.cam[ch0].exp_time, cmdArg.cam[ch0].awb, awb_ch0,
+        cmdArg.cam[ch0].hflip, cmdArg.cam[ch0].vflip);
 
     // Channel 1 settings
     int ae_on_ch1 = cmdArg.cam[ch1].ae_on ? 1 : 0; // 1=auto, 0=manual
@@ -501,7 +522,7 @@ gboolean VideoBin::init(guint8 csiNum) {
                             cmdArg.cam[ch1].ae_on ? 1 : 0);
     set_v4l2_subdev_control(csiNum, V4L2_CID_GAIN_CH1, cmdArg.cam[ch1].ae_gain);
 
-    gint awb_ch1 = (g_strcmp0(cmdArg.cam[ch1].awb, "auto") == 0) ? 1 : 0;
+    gint awb_ch1 = awb_str_to_mode(cmdArg.cam[ch1].awb);
     set_v4l2_subdev_control(csiNum, V4L2_CID_AUTO_WHITE_BALANCE_CH1, awb_ch1);
 
     set_v4l2_subdev_control(csiNum, V4L2_CID_HFLIP_CH1,
@@ -511,11 +532,11 @@ gboolean VideoBin::init(guint8 csiNum) {
 
     __LOG(
         LOG_NOTICE,
-        "[GST][%s:%d] CH1 controls: ae_on=%d gain=%d exp_time=%u awb=%d "
-        "hflip=%d vflip=%d",
-        _FILE_, __LINE__, ae_on_ch1, cmdArg.cam[ch1].ae_gain,
-        cmdArg.cam[ch1].exp_time, awb_ch1, cmdArg.cam[ch1].hflip,
-        cmdArg.cam[ch1].vflip);
+        "[GST][%s:%d] ch%d controls (dual, csi%d CH1 slot): ae_on=%d gain=%d "
+        "exp_time=%u awb=%s(0x%x) hflip=%d vflip=%d",
+        _FILE_, __LINE__, ch1, csiNum, ae_on_ch1, cmdArg.cam[ch1].ae_gain,
+        cmdArg.cam[ch1].exp_time, cmdArg.cam[ch1].awb, awb_ch1,
+        cmdArg.cam[ch1].hflip, cmdArg.cam[ch1].vflip);
   } else {
     // Single-channel mode: use per-channel custom controls on the active
     // channel
@@ -523,19 +544,15 @@ gboolean VideoBin::init(guint8 csiNum) {
     guint8 active_ch = ch0_enabled ? ch0 : ch1;
     guint32 ext_time = cam_cfg->exp_time;
     int ae_on = cam_cfg->ae_on ? 1 : 0; // 1=auto, 0=manual
-    unsigned int ae_ctrl_id = (active_ch % 2 == 0) ? V4L2_CID_EXPOSURE_AUTO_CH0
-                                                   : V4L2_CID_EXPOSURE_AUTO_CH1;
-    unsigned int autogain_id =
-        (active_ch % 2 == 0) ? V4L2_CID_AUTOGAIN_CH0 : V4L2_CID_AUTOGAIN_CH1;
-    unsigned int gain_id =
-        (active_ch % 2 == 0) ? V4L2_CID_GAIN_CH0 : V4L2_CID_GAIN_CH1;
-    unsigned int awb_id = (active_ch % 2 == 0)
-                              ? V4L2_CID_AUTO_WHITE_BALANCE_CH0
-                              : V4L2_CID_AUTO_WHITE_BALANCE_CH1;
-    unsigned int hflip_id =
-        (active_ch % 2 == 0) ? V4L2_CID_HFLIP_CH0 : V4L2_CID_HFLIP_CH1;
-    unsigned int vflip_id =
-        (active_ch % 2 == 0) ? V4L2_CID_VFLIP_CH0 : V4L2_CID_VFLIP_CH1;
+    // Single-channel mode: max9296 driver's apply_cached_controls() reads
+    // only ctrl_cache.ch0 regardless of the physical channel, so target the
+    // CH0 slot. The i2c write still goes to the subdev's single address.
+    unsigned int ae_ctrl_id  = V4L2_CID_EXPOSURE_AUTO_CH0;
+    unsigned int autogain_id = V4L2_CID_AUTOGAIN_CH0;
+    unsigned int gain_id     = V4L2_CID_GAIN_CH0;
+    unsigned int awb_id      = V4L2_CID_AUTO_WHITE_BALANCE_CH0;
+    unsigned int hflip_id    = V4L2_CID_HFLIP_CH0;
+    unsigned int vflip_id    = V4L2_CID_VFLIP_CH0;
     __LOG(LOG_NOTICE, "[GST][%s:%d] Single-channel mode for csi%d (ch%d)",
           _FILE_, __LINE__, csiNum, active_ch);
 
@@ -544,17 +561,17 @@ gboolean VideoBin::init(guint8 csiNum) {
     set_v4l2_subdev_control(csiNum, autogain_id, cam_cfg->ae_on ? 1 : 0);
     set_v4l2_subdev_control(csiNum, gain_id, cam_cfg->ae_gain);
 
-    gint awb_auto = (g_strcmp0(cam_cfg->awb, "auto") == 0) ? 1 : 0;
+    gint awb_auto = awb_str_to_mode(cam_cfg->awb);
     set_v4l2_subdev_control(csiNum, awb_id, awb_auto);
 
     set_v4l2_subdev_control(csiNum, hflip_id, cam_cfg->hflip ? 1 : 0);
     set_v4l2_subdev_control(csiNum, vflip_id, cam_cfg->vflip ? 1 : 0);
 
     __LOG(LOG_NOTICE,
-          "[GST][%s:%d] V4L2 subdev controls set: csi%d ch%d ae_on=%d gain=%d "
-          "exp_time=%u awb=%s hflip=%d vflip=%d",
-          _FILE_, __LINE__, csiNum, active_ch, ae_on, cam_cfg->ae_gain,
-          ext_time, cam_cfg->awb, cam_cfg->hflip, cam_cfg->vflip);
+          "[GST][%s:%d] ch%d controls (single, csi%d CH0 slot): ae_on=%d "
+          "gain=%d exp_time=%u awb=%s(0x%x) hflip=%d vflip=%d",
+          _FILE_, __LINE__, active_ch, csiNum, ae_on, cam_cfg->ae_gain,
+          ext_time, cam_cfg->awb, awb_auto, cam_cfg->hflip, cam_cfg->vflip);
   }
 #endif
   if (cmdArg.levelMode == MODE_TEST) {
