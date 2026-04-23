@@ -117,6 +117,10 @@ typedef struct {
     guint iso;
     guint32 exp_time;
     const gchar *awb;
+    /* LED flash (max9296 driver: mcp4018_power_chX + mcp4018_wiper_chX + led_flash_chX) */
+    gboolean led_flash_enable;  /* gates MCP4018 VCC (MFP4 GPIO) + AR0234 0x3270 bit8 */
+    guint    led_flash_wiper;   /* 0..127 MCP4018 wiper step */
+    guint    led_flash_delay;   /* 0..255 AR0234 0x3270 bit7:0 DELAY */
 } CamConfig;
 
 typedef struct {

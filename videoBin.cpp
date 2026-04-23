@@ -37,6 +37,16 @@
 /* Exposure time control (custom): shared across both channels per CSI */
 #define V4L2_CID_EXT_TIME (V4L2_CID_USER_BASE + 0x1015)
 
+/* LED Flash control per-channel (AR0234 R0x3270 via AP1302 DMA) */
+#define V4L2_CID_LED_FLASH_CH0 (V4L2_CID_USER_BASE + 0x1018)
+#define V4L2_CID_LED_FLASH_CH1 (V4L2_CID_USER_BASE + 0x1019)
+/* MCP4018 digital potentiometer wiper (7-bit, 0x00~0x7F) */
+#define V4L2_CID_MCP4018_WIPER_CH0 (V4L2_CID_USER_BASE + 0x101A)
+#define V4L2_CID_MCP4018_WIPER_CH1 (V4L2_CID_USER_BASE + 0x101B)
+/* MCP4018 VCC power via MAX9295 MFP4 GPIO (bool) */
+#define V4L2_CID_MCP4018_POWER_CH0 (V4L2_CID_USER_BASE + 0x1020)
+#define V4L2_CID_MCP4018_POWER_CH1 (V4L2_CID_USER_BASE + 0x1021)
+
 static void prepare_format(GstElement *object, gint arg0, GstCaps *caps,
                            gpointer data) {
   guint8 *csi = (guint8 *)data;
@@ -133,6 +143,40 @@ static int set_v4l2_subdev_control(int csiNum, unsigned int ctrl_id,
 
   close(fd);
   return ret;
+}
+
+/* Apply LED flash for one channel slot.
+ *
+ * Driver owns the MCP4018 I2C-bus gate (MAX9295 MFP4 GPIO) — it opens,
+ * writes wiper, closes atomically within the wiper s_ctrl handler.
+ * Userspace therefore needs only two ioctls per channel.
+ *
+ * Caller selects the correct wiper_id:
+ *   - firmware-routed controls (led_flash) always use the CH0 slot CID
+ *     in single mode (driver single-path); per-slot CIDs in dual mode.
+ *   - MCP4018 is hardware-direct, so in single mode pick the CID
+ *     matching the active local port (Port A = CH0, Port B = CH1).
+ */
+static void apply_led_flash_v4l2(int csiNum, guint8 ch_idx,
+                                 unsigned int wiper_id,
+                                 unsigned int flash_id) {
+  gboolean en    = cmdArg.cam[ch_idx].led_flash_enable;
+  guint    wiper = cmdArg.cam[ch_idx].led_flash_wiper & 0x7f;
+  guint    delay = cmdArg.cam[ch_idx].led_flash_delay & 0xff;
+  int flash_val  = en ? (int)((1u << 8) | delay) : 0;
+
+  /* When the flash is disabled the LED/MCP4018 chain may be unpopulated on
+   * this board. Avoid touching MCP4018 at all (prevents ENXIO and keeps
+   * the driver's wiper cache clean so its replay also skips the port). */
+  if (en) {
+    set_v4l2_subdev_control(csiNum, wiper_id, (int)wiper);
+  }
+  set_v4l2_subdev_control(csiNum, flash_id, flash_val);
+
+  __LOG(LOG_NOTICE,
+        "[GST][%s:%d] ch%d led_flash: enable=%d wiper=%u delay=%u flash_reg=0x%04x%s",
+        _FILE_, __LINE__, ch_idx, en ? 1 : 0, wiper, delay,
+        (unsigned int)flash_val, en ? "" : " (wiper skipped)");
 }
 
 int set_v4l2_subdev_fps(int csiNum, int fps) {
@@ -515,6 +559,10 @@ gboolean VideoBin::init(guint8 csiNum) {
         cmdArg.cam[ch0].exp_time, cmdArg.cam[ch0].awb, awb_ch0,
         cmdArg.cam[ch0].hflip, cmdArg.cam[ch0].vflip);
 
+    apply_led_flash_v4l2(csiNum, ch0,
+                         V4L2_CID_MCP4018_WIPER_CH0,
+                         V4L2_CID_LED_FLASH_CH0);
+
     // Channel 1 settings
     int ae_on_ch1 = cmdArg.cam[ch1].ae_on ? 1 : 0; // 1=auto, 0=manual
     set_v4l2_subdev_control(csiNum, V4L2_CID_EXPOSURE_AUTO_CH1, ae_on_ch1);
@@ -537,6 +585,10 @@ gboolean VideoBin::init(guint8 csiNum) {
         _FILE_, __LINE__, ch1, csiNum, ae_on_ch1, cmdArg.cam[ch1].ae_gain,
         cmdArg.cam[ch1].exp_time, cmdArg.cam[ch1].awb, awb_ch1,
         cmdArg.cam[ch1].hflip, cmdArg.cam[ch1].vflip);
+
+    apply_led_flash_v4l2(csiNum, ch1,
+                         V4L2_CID_MCP4018_WIPER_CH1,
+                         V4L2_CID_LED_FLASH_CH1);
   } else {
     // Single-channel mode: use per-channel custom controls on the active
     // channel
@@ -572,6 +624,16 @@ gboolean VideoBin::init(guint8 csiNum) {
           "gain=%d exp_time=%u awb=%s(0x%x) hflip=%d vflip=%d",
           _FILE_, __LINE__, active_ch, csiNum, ae_on, cam_cfg->ae_gain,
           ext_time, cam_cfg->awb, awb_auto, cam_cfg->hflip, cam_cfg->vflip);
+
+    /* single mode:
+     *   - led_flash: CH0 slot CID (firmware routes via AP1302 global addr).
+     *   - MCP4018: hardware-direct, pick CID matching the active local port
+     *     (Port A = local CH0, Port B = local CH1). ch0_enabled distinguishes. */
+    unsigned int mcp_wiper_id = ch0_enabled ? V4L2_CID_MCP4018_WIPER_CH0
+                                            : V4L2_CID_MCP4018_WIPER_CH1;
+    apply_led_flash_v4l2(csiNum, active_ch,
+                         mcp_wiper_id,
+                         V4L2_CID_LED_FLASH_CH0);
   }
 #endif
   if (cmdArg.levelMode == MODE_TEST) {

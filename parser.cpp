@@ -130,6 +130,9 @@ void ParserClass::init_arg(gchar *argv) {
     arg.cam[i].iso = DEFAULT_ISO;
     arg.cam[i].lsc = DEFAULT_LSC;
     arg.cam[i].exp_time = DEFAULT_EXP_TIME;
+    arg.cam[i].led_flash_enable = FALSE;
+    arg.cam[i].led_flash_wiper = 63;   /* MCP4018 mid-scale (matches driver default) */
+    arg.cam[i].led_flash_delay = 0;    /* AR0234 0x3270 bit7:0 */
 #if 0
         arg.cam[i].enable = FALSE;
         arg.hflip[i] = FALSE;
@@ -484,6 +487,16 @@ gint ParserClass::json_parser(const gchar *path, const gchar *header) {
           arg.cam[i].awb = json_object_get_string(awb_obj);
       }
 
+      /* Optional: LED flash sub-object. Missing keys keep init_arg defaults. */
+      {
+        json_object *lf_obj = json_object_object_get(vobj, "led_flash");
+        if (lf_obj && json_object_get_type(lf_obj) == json_type_object) {
+          json_object_get_value(lf_obj, "enable",      &arg.cam[i].led_flash_enable);
+          json_object_get_value(lf_obj, "wiper",       &arg.cam[i].led_flash_wiper);
+          json_object_get_value(lf_obj, "flash_delay", &arg.cam[i].led_flash_delay);
+        }
+      }
+
       arg.ch_enable |= (arg.cam[i].enable << i);
       arg.ch_rotate |= (arg.cam[i].hflip << (i * 2));
       arg.ch_rotate |= (arg.cam[i].vflip << (i * 2 + 1));
@@ -813,12 +826,14 @@ gint ParserClass::check_arg() {
   for (i = 0; i < MAX_CHANNEL; i++) {
     __LOG(LOG_INFO,
           "[%s][%s:%d] ch%d en:%s, vflip:%s, hflip:%s, bps:%d,%d, ae_on:%d, "
-          "ae_gain:%d, exp_time:%d",
+          "ae_gain:%d, exp_time:%d, led_flash:%s(wiper=%u delay=%u)",
           LOG_KEY, _FILE_, __LINE__, i, arg.cam[i].enable ? "true" : "false",
           arg.cam[i].vflip ? "true" : "false",
           arg.cam[i].hflip ? "true" : "false", arg.cam[i].bps[STREAM_REC],
           arg.cam[i].bps[STREAM_RTSP], arg.cam[i].ae_on, arg.cam[i].ae_gain,
-          arg.cam[i].exp_time);
+          arg.cam[i].exp_time,
+          arg.cam[i].led_flash_enable ? "true" : "false",
+          arg.cam[i].led_flash_wiper, arg.cam[i].led_flash_delay);
 
     if (arg.cam[i].bps[STREAM_REC] < 1 || arg.cam[i].bps[STREAM_RTSP] < 1) {
       __LOG(LOG_CRIT, "[%s][%s:%d] rec bps %d, rtsp bps %d not supported",
