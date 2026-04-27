@@ -28,7 +28,7 @@
 #include <unistd.h>
 #include <execinfo.h> // For backtrace
 
-#define APP_VERSION "1.5"
+#define APP_VERSION "2.0"
 #define MAX_SNAPBACK_DRIFT_MS 30000
 #define MIN_SPLIT_INTERVAL_SEC 5
 #define SNAP_BACK_GRACE_PERIOD_MS 58000
