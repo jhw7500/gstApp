@@ -183,6 +183,7 @@ typedef struct _CmdArg
     gint ipc_mid;
     const gchar *muxer;
     gboolean dual_enc;
+    gboolean rtsp_raw;
     gint rtsp_factory_latency_ms;
     gint rtsp_appsink_max_buffers;
     gint rtsp_factory_queue_max_buffers;

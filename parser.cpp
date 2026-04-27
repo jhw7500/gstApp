@@ -81,6 +81,7 @@ void ParserClass::init_arg(gchar *argv) {
   arg.stream_en[STREAM_RTSP] = TRUE;
   arg.stream_en[STREAM_CAP] = FALSE;
   arg.dual_enc = FALSE;
+   arg.rtsp_raw = FALSE;
   arg.wdt_timeout_long = DEFAULT_WDT_TIMEOUT_LONG;
   arg.wdt_timeout_short = DEFAULT_WDT_TIMEOUT_SHORT;
   arg.videorate_en = TRUE;
@@ -634,6 +635,8 @@ gint ParserClass::arg_parser(int *argc, char **argv[]) {
        "ipc message id, default(0x65)", "INT"},
       {"dual_enc", 'U', 0, G_OPTION_ARG_INT, &arg.dual_enc,
        "dual encoder, default(FALSE)", "INT"},
+      {"rtsp_raw", 0, 0, G_OPTION_ARG_INT, &arg.rtsp_raw,
+       "raw rtsp streaming enable, default(FALSE)", "INT"},
       {"evrate", 'V', 0, G_OPTION_ARG_INT, &arg.videorate_en,
        "videorate enable, default(TRUE)", "INT"},
       {"wdt_l", 'B', 0, G_OPTION_ARG_INT, &arg.wdt_timeout_long,
@@ -816,11 +819,11 @@ gint ParserClass::check_arg() {
 
   __LOG(LOG_NOTICE,
         "[%s][%s:%d] chEn:0x%x, recEn:%d, rtspEn:%d, capEn:%d, audoEn:%d, "
-        "dualEn:%d, inputEn:%d, overlayEn:%d tcpEn:%d, tcpPort:%d, ipc_en:%d, "
+        "dualEn:%d, rtspRaw:%d, inputEn:%d, overlayEn:%d tcpEn:%d, tcpPort:%d, ipc_en:%d, "
         "ipc_mid:%d",
         LOG_KEY, _FILE_, __LINE__, arg.ch_enable, arg.stream_en[STREAM_REC],
         arg.stream_en[STREAM_RTSP], arg.stream_en[STREAM_CAP], arg.audio_en,
-        arg.dual_enc, arg.input_en, arg.overlay_en, arg.tcp_en, arg.tcp_port,
+        arg.dual_enc, arg.rtsp_raw, arg.input_en, arg.overlay_en, arg.tcp_en, arg.tcp_port,
         arg.ipc_en, arg.ipc_mid);
 
   for (i = 0; i < MAX_CHANNEL; i++) {
@@ -868,6 +871,27 @@ gint ParserClass::check_arg() {
           LOG_KEY, _FILE_, __LINE__, arg.rtsp_factory_latency_ms,
           arg.rtsp_appsink_max_buffers, arg.rtsp_factory_queue_max_buffers,
           arg.rtsp_bin_queue_max_time_ms);
+  }
+
+  if (arg.rtsp_raw) {
+    if (!arg.stream_en[STREAM_RTSP]) {
+      __LOG(LOG_CRIT, "[%s][%s:%d] rtsp_raw requires rtsp streaming enabled",
+            LOG_KEY, _FILE_, __LINE__);
+      return -1;
+    }
+
+    if (!arg.dual_enc) {
+      __LOG(LOG_CRIT, "[%s][%s:%d] rtsp_raw requires dual_enc enabled",
+            LOG_KEY, _FILE_, __LINE__);
+      return -1;
+    }
+
+    if (arg.stream_en[STREAM_REC]) {
+      __LOG(LOG_CRIT,
+            "[%s][%s:%d] rtsp_raw supports RTSP-only mode, set recording disabled",
+            LOG_KEY, _FILE_, __LINE__);
+      return -1;
+    }
   }
   __LOG(LOG_NOTICE,
         "[%s][%s:%d] queue_tune main_src:%dms enc_src:%dms rec_sink:%dms cap_src:%dms",
