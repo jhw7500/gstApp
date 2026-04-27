@@ -25,6 +25,74 @@ drop_no_pts_probe_rtsp(GstPad *pad, GstPadProbeInfo *info, gpointer user_data)
     }
     return GST_PAD_PROBE_OK;
 }
+
+static gboolean link_with_notice(GstElement *src, GstElement *sink,
+                                 const gchar *src_name,
+                                 const gchar *sink_name,
+                                 guint8 ch) {
+  GstPad *src_pad = NULL;
+  GstPad *sink_pad = NULL;
+  GstCaps *src_caps = NULL;
+  GstCaps *sink_caps = NULL;
+  gchar *src_caps_str = NULL;
+  gchar *sink_caps_str = NULL;
+  gboolean ret = FALSE;
+
+  src_pad = gst_element_get_static_pad(src, "src");
+  sink_pad = gst_element_get_static_pad(sink, "sink");
+
+  if (src_pad)
+    src_caps = gst_pad_query_caps(src_pad, NULL);
+  if (sink_pad)
+    sink_caps = gst_pad_query_caps(sink_pad, NULL);
+
+  if (src_caps)
+    src_caps_str = gst_caps_to_string(src_caps);
+  if (sink_caps)
+    sink_caps_str = gst_caps_to_string(sink_caps);
+
+  __LOG(LOG_NOTICE,
+        "[GST][%s:%d] ch%d rtsp raw try %s -> %s src_linked=%d sink_linked=%d src_caps=%s sink_caps=%s",
+        _FILE_, __LINE__, ch, src_name, sink_name,
+        src_pad ? gst_pad_is_linked(src_pad) : -1,
+        sink_pad ? gst_pad_is_linked(sink_pad) : -1,
+        src_caps_str ? src_caps_str : "(null)",
+        sink_caps_str ? sink_caps_str : "(null)");
+
+  ret = gst_element_link(src, sink);
+
+  __LOG(ret ? LOG_NOTICE : LOG_CRIT,
+        "[GST][%s:%d] ch%d rtsp raw link %s -> %s : %s", _FILE_, __LINE__,
+        ch, src_name, sink_name, ret ? "ok" : "fail");
+
+  if (!ret) {
+    GstPadLinkReturn pad_ret = GST_PAD_LINK_OK;
+
+    if (src_pad && sink_pad) {
+      pad_ret = gst_pad_link(src_pad, sink_pad);
+      __LOG(LOG_NOTICE,
+            "[GST][%s:%d] ch%d rtsp raw pad link %s -> %s : %s", _FILE_,
+            __LINE__, ch, src_name, sink_name, gst_pad_link_get_name(pad_ret));
+      if (pad_ret == GST_PAD_LINK_OK)
+        gst_pad_unlink(src_pad, sink_pad);
+    }
+  }
+
+  if (src_caps_str)
+    g_free(src_caps_str);
+  if (sink_caps_str)
+    g_free(sink_caps_str);
+  if (src_caps)
+    gst_caps_unref(src_caps);
+  if (sink_caps)
+    gst_caps_unref(sink_caps);
+  if (src_pad)
+    gst_object_unref(src_pad);
+  if (sink_pad)
+    gst_object_unref(sink_pad);
+
+  return ret;
+}
 // #include <rnnoise.h>
 // static DenoiseState *den;
 
@@ -361,12 +429,35 @@ static void media_configure(GstRTSPMediaFactory *factory, GstRTSPMedia *media,
   if (info->caps)
     g_object_set(info->appsrc, "caps", info->caps, NULL);
   else {
-    GstCaps *fallback_caps = gst_caps_from_string(
-        "video/x-h264,stream-format=byte-stream,alignment=au");
+    GstCaps *fallback_caps = NULL;
+
+    if (cmdArg.rtsp_raw)
+      fallback_caps = gst_caps_from_string("video/x-raw,format=I420");
+    else
+      fallback_caps = gst_caps_from_string(
+          "video/x-h264,stream-format=byte-stream,alignment=au");
+
     if (fallback_caps) {
       g_object_set(info->appsrc, "caps", fallback_caps, NULL);
       gst_caps_unref(fallback_caps);
     }
+  }
+
+  {
+    GstCaps *appsrc_caps = NULL;
+    gchar *caps_str = NULL;
+
+    g_object_get(info->appsrc, "caps", &appsrc_caps, NULL);
+    if (appsrc_caps)
+      caps_str = gst_caps_to_string(appsrc_caps);
+
+    __LOG(LOG_NOTICE, "[GST][%s:%d] ch%d appsrc caps : %s", _FILE_, __LINE__,
+          info->ch, caps_str ? caps_str : "(null)");
+
+    if (caps_str)
+      g_free(caps_str);
+    if (appsrc_caps)
+      gst_caps_unref(appsrc_caps);
   }
   // queue_name = g_strdup_printf("%s", QUEUE_NAME, info->ch);
   //__LOG(LOG_NOTICE, "[GST][%s:%d] appsrc name : %s", _FILE_, __LINE__,
@@ -1160,12 +1251,19 @@ gboolean RtspServerBin::init(guint8 ch, gboolean crop_en) {
     return ret;
   }
 
-  GstCaps *caps = gst_caps_new_simple("video/x-raw",
-                                      //"format", G_TYPE_STRING, "NV12",
-                                      //"width", G_TYPE_INT, cmdArg.width,
-                                      //"height", G_TYPE_INT, cmdArg.height,
-                                      "framerate", GST_TYPE_FRACTION,
-                                      cmdArg.fps[STREAM_RTSP][ch], 1, NULL);
+  GstCaps *caps = NULL;
+
+  if (cmdArg.rtsp_raw)
+    caps = gst_caps_new_simple("video/x-raw", "format", G_TYPE_STRING,
+                               "I420", "framerate", GST_TYPE_FRACTION,
+                               cmdArg.fps[STREAM_RTSP][ch], 1, NULL);
+  else
+    caps = gst_caps_new_simple("video/x-raw",
+                               //"format", G_TYPE_STRING, "NV12",
+                               //"width", G_TYPE_INT, cmdArg.width,
+                               //"height", G_TYPE_INT, cmdArg.height,
+                               "framerate", GST_TYPE_FRACTION,
+                               cmdArg.fps[STREAM_RTSP][ch], 1, NULL);
 
   g_object_set(re.capsfilter, "caps", caps, NULL);
   gst_caps_unref(caps);
@@ -1200,9 +1298,29 @@ gboolean RtspServerBin::init(guint8 ch, gboolean crop_en) {
   g_object_set(re.queue, "max-size-time", (guint64)bin_queue_ms * GST_MSECOND,
                "leaky", LEAKY_DOWNSTREAM, NULL);
 
+  __LOG(LOG_NOTICE,
+        "[GST][%s:%d] ch%d rtsp path flags raw=%d crop=%d overlay=%d videorate=%d dual_enc=%d",
+        _FILE_, __LINE__, ch, cmdArg.rtsp_raw, crop_en, cmdArg.overlay_en,
+        cmdArg.videorate_en, cmdArg.dual_enc);
+
 #ifdef CHANNEL_EACH_CROP
   if (crop_en && cmdArg.overlay_en) {
-    if (cmdArg.videorate_en)
+    if (cmdArg.rtsp_raw) {
+      if (cmdArg.videorate_en) {
+        ret = link_with_notice(re.queue, re.crop, "queue", "crop", ch) &&
+              link_with_notice(re.crop, re.overlay, "crop", "overlay", ch) &&
+              link_with_notice(re.overlay, re.convert, "overlay", "convert", ch) &&
+              link_with_notice(re.convert, re.rate, "convert", "rate", ch) &&
+              link_with_notice(re.rate, re.capsfilter, "rate", "capsfilter", ch) &&
+              link_with_notice(re.capsfilter, re.sink, "capsfilter", "appsink", ch);
+      } else {
+        ret = link_with_notice(re.queue, re.crop, "queue", "crop", ch) &&
+              link_with_notice(re.crop, re.overlay, "crop", "overlay", ch) &&
+              link_with_notice(re.overlay, re.convert, "overlay", "convert", ch) &&
+              link_with_notice(re.convert, re.capsfilter, "convert", "capsfilter", ch) &&
+              link_with_notice(re.capsfilter, re.sink, "capsfilter", "appsink", ch);
+      }
+    } else if (cmdArg.videorate_en)
       ret = gst_element_link_many(re.queue, re.crop, re.overlay, re.convert,
                                   re.rate, re.capsfilter, re.enc, re.capsfilter2,
                                   re.parse, re.sink, NULL);
@@ -1212,7 +1330,20 @@ gboolean RtspServerBin::init(guint8 ch, gboolean crop_en) {
                                   re.parse, re.sink, NULL);
   } else if (crop_en) {
     if (cmdArg.dual_enc == TRUE) {
-      if (cmdArg.videorate_en)
+      if (cmdArg.rtsp_raw) {
+        if (cmdArg.videorate_en) {
+          ret = link_with_notice(re.queue, re.crop, "queue", "crop", ch) &&
+                link_with_notice(re.crop, re.convert, "crop", "convert", ch) &&
+                link_with_notice(re.convert, re.rate, "convert", "rate", ch) &&
+                link_with_notice(re.rate, re.capsfilter, "rate", "capsfilter", ch) &&
+                link_with_notice(re.capsfilter, re.sink, "capsfilter", "appsink", ch);
+        } else {
+          ret = link_with_notice(re.queue, re.crop, "queue", "crop", ch) &&
+                link_with_notice(re.crop, re.convert, "crop", "convert", ch) &&
+                link_with_notice(re.convert, re.capsfilter, "convert", "capsfilter", ch) &&
+                link_with_notice(re.capsfilter, re.sink, "capsfilter", "appsink", ch);
+        }
+      } else if (cmdArg.videorate_en)
         ret = gst_element_link_many(re.queue, re.crop, re.convert, re.rate,
                                     re.capsfilter, re.enc, re.capsfilter2,
                                     re.parse, re.sink, NULL);
@@ -1238,7 +1369,16 @@ gboolean RtspServerBin::init(guint8 ch, gboolean crop_en) {
     }
   } else {
     if (cmdArg.dual_enc == TRUE) {
-      if (cmdArg.videorate_en)
+      if (cmdArg.rtsp_raw) {
+        if (cmdArg.videorate_en) {
+          ret = link_with_notice(re.queue, re.rate, "queue", "rate", ch) &&
+                link_with_notice(re.rate, re.capsfilter, "rate", "capsfilter", ch) &&
+                link_with_notice(re.capsfilter, re.sink, "capsfilter", "appsink", ch);
+        } else {
+          ret = link_with_notice(re.queue, re.capsfilter, "queue", "capsfilter", ch) &&
+                link_with_notice(re.capsfilter, re.sink, "capsfilter", "appsink", ch);
+        }
+      } else if (cmdArg.videorate_en)
         ret = gst_element_link_many(re.queue, re.rate, re.capsfilter, re.enc,
                                     re.capsfilter2, re.parse, re.sink, NULL);
       else
@@ -1279,7 +1419,7 @@ gboolean RtspServerBin::init(guint8 ch, gboolean crop_en) {
   }
 
   /* videorate 없을 때 PTS 없는 버퍼 드롭 (dual_enc에서 enc가 있는 경우만) */
-  if (!cmdArg.videorate_en && re.enc) {
+  if (!cmdArg.videorate_en && re.enc && !cmdArg.rtsp_raw) {
     gst_pad_add_probe(gst_element_get_static_pad(re.enc, "src"),
                       GST_PAD_PROBE_TYPE_BUFFER,
                       (GstPadProbeCallback)drop_no_pts_probe_rtsp, NULL, NULL);
@@ -1332,11 +1472,20 @@ gboolean RtspServerBin::init(guint8 ch, gboolean crop_en) {
   // rtspServerData.appSrcName);
   const gint q_max_buffers =
       clamp_int(cmdArg.rtsp_factory_queue_max_buffers, 1, 120);
-  gchar *launch_str = g_strdup_printf(
-      "( appsrc name=%s do-timestamp=1 is-live=1 format=3 ! queue "
-      "max-size-buffers=%d max-size-time=0 max-size-bytes=0 leaky=2 ! "
-      "h264parse config-interval=-1 ! rtph264pay name=pay0 config-interval=-1 )",
-      rtspServerData.appSrcName, q_max_buffers);
+  gchar *launch_str = NULL;
+
+  if (cmdArg.rtsp_raw)
+    launch_str = g_strdup_printf(
+        "( appsrc name=%s do-timestamp=1 is-live=1 format=3 ! queue "
+        "max-size-buffers=%d max-size-time=0 max-size-bytes=0 leaky=2 ! "
+        "rtpvrawpay name=pay0 pt=96 )",
+        rtspServerData.appSrcName, q_max_buffers);
+  else
+    launch_str = g_strdup_printf(
+        "( appsrc name=%s do-timestamp=1 is-live=1 format=3 ! queue "
+        "max-size-buffers=%d max-size-time=0 max-size-bytes=0 leaky=2 ! "
+        "h264parse config-interval=-1 ! rtph264pay name=pay0 config-interval=-1 )",
+        rtspServerData.appSrcName, q_max_buffers);
   // gchar *launch_str = g_strdup_printf("( appsrc name=%s do-timestamp=1
   // is-live=1 block=true ! queue max-size-buffers=5 leaky=2
   // min-threshold-time=500000000 ! h264parse ! rtph264pay name=pay0
