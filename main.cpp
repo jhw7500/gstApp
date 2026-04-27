@@ -964,11 +964,77 @@ gint main(gint argc, gchar *argv[]) {
           goto main_end;
         }
 
-        if (gst_pad_link(videoBin[csiNum].getBinRtspSrcPad(i),
-                         rtspServerBin[i].getBinSinkPad()) != GST_PAD_LINK_OK) {
-          __LOG(LOG_CRIT, "[GST][%s:%d] ch%d rtsp pad link err", _FILE_,
-                __LINE__, i);
-          goto main_end;
+        {
+          GstPad *rtsp_src = videoBin[csiNum].getBinRtspSrcPad(i);
+          GstPad *rtsp_sink = rtspServerBin[i].getBinSinkPad();
+          GstPadLinkReturn pad_ret = GST_PAD_LINK_REFUSED;
+          GstCaps *src_query_caps = NULL;
+          GstCaps *sink_query_caps = NULL;
+          GstCaps *src_current_caps = NULL;
+          GstCaps *sink_current_caps = NULL;
+          gchar *src_query_str = NULL;
+          gchar *sink_query_str = NULL;
+          gchar *src_current_str = NULL;
+          gchar *sink_current_str = NULL;
+
+          if (rtsp_src) {
+            src_query_caps = gst_pad_query_caps(rtsp_src, NULL);
+            src_current_caps = gst_pad_get_current_caps(rtsp_src);
+          }
+          if (rtsp_sink) {
+            sink_query_caps = gst_pad_query_caps(rtsp_sink, NULL);
+            sink_current_caps = gst_pad_get_current_caps(rtsp_sink);
+          }
+
+          if (src_query_caps)
+            src_query_str = gst_caps_to_string(src_query_caps);
+          if (sink_query_caps)
+            sink_query_str = gst_caps_to_string(sink_query_caps);
+          if (src_current_caps)
+            src_current_str = gst_caps_to_string(src_current_caps);
+          if (sink_current_caps)
+            sink_current_str = gst_caps_to_string(sink_current_caps);
+
+          __LOG(LOG_NOTICE,
+                "[GST][%s:%d] ch%d rtsp pad try src=%s linked=%d sink=%s linked=%d src_query=%s sink_query=%s src_current=%s sink_current=%s",
+                _FILE_, __LINE__, i,
+                rtsp_src ? GST_PAD_NAME(rtsp_src) : "(null)",
+                rtsp_src ? gst_pad_is_linked(rtsp_src) : -1,
+                rtsp_sink ? GST_PAD_NAME(rtsp_sink) : "(null)",
+                rtsp_sink ? gst_pad_is_linked(rtsp_sink) : -1,
+                src_query_str ? src_query_str : "(null)",
+                sink_query_str ? sink_query_str : "(null)",
+                src_current_str ? src_current_str : "(null)",
+                sink_current_str ? sink_current_str : "(null)");
+
+          if (rtsp_src && rtsp_sink)
+            pad_ret = gst_pad_link(rtsp_src, rtsp_sink);
+
+          if (pad_ret != GST_PAD_LINK_OK) {
+            __LOG(LOG_CRIT,
+                  "[GST][%s:%d] ch%d rtsp pad link err : %s src=%s sink=%s",
+                  _FILE_, __LINE__, i, gst_pad_link_get_name(pad_ret),
+                  rtsp_src ? GST_PAD_NAME(rtsp_src) : "(null)",
+                  rtsp_sink ? GST_PAD_NAME(rtsp_sink) : "(null)");
+            goto main_end;
+          }
+
+          if (src_query_str)
+            g_free(src_query_str);
+          if (sink_query_str)
+            g_free(sink_query_str);
+          if (src_current_str)
+            g_free(src_current_str);
+          if (sink_current_str)
+            g_free(sink_current_str);
+          if (src_query_caps)
+            gst_caps_unref(src_query_caps);
+          if (sink_query_caps)
+            gst_caps_unref(sink_query_caps);
+          if (src_current_caps)
+            gst_caps_unref(src_current_caps);
+          if (sink_current_caps)
+            gst_caps_unref(sink_current_caps);
         }
       } else {
         if (!encoderBin[i].addBinRtspSrcPad()) {

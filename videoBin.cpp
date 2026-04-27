@@ -302,14 +302,59 @@ GstPad *VideoBin::getBinCaptureSrcPad(guint8 ch) {
 
 gboolean VideoBin::addBinRtspSrcPad(guint8 ch) {
   __LOG(LOG_INFO, "[GST][%s:%d] %s[%d]", _FILE_, __LINE__, __FUNCTION__, ch);
-  GstPad *target_pad = gst_element_get_request_pad(be.teeCrop, "src_%u");
-  srcRtspPad =
-      gst_ghost_pad_new(g_strdup_printf("srcpad_ch%d", ch),
-                        target_pad);
-  if (target_pad)
-      gst_object_unref(target_pad);
+  GstPad *target_pad = NULL;
+  GstCaps *query_caps = NULL;
+  GstCaps *current_caps = NULL;
+  gchar *query_caps_str = NULL;
+  gchar *current_caps_str = NULL;
+  gboolean ret = FALSE;
 
-  return gst_element_add_pad(be.bin, srcRtspPad);
+  //if (srcRtspPad != NULL)
+  //  return TRUE;
+
+  target_pad = gst_element_get_request_pad(be.teeCrop, "src_%u");
+  if (!target_pad) {
+    __LOG(LOG_CRIT, "[GST][%s:%d] ch%d rtsp request pad get err", _FILE_,
+          __LINE__, ch);
+    goto add_rtsp_pad_out;
+  }
+
+  query_caps = gst_pad_query_caps(target_pad, NULL);
+  current_caps = gst_pad_get_current_caps(target_pad);
+  if (query_caps)
+    query_caps_str = gst_caps_to_string(query_caps);
+  if (current_caps)
+    current_caps_str = gst_caps_to_string(current_caps);
+
+  __LOG(LOG_NOTICE,
+        "[GST][%s:%d] ch%d rtsp request pad name=%s ptr=%p linked=%d dir=%d query=%s current=%s",
+        _FILE_, __LINE__, ch, GST_PAD_NAME(target_pad), target_pad,
+        gst_pad_is_linked(target_pad), gst_pad_get_direction(target_pad),
+        query_caps_str ? query_caps_str : "(null)",
+        current_caps_str ? current_caps_str : "(null)");
+
+  srcRtspPad = gst_ghost_pad_new(g_strdup_printf("srcpad_ch%d", ch),
+                                 target_pad);
+  if (!srcRtspPad) {
+    __LOG(LOG_CRIT, "[GST][%s:%d] ch%d rtsp ghost pad create err", _FILE_,
+          __LINE__, ch);
+    goto add_rtsp_pad_out;
+  }
+
+  ret = gst_element_add_pad(be.bin, srcRtspPad);
+
+add_rtsp_pad_out:
+  if (query_caps_str)
+    g_free(query_caps_str);
+  if (current_caps_str)
+    g_free(current_caps_str);
+  if (query_caps)
+    gst_caps_unref(query_caps);
+  if (current_caps)
+    gst_caps_unref(current_caps);
+  if (target_pad)
+    gst_object_unref(target_pad);
+  return ret;
 }
 
 gboolean VideoBin::addBinRecordSrcPad(guint8 ch) {
