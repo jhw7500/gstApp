@@ -39,6 +39,117 @@ static void json_object_get_int_optional(json_object *obj, const gchar *name,
   __LOG(LOG_INFO, "[CFG][%s:%d] %s : %d", _FILE_, __LINE__, name, *out);
 }
 
+/*
+ * Strict typed integer accessor.
+ * - Missing key: keep *out unchanged (caller's pre-set default), no log.
+ * - Wrong type:  keep *out unchanged, log LOG_ERR (config bug visible).
+ * - Valid int:   assign and log LOG_INFO.
+ */
+static void json_get_int(json_object *obj, const gchar *name, gint *out) {
+  if (!obj || !name || !out)
+    return;
+
+  json_object *vobj = json_object_object_get(obj, name);
+  if (!vobj)
+    return;
+
+  enum json_type type = json_object_get_type(vobj);
+  if (type != json_type_int) {
+    __LOG(LOG_ERR,
+          "[CFG][%s:%d] %s: expected int but got json_type[%d], keep default %d",
+          _FILE_, __LINE__, name, type, *out);
+    return;
+  }
+
+  *out = json_object_get_int(vobj);
+  __LOG(LOG_INFO, "[CFG][%s:%d] %s : %d", _FILE_, __LINE__, name, *out);
+}
+
+static void json_get_uint(json_object *obj, const gchar *name, guint *out) {
+  if (!obj || !name || !out)
+    return;
+
+  json_object *vobj = json_object_object_get(obj, name);
+  if (!vobj)
+    return;
+
+  enum json_type type = json_object_get_type(vobj);
+  if (type != json_type_int) {
+    __LOG(LOG_ERR,
+          "[CFG][%s:%d] %s: expected int but got json_type[%d], keep default %u",
+          _FILE_, __LINE__, name, type, *out);
+    return;
+  }
+
+  gint v = json_object_get_int(vobj);
+  if (v < 0) {
+    __LOG(LOG_ERR,
+          "[CFG][%s:%d] %s: negative int %d for unsigned field, keep default %u",
+          _FILE_, __LINE__, name, v, *out);
+    return;
+  }
+
+  *out = (guint)v;
+  __LOG(LOG_INFO, "[CFG][%s:%d] %s : %u", _FILE_, __LINE__, name, *out);
+}
+
+static void json_get_uint32(json_object *obj, const gchar *name, guint32 *out) {
+  guint tmp = (guint)*out;
+  json_get_uint(obj, name, &tmp);
+  *out = (guint32)tmp;
+}
+
+/*
+ * Strict typed integer-array accessor.
+ * - Missing key:           keep *out unchanged.
+ * - Wrong top-level type:  keep *out unchanged + LOG_ERR.
+ * - Length mismatch:       keep *out unchanged + LOG_ERR.
+ * - Element type mismatch: keep entire *out unchanged + LOG_ERR (no partial fill).
+ */
+static void json_get_int_array(json_object *obj, const gchar *name,
+                               gint *out, gsize n) {
+  if (!obj || !name || !out || n == 0)
+    return;
+
+  json_object *vobj = json_object_object_get(obj, name);
+  if (!vobj)
+    return;
+
+  enum json_type type = json_object_get_type(vobj);
+  if (type != json_type_array) {
+    __LOG(LOG_ERR,
+          "[CFG][%s:%d] %s: expected int[%zu] but got json_type[%d], keep defaults",
+          _FILE_, __LINE__, name, n, type);
+    return;
+  }
+
+  array_list *arr = json_object_get_array(vobj);
+  if (!arr || arr->length != n) {
+    __LOG(LOG_ERR,
+          "[CFG][%s:%d] %s: array length %zu != expected %zu, keep defaults",
+          _FILE_, __LINE__, name, arr ? arr->length : 0, n);
+    return;
+  }
+
+  /* Validate all elements before mutating *out. */
+  for (gsize i = 0; i < n; i++) {
+    json_object *el = (json_object *)array_list_get_idx(arr, i);
+    if (!el || json_object_get_type(el) != json_type_int) {
+      __LOG(LOG_ERR,
+            "[CFG][%s:%d] %s[%zu]: expected int element, keep defaults",
+            _FILE_, __LINE__, name, i);
+      return;
+    }
+  }
+
+  for (gsize i = 0; i < n; i++) {
+    json_object *el = (json_object *)array_list_get_idx(arr, i);
+    out[i] = json_object_get_int(el);
+    __LOG(LOG_INFO, "[CFG][%s:%d] %s[%zu] : %d", _FILE_, __LINE__, name, i,
+          out[i]);
+  }
+}
+
 void ParserClass::init_arg(gchar *argv) {
   // g_print("%s\n", __FUNCTION__);
   arg.appname = CHARNEXT(argv, '/');
@@ -120,8 +231,8 @@ void ParserClass::init_arg(gchar *argv) {
     arg.cam[i].enable = FALSE;
     arg.cam[i].hflip = FALSE;
     arg.cam[i].vflip = FALSE;
-    arg.cam[i].bps[0] = DEFAULT_RECORD_BITRATE;
-    arg.cam[i].bps[1] = DEFAULT_RECORD_BITRATE;
+    arg.cam[i].bps[STREAM_REC] = DEFAULT_RECORD_BITRATE;
+    arg.cam[i].bps[STREAM_RTSP] = DEFAULT_RTSP_BITRATE;
     arg.cam[i].gop[0] = DEFAULT_GOP_SIZE;
     arg.cam[i].gop[1] = DEFAULT_GOP_SIZE;
     arg.cam[i].ae_on = TRUE;
@@ -353,13 +464,13 @@ gint ParserClass::json_parser(const gchar *path, const gchar *header) {
     json_object_get_value(hobj, "vhl_name", &arg.ohtName);
     json_object_get_value(hobj, "id", &arg.rtsp_id);
     json_object_get_value(hobj, "tmp_path", &arg.mntDir);
-    json_object_get_value(hobj, "cam_width", &arg.width);
-    json_object_get_value(hobj, "cam_height", &arg.height);
-    json_object_get_value(hobj, "recording_time", &arg.duration);
-    json_object_get_value(hobj, "log_level", &arg.log_level);
-    json_object_get_value(hobj, "debug_level", &arg.dbg_level);
-    json_object_get_value(hobj, "fps", &arg.main_fps[CSI_1]);
-    json_object_get_value(hobj, "fps", &arg.main_fps[CSI_2]);
+    json_get_int(hobj, "cam_width", &arg.width);
+    json_get_int(hobj, "cam_height", &arg.height);
+    json_get_int(hobj, "recording_time", &arg.duration);
+    json_get_int(hobj, "log_level", &arg.log_level);
+    json_get_int(hobj, "debug_level", &arg.dbg_level);
+    json_get_int(hobj, "fps", &arg.main_fps[CSI_1]);
+    json_get_int(hobj, "fps", &arg.main_fps[CSI_2]);
     json_object_get_value(hobj, "muxer", &arg.muxer);
 #if 0
         json_object_get_value(hobj, "rec_fps", &arg.fps[STREAM_REC]);
@@ -375,8 +486,8 @@ gint ParserClass::json_parser(const gchar *path, const gchar *header) {
     sobj = json_object_object_get(hobj, JSON_CAP_OBJ_NAME);
     json_object_get_value(sobj, "enable", &arg.stream_en[STREAM_CAP]);
     if (arg.stream_en[STREAM_CAP]) {
-      json_object_get_value(sobj, "delay", &arg.cap.delay);
-      json_object_get_value(sobj, "timeout", &arg.cap.timeout);
+      json_get_int(sobj, "delay", &arg.cap.delay);
+      json_get_int(sobj, "timeout", &arg.cap.timeout);
       json_object_get_value(sobj, "encoder", &arg.cap.encoder);
       // Optional: absolute capture output directory.
       // Do not use json_object_get_value() because missing keys log CRIT.
@@ -398,8 +509,8 @@ gint ParserClass::json_parser(const gchar *path, const gchar *header) {
       // json_object_get_value(sobj, "padding", &arg.cap.padding);
       json_object_get_value(sobj, "record", &arg.cap.record_en);
       json_object_get_value(sobj, "rtsp", &arg.cap.rtsp_en);
-      json_object_get_value(sobj, "quality", &arg.cap.quality);
-      json_object_get_value(sobj, "queue_size", &arg.cap.queue_size);
+      json_get_int(sobj, "quality", &arg.cap.quality);
+      json_get_int(sobj, "queue_size", &arg.cap.queue_size);
       json_object_get_value(sobj, "response", &arg.cap.res_en);
 
       arg.stream_en[STREAM_REC] = arg.cap.record_en;
@@ -468,7 +579,7 @@ gint ParserClass::json_parser(const gchar *path, const gchar *header) {
           __LOG(LOG_INFO, "[CFG][%s:%d] ext_time : %u", _FILE_, __LINE__,
                 arg.cam[i].exp_time);
         } else {
-          json_object_get_value(sobj, "exp_time", &arg.cam[i].exp_time);
+          json_get_uint32(sobj, "exp_time", &arg.cam[i].exp_time);
         }
       }
       gchar *ch_key = g_strdup_printf("ch%d", i);
@@ -477,9 +588,9 @@ gint ParserClass::json_parser(const gchar *path, const gchar *header) {
       json_object_get_value(vobj, "enable", &arg.cam[i].enable);
       json_object_get_value(vobj, "hflip", &arg.cam[i].hflip);
       json_object_get_value(vobj, "vflip", &arg.cam[i].vflip);
-      json_object_get_value(vobj, "bps", &arg.cam[i].bps);
+      json_get_int_array(vobj, "bps", arg.cam[i].bps, MAX_MODE);
       json_object_get_value(vobj, "ae_on", &arg.cam[i].ae_on);
-      json_object_get_value(vobj, "ae_gain", &arg.cam[i].ae_gain);
+      json_get_uint(vobj, "ae_gain", &arg.cam[i].ae_gain);
       /* Optional: AWB preset name. Falls back to DEFAULT_AWB when absent. */
       {
         json_object *awb_obj = json_object_object_get(vobj, "awb");
@@ -492,8 +603,8 @@ gint ParserClass::json_parser(const gchar *path, const gchar *header) {
         json_object *lf_obj = json_object_object_get(vobj, "led_flash");
         if (lf_obj && json_object_get_type(lf_obj) == json_type_object) {
           json_object_get_value(lf_obj, "enable",      &arg.cam[i].led_flash_enable);
-          json_object_get_value(lf_obj, "wiper",       &arg.cam[i].led_flash_wiper);
-          json_object_get_value(lf_obj, "flash_delay", &arg.cam[i].led_flash_delay);
+          json_get_uint(lf_obj, "wiper",       &arg.cam[i].led_flash_wiper);
+          json_get_uint(lf_obj, "flash_delay", &arg.cam[i].led_flash_delay);
         }
       }
 
@@ -835,12 +946,39 @@ gint ParserClass::check_arg() {
           arg.cam[i].led_flash_enable ? "true" : "false",
           arg.cam[i].led_flash_wiper, arg.cam[i].led_flash_delay);
 
-    if (arg.cam[i].bps[STREAM_REC] < 1 || arg.cam[i].bps[STREAM_RTSP] < 1) {
-      __LOG(LOG_CRIT, "[%s][%s:%d] rec bps %d, rtsp bps %d not supported",
-            LOG_KEY, _FILE_, __LINE__, arg.cam[i].bps[STREAM_REC],
-            arg.cam[i].bps[STREAM_RTSP]);
+    /*
+     * bps sanity. Accept JSON noise (string, negative, out-of-range) without
+     * aborting startup: log and fall back to compiled-in defaults.
+     * In single-encoder mode (!dual_enc) the RTSP bitrate is irrelevant
+     * because one encoder feeds both record and rtsp; we mirror rec bps
+     * onto the rtsp slot so downstream code stays consistent.
+     */
+    if (arg.cam[i].bps[STREAM_REC] < MIN_BITRATE_KBPS ||
+        arg.cam[i].bps[STREAM_REC] > MAX_BITRATE_KBPS) {
+      __LOG(LOG_ERR,
+            "[%s][%s:%d] ch%d invalid rec bps %d, fallback to %d (range %d..%d)",
+            LOG_KEY, _FILE_, __LINE__, i, arg.cam[i].bps[STREAM_REC],
+            DEFAULT_RECORD_BITRATE, MIN_BITRATE_KBPS, MAX_BITRATE_KBPS);
+      arg.cam[i].bps[STREAM_REC] = DEFAULT_RECORD_BITRATE;
+    }
 
-      return -1;
+    if (arg.dual_enc) {
+      if (arg.cam[i].bps[STREAM_RTSP] < MIN_BITRATE_KBPS ||
+          arg.cam[i].bps[STREAM_RTSP] > MAX_BITRATE_KBPS) {
+        __LOG(LOG_ERR,
+              "[%s][%s:%d] ch%d invalid rtsp bps %d, fallback to %d (range %d..%d)",
+              LOG_KEY, _FILE_, __LINE__, i, arg.cam[i].bps[STREAM_RTSP],
+              DEFAULT_RTSP_BITRATE, MIN_BITRATE_KBPS, MAX_BITRATE_KBPS);
+        arg.cam[i].bps[STREAM_RTSP] = DEFAULT_RTSP_BITRATE;
+      }
+    } else {
+      if (arg.cam[i].bps[STREAM_RTSP] != arg.cam[i].bps[STREAM_REC]) {
+        __LOG(LOG_INFO,
+              "[%s][%s:%d] ch%d single-enc: align rtsp bps %d -> %d (= rec)",
+              LOG_KEY, _FILE_, __LINE__, i, arg.cam[i].bps[STREAM_RTSP],
+              arg.cam[i].bps[STREAM_REC]);
+        arg.cam[i].bps[STREAM_RTSP] = arg.cam[i].bps[STREAM_REC];
+      }
     }
   }
 

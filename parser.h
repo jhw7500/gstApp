@@ -31,6 +31,8 @@
 
 #define DEFAULT_RECORD_BITRATE  4096
 #define DEFAULT_RTSP_BITRATE    1024
+#define MIN_BITRATE_KBPS        100
+#define MAX_BITRATE_KBPS        20000
 #define DEFAULT_MAIN_FPS        15
 #define DEFAULT_RECORD_FPS      15
 #define DEFAULT_RTSP_FPS        15
