@@ -56,9 +56,12 @@ ALLFLAGS=$(ALL_CFLAGS) $(ALL_LDFLAGS) -lturbojpeg
 #OBJS = videoBin.o recordBin.o muxSinkBin.o rtspServerBin.o audioBin.o muxBin.o
 OBJS = videoBin.o recordBin.o muxSinkBin.o rtspServerBin.o testBin.o captureBin.o util.o parser.o aes.o tcpServer.o audioBin.o ipc.o encoderBin.o
 
-$(OUTPUT)/gstApp : $(OBJS) main.cpp
+$(OUTPUT)/gstApp : $(OBJS) main.cpp | $(OUTPUT) $(OBJ)
 	$(CXX) $(CPP_PERF_FLAGS) -o $@ $^ $(ALLFLAGS)
 	mv *.o $(OBJ)
+
+$(OUTPUT) $(OBJ) :
+	mkdir -p $@
 
 videoBin.o : videoBin.cpp videoBin.h
 	$(CXX) $(CXXFLAGS) -c videoBin.cpp

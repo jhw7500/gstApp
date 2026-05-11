@@ -588,7 +588,8 @@ gint ParserClass::json_parser(const gchar *path, const gchar *header) {
       json_object_get_value(vobj, "enable", &arg.cam[i].enable);
       json_object_get_value(vobj, "hflip", &arg.cam[i].hflip);
       json_object_get_value(vobj, "vflip", &arg.cam[i].vflip);
-      json_get_int_array(vobj, "bps", arg.cam[i].bps, MAX_MODE);
+      json_get_int_array(vobj, "bps", arg.cam[i].bps,
+                         sizeof(arg.cam[i].bps) / sizeof(arg.cam[i].bps[0]));
       json_object_get_value(vobj, "ae_on", &arg.cam[i].ae_on);
       json_get_uint(vobj, "ae_gain", &arg.cam[i].ae_gain);
       /* Optional: AWB preset name. Falls back to DEFAULT_AWB when absent. */
@@ -935,7 +936,7 @@ gint ParserClass::check_arg() {
         arg.ipc_en, arg.ipc_mid);
 
   for (i = 0; i < MAX_CHANNEL; i++) {
-    __LOG(LOG_INFO,
+    __LOG(LOG_NOTICE,
           "[%s][%s:%d] ch%d en:%s, vflip:%s, hflip:%s, bps:%d,%d, ae_on:%d, "
           "ae_gain:%d, exp_time:%d, led_flash:%s(wiper=%u delay=%u)",
           LOG_KEY, _FILE_, __LINE__, i, arg.cam[i].enable ? "true" : "false",
