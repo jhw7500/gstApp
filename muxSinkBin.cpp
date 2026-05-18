@@ -94,8 +94,24 @@ static RecordingSession *get_or_create_session(const gchar *timestamp) {
 // 제거됨
 
 static void mark_session_complete(const gchar *timestamp) {
-  // /tmp/session_<timestamp>.all_done 파일 생성
+  // /tmp/session_<timestamp>.all_done 파일 생성 (idempotent)
+  // startup alignment 미수렴 시 같은 timestamp에 두 번 도달할 수 있으므로
+  // 이미 .all_done이 있으면 chk_cam_operate가 처리 중이라고 보고 부분 마커만 정리한다.
   gchar *done_file = g_strdup_printf("/tmp/session_%s.all_done", timestamp);
+  gchar *video_flag = g_strdup_printf("/tmp/session_%s.video_done", timestamp);
+  gchar *srt_flag = g_strdup_printf("/tmp/session_%s.srt_done", timestamp);
+
+  if (access(done_file, F_OK) == 0) {
+    __LOG(LOG_INFO, "[GST][%s:%d] all_done already exists for %s, skip recreate (idempotent)",
+          _FILE_, __LINE__, timestamp);
+    unlink(video_flag);
+    unlink(srt_flag);
+    g_free(done_file);
+    g_free(video_flag);
+    g_free(srt_flag);
+    return;
+  }
+
   FILE *fp = fopen(done_file, "w");
   if (fp) {
     fprintf(fp, "%s\n", timestamp);
@@ -106,13 +122,12 @@ static void mark_session_complete(const gchar *timestamp) {
     __LOG(LOG_ERR, "[GST][%s:%d] Failed to create done file: %s", _FILE_,
           __LINE__, done_file);
   }
-  g_free(done_file);
 
   // 개별 플래그 정리
-  gchar *video_flag = g_strdup_printf("/tmp/session_%s.video_done", timestamp);
-  gchar *srt_flag = g_strdup_printf("/tmp/session_%s.srt_done", timestamp);
   unlink(video_flag);
   unlink(srt_flag);
+
+  g_free(done_file);
   g_free(video_flag);
   g_free(srt_flag);
 }
@@ -281,15 +296,24 @@ void MuxSinkBin::handleFragmentClosed(const gchar *location, GstClockTime runnin
 
   // 활성 채널 수만큼 완료되었는지 확인
   if (completed_channels >= active_channels && active_channels > 0) {
-    // .video_done 플래그 생성
+    // .video_done 플래그 생성 (idempotent)
+    // startup alignment 미수렴 시 같은 minute timestamp에 splitNow가 두 번 발생할 수 있다.
+    // hash_table_remove로 session이 지워졌어도 두 번째 cycle이 새 session으로 누적되어
+    // 이 분기에 두 번째로 도달할 수 있다. video_done이 이미 있으면 중복 생성/매칭을 차단한다.
     gchar *video_flag = g_strdup_printf("/tmp/session_%s.video_done", timestamp);
-    FILE *fp = fopen(video_flag, "w");
-    if (fp)
-      fclose(fp);
-    g_free(video_flag);
+    if (access(video_flag, F_OK) != 0) {
+      FILE *fp = fopen(video_flag, "w");
+      if (fp)
+        fclose(fp);
 
-    // 전체 완료 확인 및 마커 생성 시도
-    check_and_mark_all_done(timestamp);
+      // 전체 완료 확인 및 마커 생성 시도
+      check_and_mark_all_done(timestamp);
+    } else {
+      __LOG(LOG_INFO,
+            "[GST][%s:%d] video_done exists for %s (duplicate fragment_closed in same minute), skip",
+            _FILE_, __LINE__, timestamp);
+    }
+    g_free(video_flag);
 
     // [P1 이슈 해결] 세션 즉시 삭제 시의 경합 방지
     // .all_done이 생성되지 않았더라도(SRT 대기 중), 영상 쪽 처리는 끝났으므로 
