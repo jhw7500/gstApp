@@ -19,6 +19,7 @@
 #include "recordBin.h"
 #include "rtspServerBin.h"
 #include "videoBin.h"
+#include "cfgjson.h"
 
 #define LOG_KEY "CFG"
 
@@ -106,47 +107,39 @@ static void json_get_uint32(json_object *obj, const gchar *name, guint32 *out) {
  * - Length mismatch:       keep *out unchanged + LOG_ERR.
  * - Element type mismatch: keep entire *out unchanged + LOG_ERR (no partial fill).
  */
-static void json_get_int_array(json_object *obj, const gchar *name,
-                               gint *out, gsize n) {
-  if (!obj || !name || !out || n == 0)
-    return;
+static int g_cfg_errors = 0;
 
-  json_object *vobj = json_object_object_get(obj, name);
-  if (!vobj)
-    return;
-
-  enum json_type type = json_object_get_type(vobj);
-  if (type != json_type_array) {
+/* Wrapper over cfg_get_int_array (cfgjson.cpp): preserves the original logging
+ * and counts config errors so the parser can emit a loud post-parse summary.
+ * Silent keep-defaults hides real edgeconf mistakes — e.g. a bps array length
+ * mismatch left the record bitrate stuck at the 4096 default. */
+static void json_get_int_array(json_object *obj, const gchar *name, gint *out,
+                               gsize n) {
+  CfgArrStatus st = cfg_get_int_array(obj, name, out, n);
+  switch (st) {
+  case CFG_ARR_OK:
+    for (gsize i = 0; i < n; i++)
+      __LOG(LOG_INFO, "[CFG][%s:%d] %s[%zu] : %d", _FILE_, __LINE__, name, i,
+            out[i]);
+    break;
+  case CFG_ARR_MISSING:
+    break; /* optional key absent — keep defaults silently */
+  case CFG_ARR_NOT_ARRAY:
+    __LOG(LOG_ERR, "[CFG][%s:%d] %s: not a JSON array, keep defaults", _FILE_,
+          __LINE__, name);
+    g_cfg_errors++;
+    break;
+  case CFG_ARR_BAD_LEN:
     __LOG(LOG_ERR,
-          "[CFG][%s:%d] %s: expected int[%zu] but got json_type[%d], keep defaults",
-          _FILE_, __LINE__, name, n, type);
-    return;
-  }
-
-  array_list *arr = json_object_get_array(vobj);
-  if (!arr || arr->length != n) {
-    __LOG(LOG_ERR,
-          "[CFG][%s:%d] %s: array length %zu != expected %zu, keep defaults",
-          _FILE_, __LINE__, name, arr ? arr->length : 0, n);
-    return;
-  }
-
-  /* Validate all elements before mutating *out. */
-  for (gsize i = 0; i < n; i++) {
-    json_object *el = (json_object *)array_list_get_idx(arr, i);
-    if (!el || json_object_get_type(el) != json_type_int) {
-      __LOG(LOG_ERR,
-            "[CFG][%s:%d] %s[%zu]: expected int element, keep defaults",
-            _FILE_, __LINE__, name, i);
-      return;
-    }
-  }
-
-  for (gsize i = 0; i < n; i++) {
-    json_object *el = (json_object *)array_list_get_idx(arr, i);
-    out[i] = json_object_get_int(el);
-    __LOG(LOG_INFO, "[CFG][%s:%d] %s[%zu] : %d", _FILE_, __LINE__, name, i,
-          out[i]);
+          "[CFG][%s:%d] %s: array length mismatch (expected %zu), keep defaults",
+          _FILE_, __LINE__, name, n);
+    g_cfg_errors++;
+    break;
+  case CFG_ARR_BAD_ELEM:
+    __LOG(LOG_ERR, "[CFG][%s:%d] %s: non-int element, keep defaults", _FILE_,
+          __LINE__, name);
+    g_cfg_errors++;
+    break;
   }
 }
 
@@ -566,6 +559,7 @@ gint ParserClass::json_parser(const gchar *path, const gchar *header) {
      */
     arg.ch_enable = 0;
     arg.ch_rotate = 0;
+    g_cfg_errors = 0;
 
     for (guint8 i = 0; i < MAX_CHANNEL; i++) {
       gchar *i2c_key = g_strdup_printf("i2c%d", i / 2 ? 1 : 2);
@@ -982,6 +976,12 @@ gint ParserClass::check_arg() {
       }
     }
   }
+
+  if (g_cfg_errors > 0)
+    __LOG(LOG_ERR,
+          "[%s][%s:%d] !!! %d config error(s) in edgeconf: bad values IGNORED, "
+          "DEFAULTS used — check edgeconf !!!",
+          LOG_KEY, _FILE_, __LINE__, g_cfg_errors);
 
   if (arg.stream_en[STREAM_REC]) {
     __LOG(LOG_NOTICE,
