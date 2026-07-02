@@ -136,6 +136,7 @@ typedef struct {
     const gchar *dir;     // absolute path for capture output directory (optional)
     const gchar *path;
     const gchar *encoder;
+    gint instant;        // [instant-snapshot] 0=off, 1=ref-hold (light), 2=deep-copy (safe); default 0
 } CaptureConfig;
 
 typedef struct _CmdArg

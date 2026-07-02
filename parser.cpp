@@ -214,6 +214,7 @@ void ParserClass::init_arg(gchar *argv) {
   arg.cap.padding = TRUE;
   arg.cap.quality = DEFAULT_CAPTURE_QUALITY;
   arg.cap.queue_size = DEFAULT_CAPTURE_QUEUE_SIZE;
+  arg.cap.instant = DEFAULT_CAPTURE_INSTANT;
   arg.tcp_en = FALSE;
   arg.tcp_port = DEFAULT_TCP_PORT;
 
@@ -505,6 +506,7 @@ gint ParserClass::json_parser(const gchar *path, const gchar *header) {
       json_get_int(sobj, "quality", &arg.cap.quality);
       json_get_int(sobj, "queue_size", &arg.cap.queue_size);
       json_object_get_value(sobj, "response", &arg.cap.res_en);
+      json_get_int(sobj, "instant", &arg.cap.instant);
 
       arg.stream_en[STREAM_REC] = arg.cap.record_en;
       arg.stream_en[STREAM_RTSP] = arg.cap.rtsp_en;
@@ -712,6 +714,8 @@ gint ParserClass::arg_parser(int *argc, char **argv[]) {
        "video capture quality, default(85)", "INT"},
       {"capqueue", 0, 0, G_OPTION_ARG_INT, &arg.cap.queue_size,
        "capture async queue size, default(30)", "INT"},
+      {"capinstant", 0, 0, G_OPTION_ARG_INT, &arg.cap.instant,
+       "instant-snapshot single capture: 0=off, 1=ref-hold(light), 2=deep-copy(safe), default(0)", "INT"},
       {"capdir", 'I', 0, G_OPTION_ARG_STRING, &arg.cap.path,
        "save capture file to directory, default capture", "STRING"},
       {"etcp", 'C', 0, G_OPTION_ARG_INT, &arg.tcp_en,
@@ -1020,6 +1024,14 @@ gint ParserClass::check_arg() {
             "[%s][%s:%d] invalid cap queue size %d, using default %d", LOG_KEY,
             _FILE_, __LINE__, arg.cap.queue_size, DEFAULT_CAPTURE_QUEUE_SIZE);
       arg.cap.queue_size = DEFAULT_CAPTURE_QUEUE_SIZE;
+    }
+
+    // [instant-snapshot] only 0/1/2 are valid; anything else disables the feature
+    if (arg.cap.instant < CAP_INSTANT_OFF || arg.cap.instant > CAP_INSTANT_COPY) {
+      __LOG(LOG_WARNING,
+            "[%s][%s:%d] invalid capinstant %d (expected 0/1/2), disabling", LOG_KEY,
+            _FILE_, __LINE__, arg.cap.instant);
+      arg.cap.instant = CAP_INSTANT_OFF;
     }
 
     // Use safe_mkdir_p instead of system("mkdir -p ...")

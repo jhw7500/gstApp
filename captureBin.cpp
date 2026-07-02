@@ -641,6 +641,14 @@ static GstFlowReturn on_new_sample_to_file(GstElement *sink, gpointer userData)
                 // Increment pushed count
                 gint new_pushed_cnt = g_atomic_int_add(&info->captureCnt_, 1) + 1;
 
+                // [instant-snapshot] Measure command->first-frame latency (the phase-wait
+                // component this optimization targets). capture_index 0 == first frame.
+                if (task->capture_index == 0 && req->startTime > 0) {
+                    gint64 first_ms = (g_get_monotonic_time() - req->startTime) / 1000;
+                    __LOG(LOG_NOTICE, "[%s][%s:%d] ch%d first-frame latency: %ld ms (cmd->first sink)",
+                          CAP_LOG_KEY, _FILE_, __LINE__, info->ch, (long)first_ms);
+                }
+
                 // Check if we have pushed enough frames for the current request
                 if (new_pushed_cnt >= req->maxCnt) {
                     // Current request pushed completely. Release ownership.
@@ -774,7 +782,12 @@ CaptureBin::CaptureBin()
     captureData.buffering_period = 0;
     captureData.buffering_feeder_thread = NULL;
     captureData.buffering_feeder_running.store(false);
-    
+
+    // [instant-snapshot] latest-frame holder
+    captureData.last_src_buffer = NULL;
+    captureData.last_src_mutex = std::unique_ptr<std::mutex>(new std::mutex());
+    probe_id = 0;
+
     timeout_source_id.store(0);
     captureData.valve = NULL;
 }
@@ -791,6 +804,19 @@ CaptureBin::~CaptureBin()
         timeout_source_id.store(0);
     }
 
+    // [instant-snapshot] Remove the valve-sink probe FIRST. gst_pad_remove_probe blocks
+    // until any in-flight probe callback returns, so after this the probe can no longer
+    // touch last_src_mutex/last_src_buffer (which are torn down below / during member
+    // destruction). Prevents a use-after-free at teardown.
+    if (probe_id != 0 && be.valve) {
+        GstPad *valve_sink = gst_element_get_static_pad(be.valve, "sink");
+        if (valve_sink) {
+            gst_pad_remove_probe(valve_sink, probe_id);
+            gst_object_unref(valve_sink);
+        }
+        probe_id = 0;
+    }
+
     // Stop worker thread and wait for completion
     stopWorker();
 
@@ -803,6 +829,15 @@ CaptureBin::~CaptureBin()
         captureData.buffering_feeder_thread = NULL;
     }
     clear_buffering_buffers(&captureData);
+
+    // [instant-snapshot] release held latest frame
+    if (captureData.last_src_mutex) {
+        std::lock_guard<std::mutex> lock(*captureData.last_src_mutex);
+        if (captureData.last_src_buffer) {
+            gst_buffer_unref(captureData.last_src_buffer);
+            captureData.last_src_buffer = NULL;
+        }
+    }
 
     // Clear remaining tasks in queue
     if(captureData.task_queue) {
@@ -831,6 +866,82 @@ CaptureBin::~CaptureBin()
 
     destroy_compressor(&captureData);
 }
+
+// [instant-snapshot] Buffer probe installed upstream of the valve. Fires for every source
+// frame regardless of the valve drop state, and keeps the most-recent buffer (swapping out
+// the previous one) so a capture can start with zero wait for the next frame. The hold
+// strategy is selected by cmdArg.cap.instant (see the two modes in the body).
+static GstPadProbeReturn capture_latest_probe(GstPad *pad, GstPadProbeInfo *info, gpointer user_data)
+{
+    (void)pad;
+    CaptureData *cd = (CaptureData *)user_data;
+    GstBuffer *buf = GST_PAD_PROBE_INFO_BUFFER(info);
+    if (buf && cd && cd->last_src_mutex) {
+        // Two ways to keep the latest frame ready:
+        //  CAP_INSTANT_COPY(2): deep-copy into independent memory -> pins NO pool buffer
+        //    (safe for the shared imxvideoconvert_g2d pool that record/RTSP also use, the
+        //    exact starvation this file warns about in the buffering path), at the cost of
+        //    one frame copy per source frame while enabled.
+        //  CAP_INSTANT_REF(1): just ref the buffer -> ~0 CPU, but holds one shared pool
+        //    buffer, which could starve the pool / trip the upstream watchdog if the pool
+        //    is hard-capped (validate on-target).
+        // Either way, inject_last_src_buffer() make_writable()s a private copy before
+        // pushing, so the encode path never forwards a raw pool buffer downstream.
+        GstBuffer *held = (cmdArg.cap.instant == CAP_INSTANT_COPY)
+                              ? gst_buffer_copy_deep(buf)
+                              : gst_buffer_ref(buf);
+        if (held) {
+            std::lock_guard<std::mutex> lock(*cd->last_src_mutex);
+            if (cd->last_src_buffer) {
+                gst_buffer_unref(cd->last_src_buffer);
+            }
+            cd->last_src_buffer = held;
+        }
+    }
+    return GST_PAD_PROBE_OK;
+}
+
+// [instant-snapshot] Push the most-recent cached frame into appsrc immediately so a
+// single-shot capture does not wait up to one frame period for the next live frame.
+// Returns TRUE if a cached frame was injected. PTS is cleared so appsrc/downstream do
+// not choke on a stale/backwards timestamp.
+static gboolean inject_last_src_buffer(CaptureData *cd)
+{
+    GstBuffer *inject = NULL;
+    if (cd && cd->last_src_mutex) {
+        std::lock_guard<std::mutex> lock(*cd->last_src_mutex);
+        if (cd->last_src_buffer) {
+            inject = gst_buffer_ref(cd->last_src_buffer);
+        }
+    }
+    if (!inject) {
+        return FALSE; // no frame seen yet; caller falls back to the valve path
+    }
+    if (!cd->appsrc) {
+        gst_buffer_unref(inject);
+        return FALSE;
+    }
+
+    // Make a writable (metadata) copy so clearing PTS does not touch the cached buffer.
+    inject = gst_buffer_make_writable(inject);
+    GST_BUFFER_PTS(inject) = GST_CLOCK_TIME_NONE;
+    GST_BUFFER_DTS(inject) = GST_CLOCK_TIME_NONE;
+
+    GstFlowReturn ret = GST_FLOW_OK;
+    // "push-buffer" action signal takes its own ref (transfer-none); release ours after.
+    g_signal_emit_by_name(cd->appsrc, "push-buffer", inject, &ret);
+    gst_buffer_unref(inject);
+
+    if (ret != GST_FLOW_OK) {
+        __LOG(LOG_WARNING, "[%s][%s:%d] ch%d instant-snapshot inject failed: ret=%d",
+              CAP_LOG_KEY, _FILE_, __LINE__, cd->ch, ret);
+        return FALSE;
+    }
+    __LOG(LOG_NOTICE, "[%s][%s:%d] ch%d instant-snapshot: injected cached frame (zero-wait)",
+          CAP_LOG_KEY, _FILE_, __LINE__, cd->ch);
+    return TRUE;
+}
+
 void CaptureBin::addCaptureRequest(gint maxCnt, const gchar *prefix, gpointer userData, guint8 mode, gint timeoutMs)
 {
     std::lock_guard<std::mutex> lock(*captureData.queue_mutex);
@@ -891,6 +1002,14 @@ void CaptureBin::addCaptureRequest(gint maxCnt, const gchar *prefix, gpointer us
     // If not capturing, open valve
     if (captureData.valve) {
         g_object_set(captureData.valve, "drop", FALSE, NULL);
+    }
+
+    // [instant-snapshot] For a single-shot, non-PNG, non-continuous request, push the
+    // cached most-recent frame right now instead of waiting up to one frame period
+    // (1/fps) for the next live frame. The valve stays open as a fallback: if injection
+    // fails or no frame is cached yet, the next live frame still satisfies the request.
+    if (cmdArg.cap.instant && maxCnt <= 1 && mode != 2 && captureData.enc_type != CAP_ENC_PNG) {
+        inject_last_src_buffer(&captureData);
     }
 
     // For PNG multi-frame capture, pre-collect buffers at stable PTS cadence and
@@ -1304,6 +1423,23 @@ gboolean CaptureBin::init(guint8 ch)
     g_object_set(be.valve, "drop", TRUE, NULL);
     captureData.valve = be.valve;
 
+    // [instant-snapshot] Optional (cmdArg.cap.instant / --capinstant, JSON "instant").
+    // When enabled, a probe on the valve SINK pad (upstream of the drop) keeps a deep copy
+    // of the latest raw frame even while the valve is dropping, so a single-shot capture
+    // starts with zero wait for the next frame. When disabled (default) the probe is never
+    // installed and behavior is byte-for-byte identical to before this feature.
+    if (cmdArg.cap.instant) {
+        GstPad *valve_sink = gst_element_get_static_pad(be.valve, "sink");
+        if (valve_sink) {
+            probe_id = gst_pad_add_probe(valve_sink, GST_PAD_PROBE_TYPE_BUFFER, capture_latest_probe, &captureData, NULL);
+            gst_object_unref(valve_sink);
+            __LOG(LOG_NOTICE, "[%s][%s:%d] ch%d instant-snapshot ENABLED (mode=%d: %s)", CAP_LOG_KEY, _FILE_, __LINE__, captureData.ch,
+                  cmdArg.cap.instant, (cmdArg.cap.instant == CAP_INSTANT_COPY) ? "deep-copy" : "ref-hold");
+        } else {
+            __LOG(LOG_WARNING, "[%s][%s:%d] ch%d instant-snapshot: valve sink pad not found; feature disabled", CAP_LOG_KEY, _FILE_, __LINE__, captureData.ch);
+        }
+    }
+
 #if 1
     switch(captureData.enc_type)
     {
@@ -1384,6 +1520,11 @@ gboolean CaptureBin::init(guint8 ch)
 
     g_object_set(be.appsrc, "is-live", TRUE, NULL);
     g_object_set(be.appsrc, "format", GST_FORMAT_TIME, NULL);
+    // [instant-snapshot] Do NOT set "block"=TRUE on this appsrc. inject_last_src_buffer()
+    // emits "push-buffer" while addCaptureRequest holds queue_mutex; with block=TRUE the
+    // push would wait on the appsrc queue draining, whose drain path re-enters
+    // on_new_sample_to_file (which needs queue_mutex) -> deadlock. Leaving block=FALSE
+    // (default) keeps the push non-blocking and the downstream work asynchronous.
     captureData.appsrc = be.appsrc;
 
 #if 1

@@ -80,6 +80,11 @@
 #define DEFAULT_CAPTURE_DELAY 0
 #define DEFAULT_CAPTURE_QUALITY 85
 #define DEFAULT_CAPTURE_QUEUE_SIZE 30
+#define DEFAULT_CAPTURE_INSTANT 0
+// [instant-snapshot] cap.instant modes
+#define CAP_INSTANT_OFF   0   // no probe; behavior identical to before the feature
+#define CAP_INSTANT_REF   1   // ref-hold: ~0 idle CPU, pins one shared G2D pool buffer
+#define CAP_INSTANT_COPY  2   // deep-copy: no pool pin, per-frame copy cost while enabled
 #define DEFAULT_SPLIT_SEC           0
 #define DEFAULT_SPLIT_DIFF_MSEC     200
 #define DEFAULT_SPLIT_MAX_MSEC      5000
