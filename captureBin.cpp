@@ -1368,6 +1368,19 @@ gboolean CaptureBin::init(guint8 ch)
     //sinkPad = NULL;
     __LOG(LOG_INFO, "[%s][%s:%d] %s ch : %d, crop : %s", CAP_LOG_KEY, _FILE_, __LINE__, __FUNCTION__, captureData.ch, crop_en? "enable":"disable");
 
+    // [instant-snapshot] Defensive: init() may be re-invoked on a live object without a
+    // destructor (hot-reconfigure path, e.g. the runtime capture command in parser.cpp).
+    // Release any probe held from a previous init before the valve element is recreated,
+    // otherwise probe_pad (an owned pad ref) leaks and the old probe is orphaned.
+    if (probe_pad != NULL) {
+        if (probe_id != 0) {
+            gst_pad_remove_probe(probe_pad, probe_id);
+            probe_id = 0;
+        }
+        gst_object_unref(probe_pad);
+        probe_pad = NULL;
+    }
+
     be.bin = gst_bin_new(g_strdup_printf("captureBin%d", captureData.ch));
     be.queue = gst_element_factory_make(QUEUE_TYPE, g_strdup_printf("queue_%d", captureData.ch));
     be.valve = gst_element_factory_make("valve", g_strdup_printf("valve_%d", captureData.ch));
