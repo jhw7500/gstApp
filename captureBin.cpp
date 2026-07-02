@@ -787,6 +787,7 @@ CaptureBin::CaptureBin()
     captureData.last_src_buffer = NULL;
     captureData.last_src_mutex = std::unique_ptr<std::mutex>(new std::mutex());
     probe_id = 0;
+    probe_pad = NULL;
 
     timeout_source_id.store(0);
     captureData.valve = NULL;
@@ -804,17 +805,19 @@ CaptureBin::~CaptureBin()
         timeout_source_id.store(0);
     }
 
-    // [instant-snapshot] Remove the valve-sink probe FIRST. gst_pad_remove_probe blocks
-    // until any in-flight probe callback returns, so after this the probe can no longer
-    // touch last_src_mutex/last_src_buffer (which are torn down below / during member
-    // destruction). Prevents a use-after-free at teardown.
-    if (probe_id != 0 && be.valve) {
-        GstPad *valve_sink = gst_element_get_static_pad(be.valve, "sink");
-        if (valve_sink) {
-            gst_pad_remove_probe(valve_sink, probe_id);
-            gst_object_unref(valve_sink);
-        }
+    // [instant-snapshot] Remove the valve-sink probe FIRST, using our OWN ref to the pad
+    // (probe_pad) rather than re-fetching from be.valve. be.valve is owned by be.bin, which
+    // the pipeline owns; at teardown the pipeline may unref/free be.valve before this
+    // destructor runs, so touching be.valve here would be a use-after-free. Holding probe_pad
+    // keeps the pad object valid for removal. gst_pad_remove_probe blocks until any in-flight
+    // probe callback returns, so afterwards the probe can no longer touch last_src_*.
+    if (probe_pad != NULL && probe_id != 0) {
+        gst_pad_remove_probe(probe_pad, probe_id);
         probe_id = 0;
+    }
+    if (probe_pad != NULL) {
+        gst_object_unref(probe_pad);
+        probe_pad = NULL;
     }
 
     // Stop worker thread and wait for completion
@@ -865,6 +868,16 @@ CaptureBin::~CaptureBin()
     if(captureData.filePath) g_free(captureData.filePath);
 
     destroy_compressor(&captureData);
+}
+
+// [instant-snapshot] True only for the two valid enabled modes (1=ref, 2=copy). This is the
+// single gate for the whole feature. It intentionally rejects any other value so that an
+// unclamped invalid cmdArg.cap.instant (the parser clamps parser->arg AFTER cmdArg is copied
+// from it, so an out-of-range CLI/JSON value can survive in cmdArg) can never silently
+// enable the probe / injection path.
+static inline gboolean cap_instant_enabled(void)
+{
+    return (cmdArg.cap.instant == CAP_INSTANT_REF || cmdArg.cap.instant == CAP_INSTANT_COPY);
 }
 
 // [instant-snapshot] Buffer probe installed upstream of the valve. Fires for every source
@@ -927,10 +940,11 @@ static gboolean inject_last_src_buffer(CaptureData *cd)
     GST_BUFFER_PTS(inject) = GST_CLOCK_TIME_NONE;
     GST_BUFFER_DTS(inject) = GST_CLOCK_TIME_NONE;
 
-    GstFlowReturn ret = GST_FLOW_OK;
-    // "push-buffer" action signal takes its own ref (transfer-none); release ours after.
-    g_signal_emit_by_name(cd->appsrc, "push-buffer", inject, &ret);
-    gst_buffer_unref(inject);
+    // Use the documented C API instead of the "push-buffer" action signal: gst_app_src_push_buffer()
+    // is unambiguously transfer-full (it takes ownership of our ref), so we must NOT unref
+    // afterwards. This sidesteps the transfer-none/full ambiguity of the action signal and the
+    // matching double-free-vs-leak hazard entirely. Ownership of `inject` passes to appsrc here.
+    GstFlowReturn ret = gst_app_src_push_buffer(GST_APP_SRC(cd->appsrc), inject);
 
     if (ret != GST_FLOW_OK) {
         __LOG(LOG_WARNING, "[%s][%s:%d] ch%d instant-snapshot inject failed: ret=%d",
@@ -1008,7 +1022,7 @@ void CaptureBin::addCaptureRequest(gint maxCnt, const gchar *prefix, gpointer us
     // cached most-recent frame right now instead of waiting up to one frame period
     // (1/fps) for the next live frame. The valve stays open as a fallback: if injection
     // fails or no frame is cached yet, the next live frame still satisfies the request.
-    if (cmdArg.cap.instant && maxCnt <= 1 && mode != 2 && captureData.enc_type != CAP_ENC_PNG) {
+    if (cap_instant_enabled() && maxCnt <= 1 && mode != 2 && captureData.enc_type != CAP_ENC_PNG) {
         inject_last_src_buffer(&captureData);
     }
 
@@ -1428,11 +1442,13 @@ gboolean CaptureBin::init(guint8 ch)
     // of the latest raw frame even while the valve is dropping, so a single-shot capture
     // starts with zero wait for the next frame. When disabled (default) the probe is never
     // installed and behavior is byte-for-byte identical to before this feature.
-    if (cmdArg.cap.instant) {
-        GstPad *valve_sink = gst_element_get_static_pad(be.valve, "sink");
-        if (valve_sink) {
-            probe_id = gst_pad_add_probe(valve_sink, GST_PAD_PROBE_TYPE_BUFFER, capture_latest_probe, &captureData, NULL);
-            gst_object_unref(valve_sink);
+    if (cap_instant_enabled()) {
+        // Keep our OWN ref to the probed sink pad in probe_pad (do NOT unref here). The
+        // destructor removes the probe via probe_pad without touching be.valve, which the
+        // pipeline may have already freed at teardown. See ~CaptureBin().
+        probe_pad = gst_element_get_static_pad(be.valve, "sink");
+        if (probe_pad) {
+            probe_id = gst_pad_add_probe(probe_pad, GST_PAD_PROBE_TYPE_BUFFER, capture_latest_probe, &captureData, NULL);
             __LOG(LOG_NOTICE, "[%s][%s:%d] ch%d instant-snapshot ENABLED (mode=%d: %s)", CAP_LOG_KEY, _FILE_, __LINE__, captureData.ch,
                   cmdArg.cap.instant, (cmdArg.cap.instant == CAP_INSTANT_COPY) ? "deep-copy" : "ref-hold");
         } else {

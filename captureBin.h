@@ -159,6 +159,7 @@ public :
 	CaptureElement be;
     gboolean add_cap_f = 0;
     gulong probe_id;
+    GstPad *probe_pad;   // [instant-snapshot] owned ref to the probed valve sink pad (teardown-safe)
     GstPad *queue_src_pad;
     //CaptureData captureData;
 
