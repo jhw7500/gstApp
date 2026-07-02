@@ -1022,7 +1022,14 @@ void CaptureBin::addCaptureRequest(gint maxCnt, const gchar *prefix, gpointer us
     // cached most-recent frame right now instead of waiting up to one frame period
     // (1/fps) for the next live frame. The valve stays open as a fallback: if injection
     // fails or no frame is cached yet, the next live frame still satisfies the request.
-    if (cap_instant_enabled() && maxCnt <= 1 && mode != 2 && captureData.enc_type != CAP_ENC_PNG) {
+    // Inject only when this request is the one that will actually receive the frame:
+    // nothing is currently being served (current_request == NULL) AND this is the sole
+    // queued request. Otherwise on_new_sample_to_file() attributes frames FIFO by
+    // current_request, so an injected frame would be misattributed to an in-progress
+    // request (e.g. a burst), corrupting its sequence. In that case fall back to the
+    // normal live-frame path (valve already opened above).
+    if (cap_instant_enabled() && maxCnt <= 1 && mode != 2 && captureData.enc_type != CAP_ENC_PNG
+        && captureData.current_request == nullptr && captureData.request_queue->size() == 1) {
         inject_last_src_buffer(&captureData);
     }
 
@@ -1379,6 +1386,17 @@ gboolean CaptureBin::init(guint8 ch)
         }
         gst_object_unref(probe_pad);
         probe_pad = NULL;
+    }
+    // Also drop any frame held from a previous init: after a reconfigure the cached buffer
+    // may be a different resolution/format, and injecting it into the freshly built appsrc
+    // could crash/error the encoder; it would also leak if the feature is disabled on this
+    // re-init or no new frame arrives to swap it out.
+    if (captureData.last_src_mutex) {
+        std::lock_guard<std::mutex> lock(*captureData.last_src_mutex);
+        if (captureData.last_src_buffer) {
+            gst_buffer_unref(captureData.last_src_buffer);
+            captureData.last_src_buffer = NULL;
+        }
     }
 
     be.bin = gst_bin_new(g_strdup_printf("captureBin%d", captureData.ch));
