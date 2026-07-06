@@ -960,8 +960,14 @@ static gboolean inject_last_src_buffer(CaptureData *cd)
               CAP_LOG_KEY, _FILE_, __LINE__, cd->ch, ret);
         return FALSE;
     }
-    __LOG(LOG_NOTICE, "[%s][%s:%d] ch%d instant-snapshot: injected cached frame (zero-wait)",
-          CAP_LOG_KEY, _FILE_, __LINE__, cd->ch);
+    // Debug-gated for the same reason as the first-frame latency log above: this is a
+    // per-request diagnostic, so keep it out of the default NOTICE stream when instant is
+    // used for frequent single-shot (polling) captures. The failure path above stays
+    // always-on (LOG_WARNING) because an inject error is worth surfacing unconditionally.
+    if (cd->debug) {
+        __LOG(LOG_NOTICE, "[%s][%s:%d] ch%d instant-snapshot: injected cached frame (zero-wait)",
+              CAP_LOG_KEY, _FILE_, __LINE__, cd->ch);
+    }
     return TRUE;
 }
 
