@@ -93,10 +93,10 @@ typedef struct _CaptureData
     GThread *buffering_feeder_thread;
     std::atomic<bool> buffering_feeder_running;
 
-    // [instant-snapshot] Deep copy of the most-recent raw source frame, refreshed each
-    // frame by a probe upstream of the valve so a single-shot capture can start with zero
-    // wait for the next frame. A copy (not a ref) is kept so no shared pool buffer is
-    // pinned. Guarded by last_src_mutex.
+    // [instant-snapshot] Holds the most-recent raw source frame, refreshed each frame by a
+    // probe upstream of the valve so a single-shot capture can start with zero wait for the
+    // next frame. Depending on cmdArg.cap.instant this is either a deep copy (COPY/2, pins no
+    // pool buffer) or just a ref (REF/1, pins one shared pool buffer). Guarded by last_src_mutex.
     GstBuffer *last_src_buffer;
     std::unique_ptr<std::mutex> last_src_mutex;
 } CaptureData;

@@ -643,7 +643,10 @@ static GstFlowReturn on_new_sample_to_file(GstElement *sink, gpointer userData)
 
                 // [instant-snapshot] Measure command->first-frame latency (the phase-wait
                 // component this optimization targets). capture_index 0 == first frame.
-                if (task->capture_index == 0 && req->startTime > 0) {
+                // Debug-gated (like the DROP log below): this is a diagnostic metric, so it
+                // must not add a per-request NOTICE -- nor lengthen the queue_mutex hold on a
+                // blocking log sink -- on the default path, including when the feature is off.
+                if (info->debug && task->capture_index == 0 && req->startTime > 0) {
                     gint64 first_ms = (g_get_monotonic_time() - req->startTime) / 1000;
                     __LOG(LOG_NOTICE, "[%s][%s:%d] ch%d first-frame latency: %ld ms (cmd->first sink)",
                           CAP_LOG_KEY, _FILE_, __LINE__, info->ch, (long)first_ms);
@@ -890,16 +893,22 @@ static GstPadProbeReturn capture_latest_probe(GstPad *pad, GstPadProbeInfo *info
     CaptureData *cd = (CaptureData *)user_data;
     GstBuffer *buf = GST_PAD_PROBE_INFO_BUFFER(info);
     if (buf && cd && cd->last_src_mutex) {
-        // Two ways to keep the latest frame ready:
+        // Two ways to keep the latest frame ready. NOTE: this probe sits UPSTREAM of the
+        // valve drop, so it fires on EVERY source frame the whole time the feature is
+        // enabled -- including idle periods with no capture pending. The chosen cost below
+        // is therefore paid continuously, not just at capture time.
         //  CAP_INSTANT_COPY(2): deep-copy into independent memory -> pins NO pool buffer
         //    (safe for the shared imxvideoconvert_g2d pool that record/RTSP also use, the
         //    exact starvation this file warns about in the buffering path), at the cost of
-        //    one frame copy per source frame while enabled.
+        //    one full-frame copy per source frame while enabled.
         //  CAP_INSTANT_REF(1): just ref the buffer -> ~0 CPU, but holds one shared pool
-        //    buffer, which could starve the pool / trip the upstream watchdog if the pool
-        //    is hard-capped (validate on-target).
-        // Either way, inject_last_src_buffer() make_writable()s a private copy before
-        // pushing, so the encode path never forwards a raw pool buffer downstream.
+        //    buffer continuously, which could starve the pool / trip the upstream watchdog
+        //    if the pool is hard-capped (validate on-target).
+        // inject_last_src_buffer() make_writable()s the buffer before pushing, but that
+        // isolates only the buffer METADATA (PTS/DTS) -- the underlying GstMemory is shared,
+        // not deep-copied. In COPY(2) that memory is already private; in REF(1) it is still
+        // the shared pool memory, so mode 1 DOES forward pool memory downstream. That is safe
+        // only because every element in the encode chain reads its input read-only.
         GstBuffer *held = (cmdArg.cap.instant == CAP_INSTANT_COPY)
                               ? gst_buffer_copy_deep(buf)
                               : gst_buffer_ref(buf);

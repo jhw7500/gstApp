@@ -749,6 +749,11 @@ gint main(gint argc, gchar *argv[]) {
   cmdArg = parser->arg;
   if (parser->check_arg() < 0)
     return -1;
+  // [instant-snapshot] check_arg() validates/clamps parser->arg (e.g. an out-of-range
+  // --capinstant) AFTER the cmdArg copy above, and cmdArg is otherwise never re-synced, so
+  // an invalid value would survive in the runtime cmdArg. Re-copy so cmdArg reflects the
+  // clamped/validated values. cap_instant_enabled()'s strict check stays as defense-in-depth.
+  cmdArg = parser->arg;
 
   // MuxBin* muxBin = MuxBin::getInstance();
   GstBus *bus;
