@@ -15,8 +15,13 @@ This repo is often developed on GitHub first, then a curated result is pushed to
 See `projects/GITLAB_PUBLISH.md`.
 
 ## Quick Commands (from `Makefile`)
-- Build (default target): `make`
-- Clean: `make clean`
+- **Build (cross-compile for i.MX8): `./make-for-imx8`** — sources the Yocto SDK
+  (`/shared/fsl-imx-xwayland/5.10-hardknott`, `cortexa53-crypto-poky-linux`), points
+  `PKG_CONFIG_PATH` at the target sysroot, then runs `make` (args pass through, e.g.
+  `./make-for-imx8 clean`). **Plain `make` on a dev host FAILS** with
+  `fatal error: gst/gst.h: No such file or directory` because the host lacks the GStreamer
+  dev libs. Always build via `./make-for-imx8`.
+- Clean: `./make-for-imx8 clean` (or `make clean`)
 
 ### Build Artifacts
 - Output binary: `bin/gstApp`

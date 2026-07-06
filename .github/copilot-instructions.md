@@ -21,7 +21,7 @@
 - **Why structured this way:** the code keeps capture/encoding/recording/streaming logic separated by Bin classes that expose `getBin*Pad()` helpers used by `main.cpp` to link pads at startup. This makes it easy to add/remove sinks by matching pad add + gst_pad_link patterns used throughout `main.cpp`.
 
 # Build / Run / Debug workflows
-- Build: run `make` at repository root. The `Makefile` uses `pkg-config` for GStreamer (+ gst-rtsp-server, glib, json-c, openssl, turbojpeg, rnnoise). Output binary: `bin/gstApp` and object files under `obj/`.
+- Build: run `./make-for-imx8` at repository root (NOT plain `make`). It sources the Yocto i.MX8 SDK (`cortexa53-crypto-poky-linux`) and sets `PKG_CONFIG_PATH` to the target sysroot before running `make`. Plain `make` on a dev host fails with `fatal error: gst/gst.h: No such file or directory` (host has no GStreamer dev libs). The `Makefile` uses `pkg-config` for GStreamer (+ gst-rtsp-server, glib, json-c, openssl, turbojpeg, rnnoise). Output binary: `bin/gstApp` and object files under `obj/`.
 
 - Important `Makefile` notes:
   - Cross-compile/sysroot options are present but commented out — the project is often built on-target or with a custom toolchain.
