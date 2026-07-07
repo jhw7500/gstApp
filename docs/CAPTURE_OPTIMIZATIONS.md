@@ -113,6 +113,48 @@ g_object_set(be.appsink, "emit-signals", TRUE, "sync", FALSE, "async", FALSE, NU
 
 ---
 
+## 4. Instant Snapshot (`--capinstant` / JSON `instant`)
+
+### Problem
+A single-shot capture opens the valve and then **waits for the next live camera frame**
+(0~1 frame period = 0~66ms at 15fps). This "phase wait" is pure latency between the
+command and the first frame reaching the sink.
+
+### Solution
+A buffer probe on the **valve sink pad** (upstream of the drop) keeps the most-recent raw
+frame at all times. On a single-shot request the cached frame is injected directly into
+`appsrc` (`gst_app_src_push_buffer`, transfer-full), so the capture does not wait for the
+next frame. Gated by `cmdArg.cap.instant`; **default OFF** (probe never installed → byte-for-byte
+identical to before). Set via JSON `.VHL_CAM.capture.instant` or CLI `--capinstant`.
+
+### Modes (on-target measured: pim-camera, 15fps, turbo)
+
+| `instant` | Mode | First-frame latency | Idle CPU (1 core) | Shared G2D pool |
+|-----------|------|---------------------|-------------------|-----------------|
+| **0** | off | next-frame wait (~2~100ms baseline) | 3.2% (ref) | unaffected |
+| **1** | ref-hold | **phase-wait removed (~10ms)** | 3.4% (≈off) | pins 1 buffer continuously |
+| **2** | deep-copy | **phase-wait removed (~10ms)** | 47.5% (+44pt) | unaffected (safe) |
+
+- **Latency:** modes 1/2 both eliminate the phase wait (first-frame ~100ms → ~10ms). The
+  `Capture request DONE ... elapsed` time (cmd→file) drops by the same amount, since
+  `elapsed = phase-wait + encode/write` and only the phase-wait is removed. The ~10ms floor
+  is pipeline traversal (not a wait); the ~50~60ms encode/write floor is constant (turbojpeg).
+- **Image content:** the injected frame is the latest cached frame, i.e. a moment 0~1 frame
+  period **before** the command (mode 0 captures a frame just **after**). Matters only for
+  fast motion / precise event sync.
+- **Trade-off:** `1 (ref)` = ~0 idle CPU + 0 wait, but pins one shared pool buffer (record/RTSP
+  pool-starvation / upstream-watchdog risk on a hard-capped pool → validate with a concurrent
+  soak). `2 (copy)` = pool-safe, but a full-frame deep copy every source frame (~12% SoC idle).
+- **Recommended:** `1 (ref)` after an on-target record+RTSP+capture soak confirms pool safety;
+  `2` only if the pool is too tight to spare one buffer.
+
+### Changes
+- `parser.cpp` - `--capinstant` GOptionEntry + JSON `instant` key + range clamp (`check_arg`)
+- `captureBin.*` - `capture_latest_probe` / `inject_last_src_buffer` / probe lifecycle
+  (teardown-safe removal via owned `probe_pad`, hot re-init cleanup), `last_src_buffer` holder
+
+---
+
 ## Testing Checklist
 
 ### 1. Valve Element Test
