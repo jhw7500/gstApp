@@ -37,7 +37,25 @@
 #define DEFAULT_RECORD_FPS      15
 #define DEFAULT_RTSP_FPS        15
 #define DEFAULT_CAPTURE_FPS     15
+/* vpuenc_h264 "gop-size". gop had no JSON reader until now, so every channel
+ * ran pinned to this constant; keeping it at 15 means an edgeconf without the
+ * key behaves exactly as before. Note this is NOT the plugin's own default,
+ * which is 30 — gstApp has always overridden it. */
 #define DEFAULT_GOP_SIZE        15
+#define MIN_GOP_SIZE            0
+#define MAX_GOP_SIZE            32767
+/* vpuenc_h264 encoder tuning defaults — plugin defaults, i.e. no behaviour
+ * change when edgeconf omits the keys. See CamConfig in util.h. */
+#define DEFAULT_PROFILE         9       /* Baseline */
+#define MIN_PROFILE             9
+#define MAX_PROFILE             12      /* 9=Baseline 10=Main 11=High 12=High10 */
+#define DEFAULT_QUANT           (-1)    /* auto */
+#define MIN_QUANT               (-1)
+#define MAX_QUANT               51
+#define DEFAULT_QP_MIN          0       /* 0 = unset -> hardware default */
+#define DEFAULT_QP_MAX          0       /* 0 = unset -> hardware default */
+#define MIN_QP                  0
+#define MAX_QP                  51
 #define DEFAULT_DURATION        1
 #define DEFAULT_DBG_LEVEL       4
 #define DEFAULT_LOG_LEVEL       5

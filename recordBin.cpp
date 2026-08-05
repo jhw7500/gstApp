@@ -532,7 +532,10 @@ gboolean RecordBin::init(guint8 num, gboolean crop_en)
 
     g_object_set(re.enc, "bitrate", cmdArg.cam[ch].bps[STREAM_REC], NULL);
     g_object_set(re.enc, "gop-size", cmdArg.cam[ch].gop[STREAM_REC], NULL);
-    //g_object_set(re.enc, "quant", 35, NULL);
+    g_object_set(re.enc, "quant", cmdArg.cam[ch].quant[STREAM_REC], NULL);
+    enc_set_optional_int(re.enc, "profile", cmdArg.cam[ch].profile[STREAM_REC], ch);
+    enc_set_optional_int(re.enc, "qp-min", cmdArg.cam[ch].qp_min[STREAM_REC], ch);
+    enc_set_optional_int(re.enc, "qp-max", cmdArg.cam[ch].qp_max[STREAM_REC], ch);
     //g_object_set(re.parse, "config-interval", -1, NULL);
     //g_object_set(re.rate, "max-rate", MAIN_FPS, "drop-only", FALSE, NULL);
     // [Queue 최적화] I/O 지연 대비 시간 기반 버퍼링 (JSON 설정값 사용)

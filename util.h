@@ -111,6 +111,17 @@ typedef struct {
     gboolean hflip;
     gint bps[2];
     gint gop[2];
+    /* vpuenc_h264 encoder tuning, per stream ([STREAM_REC], [STREAM_RTSP]).
+     * profile: 9=Baseline 10=Main 11=High 12=High10 (int, not a GStreamer enum)
+     * quant  : initial QP, -1 = auto (rate control keeps running either way)
+     * qp_min / qp_max: 0..51, 0 means "unset" to the VPU wrapper (it only
+     *          honours values > 0), so 0 leaves the hardware default in place.
+     * profile is installed on i.MX8MP only, qp_min/qp_max on i.MX8MP and
+     * i.MX8MM, so encoderBin checks the property exists before setting it. */
+    gint profile[2];
+    gint quant[2];
+    gint qp_min[2];
+    gint qp_max[2];
     gboolean ae_on;
     guint ae_gain;
     guint lsc;
@@ -232,6 +243,14 @@ void print_tag(const GstTagList * list, const gchar * tag, gpointer unused);
 void makeDir(const char* path);
 void convert_data_to_hex(const char *data, int len, char *buffer, int buffer_size);
 int check_sd_mount_flag(void);
+
+/* Set an encoder property that only exists on some SoC/plugin builds.
+ * vpuenc_h264 installs profile on i.MX8MP only and qp-min/qp-max on
+ * i.MX8MP/i.MX8MM, so a plain g_object_set() against another build would
+ * emit a GLib warning and silently drop the value.
+ * Logs when the property is missing so a no-op is visible instead of
+ * looking applied. */
+void enc_set_optional_int(GstElement *enc, const gchar *prop, gint value, guint8 ch);
 
 // Safe alternatives to system() calls
 int safe_write_file(const char *path, const char *content);

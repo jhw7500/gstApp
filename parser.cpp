@@ -143,6 +143,30 @@ static void json_get_int_array(json_object *obj, const gchar *name, gint *out,
   }
 }
 
+/* Range sanity for one per-stream vpuenc_h264 knob. Same policy as bps: never
+ * abort startup on edgeconf noise — log loudly and fall back to the compiled-in
+ * default, which equals the plugin's own default. */
+static void enc_knob_sanity(gint *slot, gint lo, gint hi, gint def,
+                            const gchar *name, const gchar *stream, gint ch) {
+  if (*slot < lo || *slot > hi) {
+    __LOG(LOG_ERR,
+          "[%s][%s:%d] ch%d invalid %s %s %d, fallback to %d (range %d..%d)",
+          LOG_KEY, _FILE_, __LINE__, ch, stream, name, *slot, def, lo, hi);
+    *slot = def;
+  }
+}
+
+/* Single-encoder mode: one encoder feeds both record and rtsp, so the rtsp
+ * slot is never consumed. Align it with rec so downstream reads stay honest. */
+static void enc_knob_mirror(gint *slot, gint rec, const gchar *name, gint ch) {
+  if (*slot != rec) {
+    __LOG(LOG_INFO,
+          "[%s][%s:%d] ch%d single-enc: align rtsp %s %d -> %d (= rec)",
+          LOG_KEY, _FILE_, __LINE__, ch, name, *slot, rec);
+    *slot = rec;
+  }
+}
+
 void ParserClass::init_arg(gchar *argv) {
   // g_print("%s\n", __FUNCTION__);
   arg.appname = CHARNEXT(argv, '/');
@@ -229,6 +253,14 @@ void ParserClass::init_arg(gchar *argv) {
     arg.cam[i].bps[STREAM_RTSP] = DEFAULT_RTSP_BITRATE;
     arg.cam[i].gop[0] = DEFAULT_GOP_SIZE;
     arg.cam[i].gop[1] = DEFAULT_GOP_SIZE;
+    arg.cam[i].profile[STREAM_REC] = DEFAULT_PROFILE;
+    arg.cam[i].profile[STREAM_RTSP] = DEFAULT_PROFILE;
+    arg.cam[i].quant[STREAM_REC] = DEFAULT_QUANT;
+    arg.cam[i].quant[STREAM_RTSP] = DEFAULT_QUANT;
+    arg.cam[i].qp_min[STREAM_REC] = DEFAULT_QP_MIN;
+    arg.cam[i].qp_min[STREAM_RTSP] = DEFAULT_QP_MIN;
+    arg.cam[i].qp_max[STREAM_REC] = DEFAULT_QP_MAX;
+    arg.cam[i].qp_max[STREAM_RTSP] = DEFAULT_QP_MAX;
     arg.cam[i].ae_on = TRUE;
     arg.cam[i].ae_gain = DEFAULT_AE_GAIN;
     arg.cam[i].awb = DEFAULT_AWB;
@@ -586,6 +618,18 @@ gint ParserClass::json_parser(const gchar *path, const gchar *header) {
       json_object_get_value(vobj, "vflip", &arg.cam[i].vflip);
       json_get_int_array(vobj, "bps", arg.cam[i].bps,
                          sizeof(arg.cam[i].bps) / sizeof(arg.cam[i].bps[0]));
+      /* vpuenc_h264 tuning, all [rec, rtsp] pairs like bps. Absent keys keep
+       * the init_arg defaults, which mirror the plugin's own defaults. */
+      json_get_int_array(vobj, "gop", arg.cam[i].gop,
+                         sizeof(arg.cam[i].gop) / sizeof(arg.cam[i].gop[0]));
+      json_get_int_array(vobj, "profile", arg.cam[i].profile,
+                         sizeof(arg.cam[i].profile) / sizeof(arg.cam[i].profile[0]));
+      json_get_int_array(vobj, "quant", arg.cam[i].quant,
+                         sizeof(arg.cam[i].quant) / sizeof(arg.cam[i].quant[0]));
+      json_get_int_array(vobj, "qp_min", arg.cam[i].qp_min,
+                         sizeof(arg.cam[i].qp_min) / sizeof(arg.cam[i].qp_min[0]));
+      json_get_int_array(vobj, "qp_max", arg.cam[i].qp_max,
+                         sizeof(arg.cam[i].qp_max) / sizeof(arg.cam[i].qp_max[0]));
       json_object_get_value(vobj, "ae_on", &arg.cam[i].ae_on);
       json_get_uint(vobj, "ae_gain", &arg.cam[i].ae_gain);
       /* Optional: AWB preset name. Falls back to DEFAULT_AWB when absent. */
@@ -802,9 +846,9 @@ gint ParserClass::arg_parser(int *argc, char **argv[]) {
        "ch0 rec gop size, default(15)", "INT"},
       {"grec1", 0, 0, G_OPTION_ARG_INT, &arg.cam[1].gop[STREAM_REC],
        "ch1 rec gop size, default(15)", "INT"},
-      {"grec3", 0, 0, G_OPTION_ARG_INT, &arg.cam[2].gop[STREAM_REC],
+      {"grec2", 0, 0, G_OPTION_ARG_INT, &arg.cam[2].gop[STREAM_REC],
        "ch2 rec gop size, default(15)", "INT"},
-      {"grec0", 0, 0, G_OPTION_ARG_INT, &arg.cam[3].gop[STREAM_REC],
+      {"grec3", 0, 0, G_OPTION_ARG_INT, &arg.cam[3].gop[STREAM_REC],
        "ch3 rec gop size, default(15)", "INT"},
       {"grtsp0", 0, 0, G_OPTION_ARG_INT, &arg.cam[0].gop[STREAM_RTSP],
        "ch0 rtsp gop size, default(15)", "INT"},
@@ -977,6 +1021,71 @@ gint ParserClass::check_arg() {
               LOG_KEY, _FILE_, __LINE__, i, arg.cam[i].bps[STREAM_RTSP],
               arg.cam[i].bps[STREAM_REC]);
         arg.cam[i].bps[STREAM_RTSP] = arg.cam[i].bps[STREAM_REC];
+      }
+    }
+
+    __LOG(LOG_NOTICE,
+          "[%s][%s:%d] ch%d gop:%d,%d profile:%d,%d quant:%d,%d "
+          "qp_min:%d,%d qp_max:%d,%d",
+          LOG_KEY, _FILE_, __LINE__, i, arg.cam[i].gop[STREAM_REC],
+          arg.cam[i].gop[STREAM_RTSP], arg.cam[i].profile[STREAM_REC],
+          arg.cam[i].profile[STREAM_RTSP], arg.cam[i].quant[STREAM_REC],
+          arg.cam[i].quant[STREAM_RTSP], arg.cam[i].qp_min[STREAM_REC],
+          arg.cam[i].qp_min[STREAM_RTSP], arg.cam[i].qp_max[STREAM_REC],
+          arg.cam[i].qp_max[STREAM_RTSP]);
+
+    /*
+     * vpuenc_h264 tuning sanity, same fall-back-to-default policy as bps.
+     * qp_min/qp_max treat 0 as "unset" (the VPU wrapper only honours > 0), so
+     * 0 is legal and means "leave the hardware default in place".
+     */
+    enc_knob_sanity(&arg.cam[i].gop[STREAM_REC], MIN_GOP_SIZE, MAX_GOP_SIZE,
+                    DEFAULT_GOP_SIZE, "gop", "rec", i);
+    enc_knob_sanity(&arg.cam[i].profile[STREAM_REC], MIN_PROFILE, MAX_PROFILE,
+                    DEFAULT_PROFILE, "profile", "rec", i);
+    enc_knob_sanity(&arg.cam[i].quant[STREAM_REC], MIN_QUANT, MAX_QUANT,
+                    DEFAULT_QUANT, "quant", "rec", i);
+    enc_knob_sanity(&arg.cam[i].qp_min[STREAM_REC], MIN_QP, MAX_QP,
+                    DEFAULT_QP_MIN, "qp_min", "rec", i);
+    enc_knob_sanity(&arg.cam[i].qp_max[STREAM_REC], MIN_QP, MAX_QP,
+                    DEFAULT_QP_MAX, "qp_max", "rec", i);
+
+    if (arg.dual_enc) {
+      enc_knob_sanity(&arg.cam[i].gop[STREAM_RTSP], MIN_GOP_SIZE, MAX_GOP_SIZE,
+                      DEFAULT_GOP_SIZE, "gop", "rtsp", i);
+      enc_knob_sanity(&arg.cam[i].profile[STREAM_RTSP], MIN_PROFILE, MAX_PROFILE,
+                      DEFAULT_PROFILE, "profile", "rtsp", i);
+      enc_knob_sanity(&arg.cam[i].quant[STREAM_RTSP], MIN_QUANT, MAX_QUANT,
+                      DEFAULT_QUANT, "quant", "rtsp", i);
+      enc_knob_sanity(&arg.cam[i].qp_min[STREAM_RTSP], MIN_QP, MAX_QP,
+                      DEFAULT_QP_MIN, "qp_min", "rtsp", i);
+      enc_knob_sanity(&arg.cam[i].qp_max[STREAM_RTSP], MIN_QP, MAX_QP,
+                      DEFAULT_QP_MAX, "qp_max", "rtsp", i);
+    } else {
+      enc_knob_mirror(&arg.cam[i].gop[STREAM_RTSP], arg.cam[i].gop[STREAM_REC],
+                      "gop", i);
+      enc_knob_mirror(&arg.cam[i].profile[STREAM_RTSP],
+                      arg.cam[i].profile[STREAM_REC], "profile", i);
+      enc_knob_mirror(&arg.cam[i].quant[STREAM_RTSP],
+                      arg.cam[i].quant[STREAM_REC], "quant", i);
+      enc_knob_mirror(&arg.cam[i].qp_min[STREAM_RTSP],
+                      arg.cam[i].qp_min[STREAM_REC], "qp_min", i);
+      enc_knob_mirror(&arg.cam[i].qp_max[STREAM_RTSP],
+                      arg.cam[i].qp_max[STREAM_REC], "qp_max", i);
+    }
+
+    /* An inverted window would be silently clamped deep inside the VPU
+     * wrapper; reject it here where it is still explainable. Both zero
+     * (= unset) is the normal case and must pass. */
+    for (gint s = 0; s < 2; s++) {
+      if (arg.cam[i].qp_min[s] > 0 && arg.cam[i].qp_max[s] > 0 &&
+          arg.cam[i].qp_min[s] > arg.cam[i].qp_max[s]) {
+        __LOG(LOG_ERR,
+              "[%s][%s:%d] ch%d %s qp_min %d > qp_max %d, reset both to unset",
+              LOG_KEY, _FILE_, __LINE__, i, s == STREAM_REC ? "rec" : "rtsp",
+              arg.cam[i].qp_min[s], arg.cam[i].qp_max[s]);
+        arg.cam[i].qp_min[s] = DEFAULT_QP_MIN;
+        arg.cam[i].qp_max[s] = DEFAULT_QP_MAX;
       }
     }
   }

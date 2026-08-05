@@ -1195,6 +1195,10 @@ gboolean RtspServerBin::init(guint8 ch, gboolean crop_en) {
 
   g_object_set(re.enc, "bitrate", cmdArg.cam[ch].bps[STREAM_RTSP], NULL);
   g_object_set(re.enc, "gop-size", cmdArg.cam[ch].gop[STREAM_RTSP], NULL);
+  g_object_set(re.enc, "quant", cmdArg.cam[ch].quant[STREAM_RTSP], NULL);
+  enc_set_optional_int(re.enc, "profile", cmdArg.cam[ch].profile[STREAM_RTSP], ch);
+  enc_set_optional_int(re.enc, "qp-min", cmdArg.cam[ch].qp_min[STREAM_RTSP], ch);
+  enc_set_optional_int(re.enc, "qp-max", cmdArg.cam[ch].qp_max[STREAM_RTSP], ch);
   const gint bin_queue_ms =
       clamp_int(cmdArg.rtsp_bin_queue_max_time_ms, 0, 2000);
   g_object_set(re.queue, "max-size-time", (guint64)bin_queue_ms * GST_MSECOND,

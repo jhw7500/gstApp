@@ -521,6 +521,23 @@ int check_sd_mount_flag(void)
 }
 
 //-------------------------------------------------------------------------
+// Encoder property that only exists on some SoC/plugin builds (see util.h)
+void enc_set_optional_int(GstElement *enc, const gchar *prop, gint value, guint8 ch)
+{
+    if (!enc)
+        return;
+
+    if (!g_object_class_find_property(G_OBJECT_GET_CLASS(enc), prop)) {
+        __LOG(LOG_WARNING,
+              "[GST][%s:%d] ch%d encoder has no '%s' property, %d not applied",
+              _FILE_, __LINE__, ch, prop, value);
+        return;
+    }
+    g_object_set(enc, prop, value, NULL);
+    //__LOG(LOG_NOTICE, "[GST][%s:%d] ch%d set %s : %d", _FILE_, __LINE__, ch, prop, value);
+}
+
+//-------------------------------------------------------------------------
 // Safe file write - replaces system("echo value > file")
 int safe_write_file(const char *path, const char *content)
 {

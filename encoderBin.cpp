@@ -384,9 +384,18 @@ gboolean EncoderBin::init(guint8 ch)
     g_object_set(re.overlay, "halignment", 0, NULL);
     g_object_set(re.overlay, "font-desc", DEFAULT_OVERLAY_FONT, NULL);
 
+    /* All encoder tuning now comes from edgeconf (VHL_CAM.i2cN.chX.*).
+     * Defaults reproduce the previous behaviour exactly: gop-size stays at
+     * DEFAULT_GOP_SIZE (15), the rest match the plugin's own defaults. */
     g_object_set(re.enc, "bitrate", cmdArg.cam[ch].bps[STREAM_REC], NULL);
     g_object_set(re.enc, "gop-size", cmdArg.cam[ch].gop[STREAM_REC], NULL);
-    //g_object_set(re.enc, "quant", 35, NULL);
+    g_object_set(re.enc, "quant", cmdArg.cam[ch].quant[STREAM_REC], NULL);
+    /* profile/qp-min/qp-max are installed by the vpu plugin on i.MX8MP only,
+     * so set them through a guard instead of letting GLib warn per channel. */
+    enc_set_optional_int(re.enc, "profile", cmdArg.cam[ch].profile[STREAM_REC], ch);
+    enc_set_optional_int(re.enc, "qp-min", cmdArg.cam[ch].qp_min[STREAM_REC], ch);
+    enc_set_optional_int(re.enc, "qp-max", cmdArg.cam[ch].qp_max[STREAM_REC], ch);
+
     //g_object_set(re.parse, "config-interval", -1, NULL);
     //g_object_set(re.rate, "max-rate", MAIN_FPS, "drop-only", FALSE, NULL);
     //g_object_set(re.queue, "max-size-time", GST_SECOND, "max-size-buffers", cmdArg.fps[STREAM_REC][ch], "leaky", LEAKY_DOWNSTREAM, NULL);
