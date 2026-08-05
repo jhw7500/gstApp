@@ -69,7 +69,7 @@ public :
     GstPad* getBinSinkPad();
     gboolean getStartFlag();
     void getBitrate();
-    void setBitrate(guint16 data);
+    void setBitrate(gint data);
     void getFps();
     void setFps(guint16 data);
     void getCaps();

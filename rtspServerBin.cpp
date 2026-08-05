@@ -608,7 +608,7 @@ void RtspServerBin::getBitrate() {
   g_print("rtsp ch%d get bitrate : %d\n", rtspServerData.ch, bps);
 }
 
-void RtspServerBin::setBitrate(guint16 data) {
+void RtspServerBin::setBitrate(gint data) {
   gint bps;
 
   if (re.enc == NULL) {

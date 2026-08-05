@@ -172,7 +172,7 @@ void RecordBin::getBitrate()
      g_print("rec ch%d get bitrate : %d\n", ch, bps);
 }
 
-void RecordBin::setBitrate(guint16 data)
+void RecordBin::setBitrate(gint data)
 {
     gint bps;
 

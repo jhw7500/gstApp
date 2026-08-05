@@ -45,7 +45,7 @@ void EncoderBin::getBitrate()
      g_print("rec ch%d get bitrate : %d\n", encData.ch, bps);
 }
 
-void EncoderBin::setBitrate(guint16 data)
+void EncoderBin::setBitrate(gint data)
 {
     gint bps;
 
