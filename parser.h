@@ -31,19 +31,31 @@
 
 #define DEFAULT_RECORD_BITRATE  4096
 #define DEFAULT_RTSP_BITRATE    1024
+/* vpuenc_h264 documents bitrate 0 as "automatic" (its own default): the VPU
+ * wrapper then derives a rate from resolution and framerate instead of holding
+ * a fixed CBR target. Accepted as-is so the mode stays reachable from edgeconf
+ * — anything else must be an explicit rate inside the range below. */
+#define BITRATE_AUTO            0
 #define MIN_BITRATE_KBPS        100
 #define MAX_BITRATE_KBPS        20000
 #define DEFAULT_MAIN_FPS        15
 #define DEFAULT_RECORD_FPS      15
 #define DEFAULT_RTSP_FPS        15
 #define DEFAULT_CAPTURE_FPS     15
-/* vpuenc_h264 "gop-size". gop had no JSON reader until now, so every channel
- * ran pinned to this constant; keeping it at 15 means an edgeconf without the
- * key behaves exactly as before. Note this is NOT the plugin's own default,
- * which is 30 — gstApp has always overridden it. */
-#define DEFAULT_GOP_SIZE        15
+/* vpuenc_h264 "gop-size" = keyframe interval in frames.
+ * 0 is a sentinel meaning "one GOP per second": check_arg() resolves it against
+ * the stream's own fps, so the interval follows fps instead of going stale when
+ * fps changes. With the default 15 fps this reproduces the interval gstApp has
+ * always run with.
+ * 0 must never reach the encoder — the plugin's periodic I-frame test
+ * (gop_size && gop_count % gop_size, gstvpuenc.c) goes dead at 0, and what the
+ * VPU does with idr_interval=0 is undocumented (closed VC8000E library).
+ * Upper bound matches ENC_MAX_GOP_SIZE in the VPU wrapper, which silently
+ * clamps anything larger. */
+#define GOP_SIZE_FOLLOW_FPS     0
+#define DEFAULT_GOP_SIZE        GOP_SIZE_FOLLOW_FPS
 #define MIN_GOP_SIZE            0
-#define MAX_GOP_SIZE            32767
+#define MAX_GOP_SIZE            300
 /* vpuenc_h264 encoder tuning defaults — plugin defaults, i.e. no behaviour
  * change when edgeconf omits the keys. See CamConfig in util.h. */
 #define DEFAULT_PROFILE         9       /* Baseline */
