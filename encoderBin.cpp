@@ -292,7 +292,8 @@ gboolean EncoderBin::init(guint8 ch)
     re.queue = gst_element_factory_make(QUEUE_TYPE, "queue");
     re.capsfilter = gst_element_factory_make("capsfilter", "capsfilter");
     //re.capsfilter2 = gst_element_factory_make("capsfilter2", "capsfilter");
-    re.enc = gst_element_factory_make("vpuenc_h264", "vpuenc_h264");
+    //re.enc = gst_element_factory_make("vpuenc_h264", "vpuenc_h264");
+    re.enc = gst_element_factory_make("vpuenc_hevc", "vpuenc_hevc");
     re.rate = gst_element_factory_make("videorate", "videorate");
     re.convert = gst_element_factory_make("imxvideoconvert_g2d", "convert");
     re.crop = gst_element_factory_make("videocrop", "crop");
@@ -385,8 +386,10 @@ gboolean EncoderBin::init(guint8 ch)
     g_object_set(re.overlay, "font-desc", DEFAULT_OVERLAY_FONT, NULL);
 
     /* All encoder tuning now comes from edgeconf (VHL_CAM.i2cN.chX.*).
-     * Defaults reproduce the previous behaviour exactly: gop-size stays at
-     * DEFAULT_GOP_SIZE (15), the rest match the plugin's own defaults. */
+     * Defaults reproduce the previous behaviour: gop-size lands on 15 because
+     * DEFAULT_GOP_SIZE is the follow-fps sentinel (0) and check_arg() resolves
+     * it against the stream's fps (15 by default) — it is not a macro literal.
+     * The rest match the plugin's own defaults. */
     g_object_set(re.enc, "bitrate", cmdArg.cam[ch].bps[STREAM_REC], NULL);
     g_object_set(re.enc, "gop-size", cmdArg.cam[ch].gop[STREAM_REC], NULL);
     /* quant is installed per codec (the VPU_V_AVC branch in gstvpuenc.c), not

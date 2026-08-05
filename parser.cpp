@@ -1699,8 +1699,13 @@ gint ParserClass::cmd_parser(gchar *buffer, gint len, gpointer data) {
           if (single_enc) {
             if (any_enc_stream)
               encoderBin[i].setBitrate(key);
+            /* One encoder feeds both paths, so keep the rtsp slot aligned the
+             * way check_arg() does at startup. */
+            cmdArg.cam[i].bps[STREAM_REC] = key;
+            cmdArg.cam[i].bps[STREAM_RTSP] = key;
           } else {
             recordBin[i].setBitrate(key);
+            cmdArg.cam[i].bps[STREAM_REC] = key;
           }
         }
         // for (i = 0; i < MAX_CHANNEL; i++)
@@ -1722,8 +1727,10 @@ gint ParserClass::cmd_parser(gchar *buffer, gint len, gpointer data) {
         }
 
         for (i = 0; i < MAX_CHANNEL; i++)
-          if (cmdArg.cam[i].enable && cmdArg.stream_en[STREAM_RTSP])
+          if (cmdArg.cam[i].enable && cmdArg.stream_en[STREAM_RTSP]) {
             rtspServerBin[i].setBitrate(key);
+            cmdArg.cam[i].bps[STREAM_RTSP] = key;
+          }
       } else
         g_print("wrong cmd!\n");
     } else if (compareBuf(token, "fps", 3)) {
@@ -2111,6 +2118,7 @@ gint ParserClass::cmd_parser(gchar *buffer, gint len, gpointer data) {
               cmdArg.cam[i].gop[STREAM_RTSP] = gop;
             } else {
               recordBin[i].setGop(gop);
+              cmdArg.cam[i].gop[STREAM_REC] = gop;
             }
           }
       } else if (compareBuf(token, "rtsp", 4)) {
@@ -2136,6 +2144,7 @@ gint ParserClass::cmd_parser(gchar *buffer, gint len, gpointer data) {
             gint gop = key;
             enc_gop_resolve(&gop, cmdArg.fps[STREAM_RTSP][i], "rtsp", i);
             rtspServerBin[i].setGop(gop);
+            cmdArg.cam[i].gop[STREAM_RTSP] = gop;
           }
       } else
         g_print("wrong cmd!\n");
