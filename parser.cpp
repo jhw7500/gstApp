@@ -1693,8 +1693,11 @@ gint ParserClass::cmd_parser(gchar *buffer, gint len, gpointer data) {
         token = strtok(NULL, SPLIT_CHAR);
         key = charArrayToInt(token);
 
-        if (key < 0 || key > 9999) {
-          g_print("bps %d not supported\n", key);
+        /* Same acceptance rule as the edgeconf path in check_arg(). */
+        if (key != BITRATE_AUTO &&
+            (key < MIN_BITRATE_KBPS || key > MAX_BITRATE_KBPS)) {
+          g_print("bps %d not supported (0=auto/VBR, or %d..%d)\n", key,
+                  MIN_BITRATE_KBPS, MAX_BITRATE_KBPS);
           return -1;
         }
 
@@ -1718,8 +1721,11 @@ gint ParserClass::cmd_parser(gchar *buffer, gint len, gpointer data) {
         token = strtok(NULL, SPLIT_CHAR);
         key = charArrayToInt(token);
 
-        if (key < 0 || key > 9999) {
-          g_print("bps %d not supported\n", key);
+        /* Same acceptance rule as the edgeconf path in check_arg(). */
+        if (key != BITRATE_AUTO &&
+            (key < MIN_BITRATE_KBPS || key > MAX_BITRATE_KBPS)) {
+          g_print("bps %d not supported (0=auto/VBR, or %d..%d)\n", key,
+                  MIN_BITRATE_KBPS, MAX_BITRATE_KBPS);
           return -1;
         }
 
@@ -2091,20 +2097,28 @@ gint ParserClass::cmd_parser(gchar *buffer, gint len, gpointer data) {
         token = strtok(NULL, SPLIT_CHAR);
         key = charArrayToInt(token);
 
-        if (key < 0 || key > 100) {
-          g_print("gop %d not supported\n", key);
+        /* Same acceptance rule as the edgeconf path in check_arg(). 0 is the
+         * "follow fps" sentinel and is resolved per channel below — it must
+         * not reach the encoder raw. */
+        if (key < MIN_GOP_SIZE || key > MAX_GOP_SIZE) {
+          g_print("gop %d not supported (0=fps(1s), or %d..%d)\n", key,
+                  MIN_GOP_SIZE + 1, MAX_GOP_SIZE);
           return -1;
         }
 
         for (i = 0; i < MAX_CHANNEL; i++)
           if (cmdArg.cam[i].enable && rec_ctrl_stream) {
+            /* Resolve per channel: fps is per channel, so one "0" can land on
+             * different intervals across channels. */
+            gint gop = key;
+            enc_gop_resolve(&gop, cmdArg.fps[STREAM_REC][i], "rec", i);
             if (single_enc) {
               if (any_enc_stream)
-                encoderBin[i].setGop(key);
-              cmdArg.cam[i].gop[STREAM_REC] = key;
-              cmdArg.cam[i].gop[STREAM_RTSP] = key;
+                encoderBin[i].setGop(gop);
+              cmdArg.cam[i].gop[STREAM_REC] = gop;
+              cmdArg.cam[i].gop[STREAM_RTSP] = gop;
             } else {
-              recordBin[i].setGop(key);
+              recordBin[i].setGop(gop);
             }
           }
       } else if (compareBuf(token, "rtsp", 4)) {
@@ -2116,14 +2130,21 @@ gint ParserClass::cmd_parser(gchar *buffer, gint len, gpointer data) {
         token = strtok(NULL, SPLIT_CHAR);
         key = charArrayToInt(token);
 
-        if (key < 0 || key > 100) {
-          g_print("gop %d not supported\n", key);
+        /* Same acceptance rule as the edgeconf path in check_arg(). 0 is the
+         * "follow fps" sentinel and is resolved per channel below — it must
+         * not reach the encoder raw. */
+        if (key < MIN_GOP_SIZE || key > MAX_GOP_SIZE) {
+          g_print("gop %d not supported (0=fps(1s), or %d..%d)\n", key,
+                  MIN_GOP_SIZE + 1, MAX_GOP_SIZE);
           return -1;
         }
 
         for (i = 0; i < MAX_CHANNEL; i++)
-          if (cmdArg.cam[i].enable && cmdArg.stream_en[STREAM_RTSP])
-            rtspServerBin[i].setGop(key);
+          if (cmdArg.cam[i].enable && cmdArg.stream_en[STREAM_RTSP]) {
+            gint gop = key;
+            enc_gop_resolve(&gop, cmdArg.fps[STREAM_RTSP][i], "rtsp", i);
+            rtspServerBin[i].setGop(gop);
+          }
       } else
         g_print("wrong cmd!\n");
     } else if (compareBuf(token, "key", 3)) {
