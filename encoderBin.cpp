@@ -389,9 +389,11 @@ gboolean EncoderBin::init(guint8 ch)
      * DEFAULT_GOP_SIZE (15), the rest match the plugin's own defaults. */
     g_object_set(re.enc, "bitrate", cmdArg.cam[ch].bps[STREAM_REC], NULL);
     g_object_set(re.enc, "gop-size", cmdArg.cam[ch].gop[STREAM_REC], NULL);
+    /* quant is installed per codec (the VPU_V_AVC branch in gstvpuenc.c), not
+     * per SoC, so it exists wherever vpuenc_h264 does — no guard needed. */
     g_object_set(re.enc, "quant", cmdArg.cam[ch].quant[STREAM_REC], NULL);
-    /* profile/qp-min/qp-max are installed by the vpu plugin on i.MX8MP only,
-     * so set them through a guard instead of letting GLib warn per channel. */
+    /* profile is installed on i.MX8MP only and qp-min/qp-max on i.MX8MP/i.MX8MM,
+     * so set those through a guard instead of letting GLib warn per channel. */
     enc_set_optional_int(re.enc, "profile", cmdArg.cam[ch].profile[STREAM_REC], ch);
     enc_set_optional_int(re.enc, "qp-min", cmdArg.cam[ch].qp_min[STREAM_REC], ch);
     enc_set_optional_int(re.enc, "qp-max", cmdArg.cam[ch].qp_max[STREAM_REC], ch);

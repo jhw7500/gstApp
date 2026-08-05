@@ -532,6 +532,8 @@ gboolean RecordBin::init(guint8 num, gboolean crop_en)
 
     g_object_set(re.enc, "bitrate", cmdArg.cam[ch].bps[STREAM_REC], NULL);
     g_object_set(re.enc, "gop-size", cmdArg.cam[ch].gop[STREAM_REC], NULL);
+    /* quant is installed per codec (the VPU_V_AVC branch in gstvpuenc.c), not
+     * per SoC, so it exists wherever vpuenc_h264 does — no guard needed. */
     g_object_set(re.enc, "quant", cmdArg.cam[ch].quant[STREAM_REC], NULL);
     enc_set_optional_int(re.enc, "profile", cmdArg.cam[ch].profile[STREAM_REC], ch);
     enc_set_optional_int(re.enc, "qp-min", cmdArg.cam[ch].qp_min[STREAM_REC], ch);
