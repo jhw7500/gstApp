@@ -33,11 +33,15 @@
 #define DEFAULT_RTSP_BITRATE    1024
 /* vpuenc_h264 documents bitrate 0 as "automatic" (its own default): the VPU
  * wrapper then derives a rate from resolution and framerate instead of holding
- * a fixed CBR target. Accepted as-is so the mode stays reachable from edgeconf
- * — anything else must be an explicit rate inside the range below. */
+ * a fixed CBR target. Accepted as-is so the mode stays reachable from edgeconf.
+ *
+ * Only negatives are rejected — deliberately no floor and no ceiling. The
+ * wrapper's AdjustBitrate() already replaces anything under
+ * VPU_ENC_MIN_BITRATE (10000 bps = 10 kbps) with the same auto-computed rate
+ * that 0 gets, and clamps anything over VPU_ENC_MAX_BITRATE (60000 kbps).
+ * Both ends are handled downstream, so a range check here would only reject
+ * values the encoder copes with. */
 #define BITRATE_AUTO            0
-#define MIN_BITRATE_KBPS        100
-#define MAX_BITRATE_KBPS        20000
 #define DEFAULT_MAIN_FPS        15
 #define DEFAULT_RECORD_FPS      15
 #define DEFAULT_RTSP_FPS        15

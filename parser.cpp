@@ -1011,13 +1011,11 @@ gint ParserClass::check_arg() {
      * because one encoder feeds both record and rtsp; we mirror rec bps
      * onto the rtsp slot so downstream code stays consistent.
      */
-    if (arg.cam[i].bps[STREAM_REC] != BITRATE_AUTO &&
-        (arg.cam[i].bps[STREAM_REC] < MIN_BITRATE_KBPS ||
-         arg.cam[i].bps[STREAM_REC] > MAX_BITRATE_KBPS)) {
+    if (arg.cam[i].bps[STREAM_REC] < 0) {
       __LOG(LOG_ERR,
-            "[%s][%s:%d] ch%d invalid rec bps %d, fallback to %d (0=auto, or %d..%d)",
+            "[%s][%s:%d] ch%d invalid rec bps %d, fallback to %d (0=auto, or kbps >= 0)",
             LOG_KEY, _FILE_, __LINE__, i, arg.cam[i].bps[STREAM_REC],
-            DEFAULT_RECORD_BITRATE, MIN_BITRATE_KBPS, MAX_BITRATE_KBPS);
+            DEFAULT_RECORD_BITRATE);
       arg.cam[i].bps[STREAM_REC] = DEFAULT_RECORD_BITRATE;
     }
     if (arg.cam[i].bps[STREAM_REC] == BITRATE_AUTO)
@@ -1026,13 +1024,11 @@ gint ParserClass::check_arg() {
             LOG_KEY, _FILE_, __LINE__, i);
 
     if (arg.dual_enc) {
-      if (arg.cam[i].bps[STREAM_RTSP] != BITRATE_AUTO &&
-          (arg.cam[i].bps[STREAM_RTSP] < MIN_BITRATE_KBPS ||
-           arg.cam[i].bps[STREAM_RTSP] > MAX_BITRATE_KBPS)) {
+      if (arg.cam[i].bps[STREAM_RTSP] < 0) {
         __LOG(LOG_ERR,
-              "[%s][%s:%d] ch%d invalid rtsp bps %d, fallback to %d (0=auto, or %d..%d)",
+              "[%s][%s:%d] ch%d invalid rtsp bps %d, fallback to %d (0=auto, or kbps >= 0)",
               LOG_KEY, _FILE_, __LINE__, i, arg.cam[i].bps[STREAM_RTSP],
-              DEFAULT_RTSP_BITRATE, MIN_BITRATE_KBPS, MAX_BITRATE_KBPS);
+              DEFAULT_RTSP_BITRATE);
         arg.cam[i].bps[STREAM_RTSP] = DEFAULT_RTSP_BITRATE;
       }
     } else {
@@ -1694,10 +1690,8 @@ gint ParserClass::cmd_parser(gchar *buffer, gint len, gpointer data) {
         key = charArrayToInt(token);
 
         /* Same acceptance rule as the edgeconf path in check_arg(). */
-        if (key != BITRATE_AUTO &&
-            (key < MIN_BITRATE_KBPS || key > MAX_BITRATE_KBPS)) {
-          g_print("bps %d not supported (0=auto/VBR, or %d..%d)\n", key,
-                  MIN_BITRATE_KBPS, MAX_BITRATE_KBPS);
+        if (key < 0) {
+          g_print("bps %d not supported (0=auto/VBR, or kbps >= 0)\n", key);
           return -1;
         }
 
@@ -1722,10 +1716,8 @@ gint ParserClass::cmd_parser(gchar *buffer, gint len, gpointer data) {
         key = charArrayToInt(token);
 
         /* Same acceptance rule as the edgeconf path in check_arg(). */
-        if (key != BITRATE_AUTO &&
-            (key < MIN_BITRATE_KBPS || key > MAX_BITRATE_KBPS)) {
-          g_print("bps %d not supported (0=auto/VBR, or %d..%d)\n", key,
-                  MIN_BITRATE_KBPS, MAX_BITRATE_KBPS);
+        if (key < 0) {
+          g_print("bps %d not supported (0=auto/VBR, or kbps >= 0)\n", key);
           return -1;
         }
 
