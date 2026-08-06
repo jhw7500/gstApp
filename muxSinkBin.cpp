@@ -756,7 +756,9 @@ gboolean MuxSinkBin::init(guint8 num) {
   be.tsmux = gst_element_factory_make("mpegtsmux", "mpegtsmux");
   be.qtmux = gst_element_factory_make("qtmux", "qtmux");
   be.queue = gst_element_factory_make(QUEUE_TYPE, "queue");
-  be.parse = gst_element_factory_make("h264parse", "h264parse");
+  const gboolean use_h265 = g_strcmp0(cmdArg.enc, ENC_H265) == 0;
+  const gchar *parser_factory = use_h265 ? "h265parse" : "h264parse";
+  be.parse = gst_element_factory_make(parser_factory, parser_factory);
   be.capsfilter = gst_element_factory_make("capsfilter", "capsfilter");
 
   if (!be.bin || !be.sink || !be.mp4mux || !be.tsmux || !be.qtmux ||
@@ -778,14 +780,19 @@ gboolean MuxSinkBin::init(guint8 num) {
   g_object_set(be.sink, "async-finalize", FALSE, NULL);
   if (g_strcmp0(cmdArg.muxer, "ts") == 0) {
     g_object_set(be.sink, MUX_PROPERTIES, be.tsmux, NULL);
-    caps = gst_caps_from_string(
-        "video/x-h264,stream-format=byte-stream,alignment=au");
+    caps = gst_caps_from_string(use_h265
+                                    ? "video/x-h265,stream-format=byte-stream,alignment=au"
+                                    : "video/x-h264,stream-format=byte-stream,alignment=au");
   } else if (g_strcmp0(cmdArg.muxer, "qt") == 0) {
     g_object_set(be.sink, MUX_PROPERTIES, be.qtmux, NULL);
-    caps = gst_caps_from_string("video/x-h264,stream-format=avc,alignment=au");
+    caps = gst_caps_from_string(use_h265
+                                    ? "video/x-h265,stream-format=hvc1,alignment=au"
+                                    : "video/x-h264,stream-format=avc,alignment=au");
   } else {
     g_object_set(be.sink, MUX_PROPERTIES, be.mp4mux, NULL);
-    caps = gst_caps_from_string("video/x-h264,stream-format=avc,alignment=au");
+    caps = gst_caps_from_string(use_h265
+                                    ? "video/x-h265,stream-format=hvc1,alignment=au"
+                                    : "video/x-h264,stream-format=avc,alignment=au");
   }
   g_object_set(be.capsfilter, "caps", caps, NULL);
   gst_caps_unref(caps);

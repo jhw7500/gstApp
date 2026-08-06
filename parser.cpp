@@ -218,6 +218,7 @@ void ParserClass::init_arg(gchar *argv) {
   arg.split_diff_msec = DEFAULT_SPLIT_DIFF_MSEC;
   arg.split_max_msec = DEFAULT_SPLIT_MAX_MSEC;
   arg.split_audio_min_msec = DEFAULT_SPLIT_AUDIO_MIN_MSEC;
+  arg.enc = DEFAULT_ENC;
   arg.muxer = DEFAULT_MUXER;
   arg.split_sec = DEFAULT_SPLIT_SEC;
   arg.stream_en[STREAM_REC] = TRUE;
@@ -512,6 +513,17 @@ gint ParserClass::json_parser(const gchar *path, const gchar *header) {
     json_get_int(hobj, "debug_level", &arg.dbg_level);
     json_get_int(hobj, "fps", &arg.main_fps[CSI_1]);
     json_get_int(hobj, "fps", &arg.main_fps[CSI_2]);
+    json_object *enc_obj = json_object_object_get(hobj, "enc");
+    if (enc_obj) {
+      if (json_object_get_type(enc_obj) == json_type_string) {
+        arg.enc = json_object_get_string(enc_obj);
+        __LOG(LOG_INFO, "[CFG][%s:%d] enc : %s", _FILE_, __LINE__, arg.enc);
+      } else {
+        __LOG(LOG_WARNING,
+              "[CFG][%s:%d] enc must be a string, using default : %s",
+              _FILE_, __LINE__, DEFAULT_ENC);
+      }
+    }
     json_object_get_value(hobj, "muxer", &arg.muxer);
 #if 0
         json_object_get_value(hobj, "rec_fps", &arg.fps[STREAM_REC]);
@@ -797,6 +809,8 @@ gint ParserClass::arg_parser(int *argc, char **argv[]) {
        "split sec, default(0)", "INT"},
       {"muxer", 'Q', 0, G_OPTION_ARG_STRING, &arg.muxer,
        "muxer(mp4, qt, ts), default(mp4)", "STRING"},
+      {"enc", 0, 0, G_OPTION_ARG_STRING, &arg.enc,
+       "encoder(h264, h265), default(h264)", "STRING"},
       {"eipc", 'f', 0, G_OPTION_ARG_INT, &arg.ipc_en,
        "ipc enable, default(FALSE)", "INT"},
       {"ipc_mid", 'F', 0, G_OPTION_ARG_INT, &arg.ipc_mid,
@@ -962,6 +976,19 @@ gint ParserClass::check_arg() {
   const gchar *ioModeStr[6] = {"auto",   "rw",     "mmap",
                                "useptr", "dmabuf", "dmabuf-import"};
   gint i = 0;
+
+  if (g_strcmp0(arg.enc, ENC_H264) != 0 &&
+      g_strcmp0(arg.enc, ENC_H265) != 0) {
+    __LOG(LOG_ERR,
+          "[%s][%s:%d] invalid enc:%s, fallback to %s (h264 or h265)",
+          LOG_KEY, _FILE_, __LINE__, arg.enc ? arg.enc : "(null)",
+          DEFAULT_ENC);
+    arg.enc = DEFAULT_ENC;
+    g_cfg_errors++;
+  }
+
+  __LOG(LOG_NOTICE, "[%s][%s:%d] enc:%s", LOG_KEY, _FILE_, __LINE__,
+        arg.enc);
   //__LOG(LOG_NOTICE, "[RTSP][%s:%d] 0 : %s, 1 : %s, 2 : %s", _FILE_, __LINE__,
   // test0, test1, test2);
   __LOG(LOG_NOTICE,
@@ -1050,7 +1077,7 @@ gint ParserClass::check_arg() {
      */
     enc_knob_sanity(&arg.cam[i].gop[STREAM_REC], MIN_GOP_SIZE, MAX_GOP_SIZE,
                     DEFAULT_GOP_SIZE, "gop", "rec", i);
-    enc_knob_sanity(&arg.cam[i].profile[STREAM_REC], MIN_PROFILE, MAX_PROFILE,
+    enc_knob_sanity(&arg.cam[i].profile[STREAM_REC], -1, 12,
                     DEFAULT_PROFILE, "profile", "rec", i);
     enc_knob_sanity(&arg.cam[i].quant[STREAM_REC], MIN_QUANT, MAX_QUANT,
                     DEFAULT_QUANT, "quant", "rec", i);

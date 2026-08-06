@@ -34,6 +34,9 @@
 #define LEAKY_UPSTREAM      1
 #define LEAKY_DOWNSTREAM    2
 
+#define ENC_H264            "h264"
+#define ENC_H265            "h265"
+
 #define FALLBACKDIR     "/dev/shm"
 
 typedef enum
@@ -193,6 +196,7 @@ typedef struct _CmdArg
     gboolean crop_en[2];
     gboolean ipc_en;
     gint ipc_mid;
+    const gchar *enc;
     const gchar *muxer;
     gboolean dual_enc;
     gint rtsp_factory_latency_ms;

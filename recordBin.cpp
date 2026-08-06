@@ -423,7 +423,9 @@ gboolean RecordBin::init(guint8 num, gboolean crop_en)
     re.queue = gst_element_factory_make(QUEUE_TYPE, "queue");
     re.queue2 = gst_element_factory_make(QUEUE_TYPE, "queue2");
     re.capsfilter = gst_element_factory_make("capsfilter", "capsfilter");
-    re.enc = gst_element_factory_make("vpuenc_h264", "vpuenc_h264");
+    const gchar *encoder_factory =
+        g_strcmp0(cmdArg.enc, ENC_H265) == 0 ? "vpuenc_hevc" : "vpuenc_h264";
+    re.enc = gst_element_factory_make(encoder_factory, encoder_factory);
     re.rate = gst_element_factory_make("videorate", "videorate");
     re.convert = gst_element_factory_make("imxvideoconvert_g2d", "convert");
     re.crop = gst_element_factory_make("videocrop", "crop");
@@ -532,9 +534,9 @@ gboolean RecordBin::init(guint8 num, gboolean crop_en)
 
     g_object_set(re.enc, "bitrate", cmdArg.cam[ch].bps[STREAM_REC], NULL);
     g_object_set(re.enc, "gop-size", cmdArg.cam[ch].gop[STREAM_REC], NULL);
-    /* quant is installed per codec (the VPU_V_AVC branch in gstvpuenc.c), not
-     * per SoC, so it exists wherever vpuenc_h264 does — no guard needed. */
-    g_object_set(re.enc, "quant", cmdArg.cam[ch].quant[STREAM_REC], NULL);
+    /* quant is codec-specific; skip it cleanly when the selected encoder does
+     * not expose the property. */
+    enc_set_optional_int(re.enc, "quant", cmdArg.cam[ch].quant[STREAM_REC], ch);
     enc_set_optional_int(re.enc, "profile", cmdArg.cam[ch].profile[STREAM_REC], ch);
     enc_set_optional_int(re.enc, "qp-min", cmdArg.cam[ch].qp_min[STREAM_REC], ch);
     enc_set_optional_int(re.enc, "qp-max", cmdArg.cam[ch].qp_max[STREAM_REC], ch);

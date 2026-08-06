@@ -133,6 +133,7 @@
 
 #define DEFAULT_START_VIDEO_TIME_PATH   "/tmp/start_video_time"
 #define DEFAULT_DOT_PATH    "/tmp"
+#define DEFAULT_ENC         ENC_H264
 #define DEFAULT_MUXER       "mp4"
 #define JHW_TESTx
 #ifdef JHW_TEST
