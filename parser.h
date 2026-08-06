@@ -60,11 +60,16 @@
 #define DEFAULT_GOP_SIZE        GOP_SIZE_FOLLOW_FPS
 #define MIN_GOP_SIZE            0
 #define MAX_GOP_SIZE            300
-/* vpuenc_h264 encoder tuning defaults — plugin defaults, i.e. no behaviour
- * change when edgeconf omits the keys. See CamConfig in util.h. */
-#define DEFAULT_PROFILE         9       /* Baseline */
-#define MIN_PROFILE             9
-#define MAX_PROFILE             12      /* 9=Baseline 10=Main 11=High 12=High10 */
+/* Codec-specific profile ranges from the vpuenc_h264/vpuenc_hevc properties.
+ * PROFILE_UNSET is resolved after enc has been parsed, so an omitted profile
+ * selects the matching plugin default instead of assuming H.264. */
+#define PROFILE_UNSET           (-1)
+#define DEFAULT_H264_PROFILE    9       /* Baseline */
+#define MIN_H264_PROFILE        9
+#define MAX_H264_PROFILE        12      /* Baseline, Main, High, High10 */
+#define DEFAULT_H265_PROFILE    0       /* Main */
+#define MIN_H265_PROFILE        0
+#define MAX_H265_PROFILE        2       /* Main, Main Still Picture, Main10 */
 #define DEFAULT_QUANT           (-1)    /* auto */
 #define MIN_QUANT               (-1)
 #define MAX_QUANT               51

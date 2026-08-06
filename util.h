@@ -114,8 +114,9 @@ typedef struct {
     gboolean hflip;
     gint bps[2];
     gint gop[2];
-    /* vpuenc_h264 encoder tuning, per stream ([STREAM_REC], [STREAM_RTSP]).
-     * profile: 9=Baseline 10=Main 11=High 12=High10 (int, not a GStreamer enum)
+    /* VPU encoder tuning, per stream ([STREAM_REC], [STREAM_RTSP]).
+     * H.264 profile: 9=Baseline 10=Main 11=High 12=High10
+     * H.265 profile: 0=Main 1=Main Still Picture 2=Main10
      * quant  : initial QP, -1 = auto (rate control keeps running either way)
      * qp_min / qp_max: 0..51, 0 means "unset" to the VPU wrapper (it only
      *          honours values > 0), so 0 leaves the hardware default in place.
@@ -196,7 +197,7 @@ typedef struct _CmdArg
     gboolean crop_en[2];
     gboolean ipc_en;
     gint ipc_mid;
-    const gchar *enc;
+    gchar *enc;
     const gchar *muxer;
     gboolean dual_enc;
     gint rtsp_factory_latency_ms;

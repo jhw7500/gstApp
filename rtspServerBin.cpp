@@ -1025,6 +1025,9 @@ gboolean RtspServerBin::audioInit() {
 gboolean RtspServerBin::init(guint8 ch, gboolean crop_en)
 {
     gboolean ret = 0;
+    const gboolean use_h265 = g_strcmp0(cmdArg.enc, ENC_H265) == 0;
+    const gchar *parser_factory = use_h265 ? "h265parse" : "h264parse";
+    const gchar *payloader_factory = use_h265 ? "rtph265pay" : "rtph264pay";
     rtspServerData.ch = ch;
     //sinkPad = NULL;
     __LOG(LOG_INFO, "[GST][%s:%d] %s ch : %d, crop : %s", _FILE_, __LINE__, __FUNCTION__, rtspServerData.ch, crop_en? "enable":"disable");
@@ -1079,7 +1082,7 @@ gboolean RtspServerBin::init(guint8 ch, gboolean crop_en)
     rtspServerData.appSrcName = g_strdup_printf("%s%d", "rtsp_appsrc", ch);
 
     //gchar *launch_str = g_strdup_printf("( appsrc name=%s ! queue max-size-buffers=60 leaky=2 ! vpuenc_h264 bitrate=1024 ! h264parse config-interval=-1 ! rtph264pay name=pay0 config-interval=-1 )", rtspServerData.appSrcName);
-    gchar *launch_str = g_strdup_printf("( appsrc name=%s do-timestamp=1 is-live=1 format=3 ! queue max-size-buffers=%d leaky=2 ! h265parse ! rtph265pay name=pay0 config-interval=-1 )", rtspServerData.appSrcName, cmdArg.fps[STREAM_RTSP][ch]);
+    gchar *launch_str = g_strdup_printf("( appsrc name=%s do-timestamp=1 is-live=1 format=3 ! queue max-size-buffers=%d leaky=2 ! %s ! %s name=pay0 config-interval=-1 )", rtspServerData.appSrcName, cmdArg.fps[STREAM_RTSP][ch], parser_factory, payloader_factory);
     //gchar *launch_str = g_strdup_printf("( appsrc name=%s do-timestamp=1 is-live=1 block=true ! queue max-size-buffers=5 leaky=2 min-threshold-time=500000000 ! h264parse ! rtph264pay name=pay0 config-interval=0 )", rtspServerData.appSrcName);
 
     gst_rtsp_media_factory_set_launch(factory, launch_str);
