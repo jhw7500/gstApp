@@ -44,7 +44,7 @@ public :
     ~EncoderBin();
 	gboolean init(guint8 ch) ;
     GstPad* getBinSinkPad();
-    void setBitrate(guint16 data);
+    void setBitrate(gint data);
     void getBitrate();
     void setFps(guint16 data);
     void getFps();

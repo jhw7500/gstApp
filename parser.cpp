@@ -143,6 +143,55 @@ static void json_get_int_array(json_object *obj, const gchar *name, gint *out,
   }
 }
 
+/* Range sanity for one per-stream vpuenc_h264 knob. Same policy as bps: never
+ * abort startup on edgeconf noise — log loudly and fall back to the compiled-in
+ * default, which equals the plugin's own default. */
+static void enc_knob_sanity(gint *slot, gint lo, gint hi, gint def,
+                            const gchar *name, const gchar *stream, gint ch) {
+  if (*slot < lo || *slot > hi) {
+    __LOG(LOG_ERR,
+          "[%s][%s:%d] ch%d invalid %s %s %d, fallback to %d (range %d..%d)",
+          LOG_KEY, _FILE_, __LINE__, ch, stream, name, *slot, def, lo, hi);
+    *slot = def;
+  }
+}
+
+static void enc_profile_sanity(gint *slot, gint lo, gint hi, gint def,
+                               const gchar *stream, gint ch) {
+  if (*slot == PROFILE_UNSET) {
+    *slot = def;
+    return;
+  }
+
+  enc_knob_sanity(slot, lo, hi, def, "profile", stream, ch);
+}
+
+/* gop 0 means "one GOP per second": resolve it against the stream's own fps so
+ * the keyframe interval follows fps. 0 must not reach the encoder — see the
+ * DEFAULT_GOP_SIZE comment in parser.h. */
+static void enc_gop_resolve(gint *slot, gint fps, const gchar *stream, gint ch) {
+  if (*slot != GOP_SIZE_FOLLOW_FPS)
+    return;
+
+  gint resolved = (fps > 0) ? fps : DEFAULT_RECORD_FPS;
+  if (resolved > MAX_GOP_SIZE)
+    resolved = MAX_GOP_SIZE;
+  __LOG(LOG_INFO, "[%s][%s:%d] ch%d %s gop 0 -> %d (= fps, 1s keyframe interval)",
+        LOG_KEY, _FILE_, __LINE__, ch, stream, resolved);
+  *slot = resolved;
+}
+
+/* Single-encoder mode: one encoder feeds both record and rtsp, so the rtsp
+ * slot is never consumed. Align it with rec so downstream reads stay honest. */
+static void enc_knob_mirror(gint *slot, gint rec, const gchar *name, gint ch) {
+  if (*slot != rec) {
+    __LOG(LOG_INFO,
+          "[%s][%s:%d] ch%d single-enc: align rtsp %s %d -> %d (= rec)",
+          LOG_KEY, _FILE_, __LINE__, ch, name, *slot, rec);
+    *slot = rec;
+  }
+}
+
 void ParserClass::init_arg(gchar *argv) {
   // g_print("%s\n", __FUNCTION__);
   arg.appname = CHARNEXT(argv, '/');
@@ -179,6 +228,8 @@ void ParserClass::init_arg(gchar *argv) {
   arg.split_diff_msec = DEFAULT_SPLIT_DIFF_MSEC;
   arg.split_max_msec = DEFAULT_SPLIT_MAX_MSEC;
   arg.split_audio_min_msec = DEFAULT_SPLIT_AUDIO_MIN_MSEC;
+  g_free(arg.enc);
+  arg.enc = g_strdup(DEFAULT_ENC);
   arg.muxer = DEFAULT_MUXER;
   arg.split_sec = DEFAULT_SPLIT_SEC;
   arg.stream_en[STREAM_REC] = TRUE;
@@ -229,6 +280,14 @@ void ParserClass::init_arg(gchar *argv) {
     arg.cam[i].bps[STREAM_RTSP] = DEFAULT_RTSP_BITRATE;
     arg.cam[i].gop[0] = DEFAULT_GOP_SIZE;
     arg.cam[i].gop[1] = DEFAULT_GOP_SIZE;
+    arg.cam[i].profile[STREAM_REC] = PROFILE_UNSET;
+    arg.cam[i].profile[STREAM_RTSP] = PROFILE_UNSET;
+    arg.cam[i].quant[STREAM_REC] = DEFAULT_QUANT;
+    arg.cam[i].quant[STREAM_RTSP] = DEFAULT_QUANT;
+    arg.cam[i].qp_min[STREAM_REC] = DEFAULT_QP_MIN;
+    arg.cam[i].qp_min[STREAM_RTSP] = DEFAULT_QP_MIN;
+    arg.cam[i].qp_max[STREAM_REC] = DEFAULT_QP_MAX;
+    arg.cam[i].qp_max[STREAM_RTSP] = DEFAULT_QP_MAX;
     arg.cam[i].ae_on = TRUE;
     arg.cam[i].ae_gain = DEFAULT_AE_GAIN;
     arg.cam[i].awb = DEFAULT_AWB;
@@ -346,11 +405,14 @@ gint ParserClass::json_object_get_value(json_object *hobj, const gchar *name,
 
 ParserClass::ParserClass() {
   // 생성자 코드 추가
+  arg.enc = NULL;
   __LOG(LOG_INFO, "[GST][%s:%d] %s", _FILE_, __LINE__, __FUNCTION__);
 }
 
 ParserClass::~ParserClass() {
   // 소멸자 코드 추가
+  g_free(arg.enc);
+  arg.enc = NULL;
   __LOG(LOG_INFO, "[GST][%s:%d] %s", _FILE_, __LINE__, __FUNCTION__);
 }
 
@@ -465,6 +527,19 @@ gint ParserClass::json_parser(const gchar *path, const gchar *header) {
     json_get_int(hobj, "debug_level", &arg.dbg_level);
     json_get_int(hobj, "fps", &arg.main_fps[CSI_1]);
     json_get_int(hobj, "fps", &arg.main_fps[CSI_2]);
+    json_object *enc_obj = json_object_object_get(hobj, "enc");
+    if (enc_obj) {
+      if (json_object_get_type(enc_obj) == json_type_string) {
+        gchar *enc = g_strdup(json_object_get_string(enc_obj));
+        g_free(arg.enc);
+        arg.enc = enc;
+        __LOG(LOG_INFO, "[CFG][%s:%d] enc : %s", _FILE_, __LINE__, arg.enc);
+      } else {
+        __LOG(LOG_WARNING,
+              "[CFG][%s:%d] enc must be a string, using default : %s",
+              _FILE_, __LINE__, DEFAULT_ENC);
+      }
+    }
     json_object_get_value(hobj, "muxer", &arg.muxer);
 #if 0
         json_object_get_value(hobj, "rec_fps", &arg.fps[STREAM_REC]);
@@ -586,6 +661,18 @@ gint ParserClass::json_parser(const gchar *path, const gchar *header) {
       json_object_get_value(vobj, "vflip", &arg.cam[i].vflip);
       json_get_int_array(vobj, "bps", arg.cam[i].bps,
                          sizeof(arg.cam[i].bps) / sizeof(arg.cam[i].bps[0]));
+      /* vpuenc_h264 tuning, all [rec, rtsp] pairs like bps. Absent keys keep
+       * the init_arg defaults, which mirror the plugin's own defaults. */
+      json_get_int_array(vobj, "gop", arg.cam[i].gop,
+                         sizeof(arg.cam[i].gop) / sizeof(arg.cam[i].gop[0]));
+      json_get_int_array(vobj, "profile", arg.cam[i].profile,
+                         sizeof(arg.cam[i].profile) / sizeof(arg.cam[i].profile[0]));
+      json_get_int_array(vobj, "quant", arg.cam[i].quant,
+                         sizeof(arg.cam[i].quant) / sizeof(arg.cam[i].quant[0]));
+      json_get_int_array(vobj, "qp_min", arg.cam[i].qp_min,
+                         sizeof(arg.cam[i].qp_min) / sizeof(arg.cam[i].qp_min[0]));
+      json_get_int_array(vobj, "qp_max", arg.cam[i].qp_max,
+                         sizeof(arg.cam[i].qp_max) / sizeof(arg.cam[i].qp_max[0]));
       json_object_get_value(vobj, "ae_on", &arg.cam[i].ae_on);
       json_get_uint(vobj, "ae_gain", &arg.cam[i].ae_gain);
       /* Optional: AWB preset name. Falls back to DEFAULT_AWB when absent. */
@@ -652,6 +739,7 @@ gint ParserClass::arg_parser(int *argc, char **argv[]) {
   gchar str[128];
   gint ret = 0;
   guint8 i;
+  gchar *enc_option = NULL;
 
   GOptionEntry entries[] = {
       {"mode", 'm', 0, G_OPTION_ARG_INT, &arg.ioMode,
@@ -738,6 +826,8 @@ gint ParserClass::arg_parser(int *argc, char **argv[]) {
        "split sec, default(0)", "INT"},
       {"muxer", 'Q', 0, G_OPTION_ARG_STRING, &arg.muxer,
        "muxer(mp4, qt, ts), default(mp4)", "STRING"},
+      {"enc", 0, 0, G_OPTION_ARG_STRING, &enc_option,
+       "encoder(h264, h265), default(h264)", "STRING"},
       {"eipc", 'f', 0, G_OPTION_ARG_INT, &arg.ipc_en,
        "ipc enable, default(FALSE)", "INT"},
       {"ipc_mid", 'F', 0, G_OPTION_ARG_INT, &arg.ipc_mid,
@@ -799,21 +889,21 @@ gint ParserClass::arg_parser(int *argc, char **argv[]) {
       {"brtsp3", 0, 0, G_OPTION_ARG_INT, &arg.cam[3].bps[STREAM_RTSP],
        "ch3 rtsp Kbyte per second, default(1024)", "INT"},
       {"grec0", 0, 0, G_OPTION_ARG_INT, &arg.cam[0].gop[STREAM_REC],
-       "ch0 rec gop size, default(15)", "INT"},
+       "ch0 rec gop size, 0=fps(1s), default(0)", "INT"},
       {"grec1", 0, 0, G_OPTION_ARG_INT, &arg.cam[1].gop[STREAM_REC],
-       "ch1 rec gop size, default(15)", "INT"},
-      {"grec3", 0, 0, G_OPTION_ARG_INT, &arg.cam[2].gop[STREAM_REC],
-       "ch2 rec gop size, default(15)", "INT"},
-      {"grec0", 0, 0, G_OPTION_ARG_INT, &arg.cam[3].gop[STREAM_REC],
-       "ch3 rec gop size, default(15)", "INT"},
+       "ch1 rec gop size, 0=fps(1s), default(0)", "INT"},
+      {"grec2", 0, 0, G_OPTION_ARG_INT, &arg.cam[2].gop[STREAM_REC],
+       "ch2 rec gop size, 0=fps(1s), default(0)", "INT"},
+      {"grec3", 0, 0, G_OPTION_ARG_INT, &arg.cam[3].gop[STREAM_REC],
+       "ch3 rec gop size, 0=fps(1s), default(0)", "INT"},
       {"grtsp0", 0, 0, G_OPTION_ARG_INT, &arg.cam[0].gop[STREAM_RTSP],
-       "ch0 rtsp gop size, default(15)", "INT"},
+       "ch0 rtsp gop size, 0=fps(1s), default(0)", "INT"},
       {"grtsp1", 0, 0, G_OPTION_ARG_INT, &arg.cam[1].gop[STREAM_RTSP],
-       "ch1 rtsp gop size, default(15)", "INT"},
+       "ch1 rtsp gop size, 0=fps(1s), default(0)", "INT"},
       {"grtsp2", 0, 0, G_OPTION_ARG_INT, &arg.cam[2].gop[STREAM_RTSP],
-       "ch2 rtsp gop size, default(15)", "INT"},
+       "ch2 rtsp gop size, 0=fps(1s), default(0)", "INT"},
       {"grtsp3", 0, 0, G_OPTION_ARG_INT, &arg.cam[3].gop[STREAM_RTSP],
-       "ch3 rtsp gop size, default(15)", "INT"},
+       "ch3 rtsp gop size, 0=fps(1s), default(0)", "INT"},
       {NULL}};
 
   ctx = g_option_context_new("- Your application");
@@ -825,7 +915,13 @@ gint ParserClass::arg_parser(int *argc, char **argv[]) {
     __LOG(LOG_CRIT, "[%s][%s:%d] Failed to initialize : %s", LOG_KEY, _FILE_,
           __LINE__, err->message);
     g_error_free(err);
+    g_free(enc_option);
     return ret;
+  }
+
+  if (enc_option) {
+    g_free(arg.enc);
+    arg.enc = enc_option;
   }
 
   if (arg.dbg_ts) {
@@ -903,6 +999,26 @@ gint ParserClass::check_arg() {
   const gchar *ioModeStr[6] = {"auto",   "rw",     "mmap",
                                "useptr", "dmabuf", "dmabuf-import"};
   gint i = 0;
+
+  if (g_strcmp0(arg.enc, ENC_H264) != 0 &&
+      g_strcmp0(arg.enc, ENC_H265) != 0) {
+    __LOG(LOG_ERR,
+          "[%s][%s:%d] invalid enc:%s, fallback to %s (h264 or h265)",
+          LOG_KEY, _FILE_, __LINE__, arg.enc ? arg.enc : "(null)",
+          DEFAULT_ENC);
+    g_free(arg.enc);
+    arg.enc = g_strdup(DEFAULT_ENC);
+    g_cfg_errors++;
+  }
+
+  const gboolean use_h265 = g_strcmp0(arg.enc, ENC_H265) == 0;
+  const gint profile_default =
+      use_h265 ? DEFAULT_H265_PROFILE : DEFAULT_H264_PROFILE;
+  const gint profile_min = use_h265 ? MIN_H265_PROFILE : MIN_H264_PROFILE;
+  const gint profile_max = use_h265 ? MAX_H265_PROFILE : MAX_H264_PROFILE;
+
+  __LOG(LOG_NOTICE, "[%s][%s:%d] enc:%s", LOG_KEY, _FILE_, __LINE__,
+        arg.enc);
   //__LOG(LOG_NOTICE, "[RTSP][%s:%d] 0 : %s, 1 : %s, 2 : %s", _FILE_, __LINE__,
   // test0, test1, test2);
   __LOG(LOG_NOTICE,
@@ -952,22 +1068,24 @@ gint ParserClass::check_arg() {
      * because one encoder feeds both record and rtsp; we mirror rec bps
      * onto the rtsp slot so downstream code stays consistent.
      */
-    if (arg.cam[i].bps[STREAM_REC] < MIN_BITRATE_KBPS ||
-        arg.cam[i].bps[STREAM_REC] > MAX_BITRATE_KBPS) {
+    if (arg.cam[i].bps[STREAM_REC] < 0) {
       __LOG(LOG_ERR,
-            "[%s][%s:%d] ch%d invalid rec bps %d, fallback to %d (range %d..%d)",
+            "[%s][%s:%d] ch%d invalid rec bps %d, fallback to %d (0=auto, or kbps >= 0)",
             LOG_KEY, _FILE_, __LINE__, i, arg.cam[i].bps[STREAM_REC],
-            DEFAULT_RECORD_BITRATE, MIN_BITRATE_KBPS, MAX_BITRATE_KBPS);
+            DEFAULT_RECORD_BITRATE);
       arg.cam[i].bps[STREAM_REC] = DEFAULT_RECORD_BITRATE;
     }
+    if (arg.cam[i].bps[STREAM_REC] == BITRATE_AUTO)
+      __LOG(LOG_NOTICE,
+            "[%s][%s:%d] ch%d rec bps 0: encoder rate control is automatic (VBR)",
+            LOG_KEY, _FILE_, __LINE__, i);
 
     if (arg.dual_enc) {
-      if (arg.cam[i].bps[STREAM_RTSP] < MIN_BITRATE_KBPS ||
-          arg.cam[i].bps[STREAM_RTSP] > MAX_BITRATE_KBPS) {
+      if (arg.cam[i].bps[STREAM_RTSP] < 0) {
         __LOG(LOG_ERR,
-              "[%s][%s:%d] ch%d invalid rtsp bps %d, fallback to %d (range %d..%d)",
+              "[%s][%s:%d] ch%d invalid rtsp bps %d, fallback to %d (0=auto, or kbps >= 0)",
               LOG_KEY, _FILE_, __LINE__, i, arg.cam[i].bps[STREAM_RTSP],
-              DEFAULT_RTSP_BITRATE, MIN_BITRATE_KBPS, MAX_BITRATE_KBPS);
+              DEFAULT_RTSP_BITRATE);
         arg.cam[i].bps[STREAM_RTSP] = DEFAULT_RTSP_BITRATE;
       }
     } else {
@@ -979,6 +1097,80 @@ gint ParserClass::check_arg() {
         arg.cam[i].bps[STREAM_RTSP] = arg.cam[i].bps[STREAM_REC];
       }
     }
+
+    /*
+     * VPU encoder tuning sanity, same fall-back-to-default policy as bps.
+     * Profile defaults and ranges depend on the selected codec.
+     * qp_min/qp_max treat 0 as "unset" (the VPU wrapper only honours > 0), so
+     * 0 is legal and means "leave the hardware default in place".
+     * gop 0 is also legal but is a sentinel, resolved to fps right after the
+     * range check so the encoder only ever sees a concrete interval.
+     */
+    enc_knob_sanity(&arg.cam[i].gop[STREAM_REC], MIN_GOP_SIZE, MAX_GOP_SIZE,
+                    DEFAULT_GOP_SIZE, "gop", "rec", i);
+    enc_profile_sanity(&arg.cam[i].profile[STREAM_REC], profile_min,
+                       profile_max, profile_default, "rec", i);
+    enc_knob_sanity(&arg.cam[i].quant[STREAM_REC], MIN_QUANT, MAX_QUANT,
+                    DEFAULT_QUANT, "quant", "rec", i);
+    enc_knob_sanity(&arg.cam[i].qp_min[STREAM_REC], MIN_QP, MAX_QP,
+                    DEFAULT_QP_MIN, "qp_min", "rec", i);
+    enc_knob_sanity(&arg.cam[i].qp_max[STREAM_REC], MIN_QP, MAX_QP,
+                    DEFAULT_QP_MAX, "qp_max", "rec", i);
+    enc_gop_resolve(&arg.cam[i].gop[STREAM_REC], arg.fps[STREAM_REC][i],
+                    "rec", i);
+
+    if (arg.dual_enc) {
+      enc_knob_sanity(&arg.cam[i].gop[STREAM_RTSP], MIN_GOP_SIZE, MAX_GOP_SIZE,
+                      DEFAULT_GOP_SIZE, "gop", "rtsp", i);
+      enc_profile_sanity(&arg.cam[i].profile[STREAM_RTSP], profile_min,
+                         profile_max, profile_default, "rtsp", i);
+      enc_knob_sanity(&arg.cam[i].quant[STREAM_RTSP], MIN_QUANT, MAX_QUANT,
+                      DEFAULT_QUANT, "quant", "rtsp", i);
+      enc_knob_sanity(&arg.cam[i].qp_min[STREAM_RTSP], MIN_QP, MAX_QP,
+                      DEFAULT_QP_MIN, "qp_min", "rtsp", i);
+      enc_knob_sanity(&arg.cam[i].qp_max[STREAM_RTSP], MIN_QP, MAX_QP,
+                      DEFAULT_QP_MAX, "qp_max", "rtsp", i);
+      enc_gop_resolve(&arg.cam[i].gop[STREAM_RTSP], arg.fps[STREAM_RTSP][i],
+                      "rtsp", i);
+    } else {
+      enc_knob_mirror(&arg.cam[i].gop[STREAM_RTSP], arg.cam[i].gop[STREAM_REC],
+                      "gop", i);
+      enc_knob_mirror(&arg.cam[i].profile[STREAM_RTSP],
+                      arg.cam[i].profile[STREAM_REC], "profile", i);
+      enc_knob_mirror(&arg.cam[i].quant[STREAM_RTSP],
+                      arg.cam[i].quant[STREAM_REC], "quant", i);
+      enc_knob_mirror(&arg.cam[i].qp_min[STREAM_RTSP],
+                      arg.cam[i].qp_min[STREAM_REC], "qp_min", i);
+      enc_knob_mirror(&arg.cam[i].qp_max[STREAM_RTSP],
+                      arg.cam[i].qp_max[STREAM_REC], "qp_max", i);
+    }
+
+    /* An inverted window would be silently clamped deep inside the VPU
+     * wrapper; reject it here where it is still explainable. Both zero
+     * (= unset) is the normal case and must pass. */
+    for (gint s = 0; s < 2; s++) {
+      if (arg.cam[i].qp_min[s] > 0 && arg.cam[i].qp_max[s] > 0 &&
+          arg.cam[i].qp_min[s] > arg.cam[i].qp_max[s]) {
+        __LOG(LOG_ERR,
+              "[%s][%s:%d] ch%d %s qp_min %d > qp_max %d, reset both to unset",
+              LOG_KEY, _FILE_, __LINE__, i, s == STREAM_REC ? "rec" : "rtsp",
+              arg.cam[i].qp_min[s], arg.cam[i].qp_max[s]);
+        arg.cam[i].qp_min[s] = DEFAULT_QP_MIN;
+        arg.cam[i].qp_max[s] = DEFAULT_QP_MAX;
+      }
+    }
+
+    /* Effective values — logged after every clamp, sentinel resolution and
+     * single-enc alignment, so this line is what the encoder actually gets. */
+    __LOG(LOG_NOTICE,
+          "[%s][%s:%d] ch%d gop:%d,%d profile:%d,%d quant:%d,%d "
+          "qp_min:%d,%d qp_max:%d,%d",
+          LOG_KEY, _FILE_, __LINE__, i, arg.cam[i].gop[STREAM_REC],
+          arg.cam[i].gop[STREAM_RTSP], arg.cam[i].profile[STREAM_REC],
+          arg.cam[i].profile[STREAM_RTSP], arg.cam[i].quant[STREAM_REC],
+          arg.cam[i].quant[STREAM_RTSP], arg.cam[i].qp_min[STREAM_REC],
+          arg.cam[i].qp_min[STREAM_RTSP], arg.cam[i].qp_max[STREAM_REC],
+          arg.cam[i].qp_max[STREAM_RTSP]);
   }
 
   if (g_cfg_errors > 0)
@@ -1555,8 +1747,9 @@ gint ParserClass::cmd_parser(gchar *buffer, gint len, gpointer data) {
         token = strtok(NULL, SPLIT_CHAR);
         key = charArrayToInt(token);
 
-        if (key < 0 || key > 9999) {
-          g_print("bps %d not supported\n", key);
+        /* Same acceptance rule as the edgeconf path in check_arg(). */
+        if (key < 0) {
+          g_print("bps %d not supported (0=auto/VBR, or kbps >= 0)\n", key);
           return -1;
         }
 
@@ -1564,8 +1757,13 @@ gint ParserClass::cmd_parser(gchar *buffer, gint len, gpointer data) {
           if (single_enc) {
             if (any_enc_stream)
               encoderBin[i].setBitrate(key);
+            /* One encoder feeds both paths, so keep the rtsp slot aligned the
+             * way check_arg() does at startup. */
+            cmdArg.cam[i].bps[STREAM_REC] = key;
+            cmdArg.cam[i].bps[STREAM_RTSP] = key;
           } else {
             recordBin[i].setBitrate(key);
+            cmdArg.cam[i].bps[STREAM_REC] = key;
           }
         }
         // for (i = 0; i < MAX_CHANNEL; i++)
@@ -1580,14 +1778,17 @@ gint ParserClass::cmd_parser(gchar *buffer, gint len, gpointer data) {
         token = strtok(NULL, SPLIT_CHAR);
         key = charArrayToInt(token);
 
-        if (key < 0 || key > 9999) {
-          g_print("bps %d not supported\n", key);
+        /* Same acceptance rule as the edgeconf path in check_arg(). */
+        if (key < 0) {
+          g_print("bps %d not supported (0=auto/VBR, or kbps >= 0)\n", key);
           return -1;
         }
 
         for (i = 0; i < MAX_CHANNEL; i++)
-          if (cmdArg.cam[i].enable && cmdArg.stream_en[STREAM_RTSP])
+          if (cmdArg.cam[i].enable && cmdArg.stream_en[STREAM_RTSP]) {
             rtspServerBin[i].setBitrate(key);
+            cmdArg.cam[i].bps[STREAM_RTSP] = key;
+          }
       } else
         g_print("wrong cmd!\n");
     } else if (compareBuf(token, "fps", 3)) {
@@ -1953,20 +2154,29 @@ gint ParserClass::cmd_parser(gchar *buffer, gint len, gpointer data) {
         token = strtok(NULL, SPLIT_CHAR);
         key = charArrayToInt(token);
 
-        if (key < 0 || key > 100) {
-          g_print("gop %d not supported\n", key);
+        /* Same acceptance rule as the edgeconf path in check_arg(). 0 is the
+         * "follow fps" sentinel and is resolved per channel below — it must
+         * not reach the encoder raw. */
+        if (key < MIN_GOP_SIZE || key > MAX_GOP_SIZE) {
+          g_print("gop %d not supported (0=fps(1s), or %d..%d)\n", key,
+                  MIN_GOP_SIZE + 1, MAX_GOP_SIZE);
           return -1;
         }
 
         for (i = 0; i < MAX_CHANNEL; i++)
           if (cmdArg.cam[i].enable && rec_ctrl_stream) {
+            /* Resolve per channel: fps is per channel, so one "0" can land on
+             * different intervals across channels. */
+            gint gop = key;
+            enc_gop_resolve(&gop, cmdArg.fps[STREAM_REC][i], "rec", i);
             if (single_enc) {
               if (any_enc_stream)
-                encoderBin[i].setGop(key);
-              cmdArg.cam[i].gop[STREAM_REC] = key;
-              cmdArg.cam[i].gop[STREAM_RTSP] = key;
+                encoderBin[i].setGop(gop);
+              cmdArg.cam[i].gop[STREAM_REC] = gop;
+              cmdArg.cam[i].gop[STREAM_RTSP] = gop;
             } else {
-              recordBin[i].setGop(key);
+              recordBin[i].setGop(gop);
+              cmdArg.cam[i].gop[STREAM_REC] = gop;
             }
           }
       } else if (compareBuf(token, "rtsp", 4)) {
@@ -1978,14 +2188,22 @@ gint ParserClass::cmd_parser(gchar *buffer, gint len, gpointer data) {
         token = strtok(NULL, SPLIT_CHAR);
         key = charArrayToInt(token);
 
-        if (key < 0 || key > 100) {
-          g_print("gop %d not supported\n", key);
+        /* Same acceptance rule as the edgeconf path in check_arg(). 0 is the
+         * "follow fps" sentinel and is resolved per channel below — it must
+         * not reach the encoder raw. */
+        if (key < MIN_GOP_SIZE || key > MAX_GOP_SIZE) {
+          g_print("gop %d not supported (0=fps(1s), or %d..%d)\n", key,
+                  MIN_GOP_SIZE + 1, MAX_GOP_SIZE);
           return -1;
         }
 
         for (i = 0; i < MAX_CHANNEL; i++)
-          if (cmdArg.cam[i].enable && cmdArg.stream_en[STREAM_RTSP])
-            rtspServerBin[i].setGop(key);
+          if (cmdArg.cam[i].enable && cmdArg.stream_en[STREAM_RTSP]) {
+            gint gop = key;
+            enc_gop_resolve(&gop, cmdArg.fps[STREAM_RTSP][i], "rtsp", i);
+            rtspServerBin[i].setGop(gop);
+            cmdArg.cam[i].gop[STREAM_RTSP] = gop;
+          }
       } else
         g_print("wrong cmd!\n");
     } else if (compareBuf(token, "key", 3)) {

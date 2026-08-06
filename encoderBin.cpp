@@ -45,7 +45,7 @@ void EncoderBin::getBitrate()
      g_print("rec ch%d get bitrate : %d\n", encData.ch, bps);
 }
 
-void EncoderBin::setBitrate(guint16 data)
+void EncoderBin::setBitrate(gint data)
 {
     gint bps;
 
@@ -292,7 +292,9 @@ gboolean EncoderBin::init(guint8 ch)
     re.queue = gst_element_factory_make(QUEUE_TYPE, "queue");
     re.capsfilter = gst_element_factory_make("capsfilter", "capsfilter");
     //re.capsfilter2 = gst_element_factory_make("capsfilter2", "capsfilter");
-    re.enc = gst_element_factory_make("vpuenc_h264", "vpuenc_h264");
+    const gchar *encoder_factory =
+        g_strcmp0(cmdArg.enc, ENC_H265) == 0 ? "vpuenc_hevc" : "vpuenc_h264";
+    re.enc = gst_element_factory_make(encoder_factory, encoder_factory);
     re.rate = gst_element_factory_make("videorate", "videorate");
     re.convert = gst_element_factory_make("imxvideoconvert_g2d", "convert");
     re.crop = gst_element_factory_make("videocrop", "crop");
@@ -333,9 +335,9 @@ gboolean EncoderBin::init(guint8 ch)
     else if(crop_en) {
         //ret = gst_element_link_many(re.queue, re.crop, re.convert, re.rate, re.capsfilter, re.enc, re.parse, re.tee, NULL);
         if (cmdArg.videorate_en)
-            ret = gst_element_link_many(re.queue, re.crop, re.convert, re.rate, re.enc, re.tee, NULL);
+            ret = gst_element_link_many(re.queue, re.crop, re.convert, re.rate, re.capsfilter, re.enc, re.tee, NULL);
         else
-            ret = gst_element_link_many(re.queue, re.crop, re.convert, re.enc, re.tee, NULL);
+            ret = gst_element_link_many(re.queue, re.crop, re.convert, re.capsfilter, re.enc, re.tee, NULL);
     }
     //else if(crop_en) ret = gst_element_link_many(re.queue, re.convert, re.rate, re.capsfilter, re.enc, re.parse, re.queue2, NULL);
     else {
@@ -384,9 +386,22 @@ gboolean EncoderBin::init(guint8 ch)
     g_object_set(re.overlay, "halignment", 0, NULL);
     g_object_set(re.overlay, "font-desc", DEFAULT_OVERLAY_FONT, NULL);
 
+    /* All encoder tuning now comes from edgeconf (VHL_CAM.i2cN.chX.*).
+     * Defaults reproduce the previous behaviour: gop-size lands on 15 because
+     * DEFAULT_GOP_SIZE is the follow-fps sentinel (0) and check_arg() resolves
+     * it against the stream's fps (15 by default) — it is not a macro literal.
+     * The rest match the plugin's own defaults. */
     g_object_set(re.enc, "bitrate", cmdArg.cam[ch].bps[STREAM_REC], NULL);
     g_object_set(re.enc, "gop-size", cmdArg.cam[ch].gop[STREAM_REC], NULL);
-    //g_object_set(re.enc, "quant", 35, NULL);
+    /* quant is codec-specific; skip it cleanly when the selected encoder does
+     * not expose the property. */
+    enc_set_optional_int(re.enc, "quant", cmdArg.cam[ch].quant[STREAM_REC], ch);
+    /* profile is installed on i.MX8MP only and qp-min/qp-max on i.MX8MP/i.MX8MM,
+     * so set those through a guard instead of letting GLib warn per channel. */
+    enc_set_optional_int(re.enc, "profile", cmdArg.cam[ch].profile[STREAM_REC], ch);
+    enc_set_optional_int(re.enc, "qp-min", cmdArg.cam[ch].qp_min[STREAM_REC], ch);
+    enc_set_optional_int(re.enc, "qp-max", cmdArg.cam[ch].qp_max[STREAM_REC], ch);
+
     //g_object_set(re.parse, "config-interval", -1, NULL);
     //g_object_set(re.rate, "max-rate", MAIN_FPS, "drop-only", FALSE, NULL);
     //g_object_set(re.queue, "max-size-time", GST_SECOND, "max-size-buffers", cmdArg.fps[STREAM_REC][ch], "leaky", LEAKY_DOWNSTREAM, NULL);

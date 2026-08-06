@@ -53,7 +53,7 @@ public :
 	gboolean init(guint8 num, gboolean crop_en) ;
     GstPad* getBinSinkPad();
     GstPad* getBinSrcPad();
-    void setBitrate(guint16 data);
+    void setBitrate(gint data);
     void getBitrate();
     void setFps(guint16 data);
     void getFps();

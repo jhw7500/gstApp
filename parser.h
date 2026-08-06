@@ -31,13 +31,52 @@
 
 #define DEFAULT_RECORD_BITRATE  4096
 #define DEFAULT_RTSP_BITRATE    1024
-#define MIN_BITRATE_KBPS        100
-#define MAX_BITRATE_KBPS        20000
+/* vpuenc_h264 documents bitrate 0 as "automatic" (its own default): the VPU
+ * wrapper then derives a rate from resolution and framerate instead of holding
+ * a fixed CBR target. Accepted as-is so the mode stays reachable from edgeconf.
+ *
+ * Only negatives are rejected — deliberately no floor and no ceiling. The
+ * wrapper's AdjustBitrate() already replaces anything under
+ * VPU_ENC_MIN_BITRATE (10000 bps = 10 kbps) with the same auto-computed rate
+ * that 0 gets, and clamps anything over VPU_ENC_MAX_BITRATE (60000 kbps).
+ * Both ends are handled downstream, so a range check here would only reject
+ * values the encoder copes with. */
+#define BITRATE_AUTO            0
 #define DEFAULT_MAIN_FPS        15
 #define DEFAULT_RECORD_FPS      15
 #define DEFAULT_RTSP_FPS        15
 #define DEFAULT_CAPTURE_FPS     15
-#define DEFAULT_GOP_SIZE        15
+/* vpuenc_h264 "gop-size" = keyframe interval in frames.
+ * 0 is a sentinel meaning "one GOP per second": check_arg() resolves it against
+ * the stream's own fps, so the interval follows fps instead of going stale when
+ * fps changes. With the default 15 fps this reproduces the interval gstApp has
+ * always run with.
+ * 0 must never reach the encoder — the plugin's periodic I-frame test
+ * (gop_size && gop_count % gop_size, gstvpuenc.c) goes dead at 0, and what the
+ * VPU does with idr_interval=0 is undocumented (closed VC8000E library).
+ * Upper bound matches ENC_MAX_GOP_SIZE in the VPU wrapper, which silently
+ * clamps anything larger. */
+#define GOP_SIZE_FOLLOW_FPS     0
+#define DEFAULT_GOP_SIZE        GOP_SIZE_FOLLOW_FPS
+#define MIN_GOP_SIZE            0
+#define MAX_GOP_SIZE            300
+/* Codec-specific profile ranges from the vpuenc_h264/vpuenc_hevc properties.
+ * PROFILE_UNSET is resolved after enc has been parsed, so an omitted profile
+ * selects the matching plugin default instead of assuming H.264. */
+#define PROFILE_UNSET           (-1)
+#define DEFAULT_H264_PROFILE    9       /* Baseline */
+#define MIN_H264_PROFILE        9
+#define MAX_H264_PROFILE        12      /* Baseline, Main, High, High10 */
+#define DEFAULT_H265_PROFILE    0       /* Main */
+#define MIN_H265_PROFILE        0
+#define MAX_H265_PROFILE        2       /* Main, Main Still Picture, Main10 */
+#define DEFAULT_QUANT           (-1)    /* auto */
+#define MIN_QUANT               (-1)
+#define MAX_QUANT               51
+#define DEFAULT_QP_MIN          0       /* 0 = unset -> hardware default */
+#define DEFAULT_QP_MAX          0       /* 0 = unset -> hardware default */
+#define MIN_QP                  0
+#define MAX_QP                  51
 #define DEFAULT_DURATION        1
 #define DEFAULT_DBG_LEVEL       4
 #define DEFAULT_LOG_LEVEL       5
@@ -99,6 +138,7 @@
 
 #define DEFAULT_START_VIDEO_TIME_PATH   "/tmp/start_video_time"
 #define DEFAULT_DOT_PATH    "/tmp"
+#define DEFAULT_ENC         ENC_H264
 #define DEFAULT_MUXER       "mp4"
 #define JHW_TESTx
 #ifdef JHW_TEST

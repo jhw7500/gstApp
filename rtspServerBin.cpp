@@ -361,8 +361,10 @@ static void media_configure(GstRTSPMediaFactory *factory, GstRTSPMedia *media,
   if (info->caps)
     g_object_set(info->appsrc, "caps", info->caps, NULL);
   else {
+    const gboolean use_h265 = g_strcmp0(cmdArg.enc, ENC_H265) == 0;
     GstCaps *fallback_caps = gst_caps_from_string(
-        "video/x-h264,stream-format=byte-stream,alignment=au");
+        use_h265 ? "video/x-h265,stream-format=byte-stream,alignment=au"
+                 : "video/x-h264,stream-format=byte-stream,alignment=au");
     if (fallback_caps) {
       g_object_set(info->appsrc, "caps", fallback_caps, NULL);
       gst_caps_unref(fallback_caps);
@@ -608,7 +610,7 @@ void RtspServerBin::getBitrate() {
   g_print("rtsp ch%d get bitrate : %d\n", rtspServerData.ch, bps);
 }
 
-void RtspServerBin::setBitrate(guint16 data) {
+void RtspServerBin::setBitrate(gint data) {
   gint bps;
 
   if (re.enc == NULL) {
@@ -1023,6 +1025,9 @@ gboolean RtspServerBin::audioInit() {
 gboolean RtspServerBin::init(guint8 ch, gboolean crop_en)
 {
     gboolean ret = 0;
+    const gboolean use_h265 = g_strcmp0(cmdArg.enc, ENC_H265) == 0;
+    const gchar *parser_factory = use_h265 ? "h265parse" : "h264parse";
+    const gchar *payloader_factory = use_h265 ? "rtph265pay" : "rtph264pay";
     rtspServerData.ch = ch;
     //sinkPad = NULL;
     __LOG(LOG_INFO, "[GST][%s:%d] %s ch : %d, crop : %s", _FILE_, __LINE__, __FUNCTION__, rtspServerData.ch, crop_en? "enable":"disable");
@@ -1077,7 +1082,7 @@ gboolean RtspServerBin::init(guint8 ch, gboolean crop_en)
     rtspServerData.appSrcName = g_strdup_printf("%s%d", "rtsp_appsrc", ch);
 
     //gchar *launch_str = g_strdup_printf("( appsrc name=%s ! queue max-size-buffers=60 leaky=2 ! vpuenc_h264 bitrate=1024 ! h264parse config-interval=-1 ! rtph264pay name=pay0 config-interval=-1 )", rtspServerData.appSrcName);
-    gchar *launch_str = g_strdup_printf("( appsrc name=%s do-timestamp=1 is-live=1 format=3 ! queue max-size-buffers=%d leaky=2 ! h264parse ! rtph264pay name=pay0 config-interval=-1 )", rtspServerData.appSrcName, cmdArg.fps[STREAM_RTSP][ch]);
+    gchar *launch_str = g_strdup_printf("( appsrc name=%s do-timestamp=1 is-live=1 format=3 ! queue max-size-buffers=%d leaky=2 ! %s ! %s name=pay0 config-interval=-1 )", rtspServerData.appSrcName, cmdArg.fps[STREAM_RTSP][ch], parser_factory, payloader_factory);
     //gchar *launch_str = g_strdup_printf("( appsrc name=%s do-timestamp=1 is-live=1 block=true ! queue max-size-buffers=5 leaky=2 min-threshold-time=500000000 ! h264parse ! rtph264pay name=pay0 config-interval=0 )", rtspServerData.appSrcName);
 
     gst_rtsp_media_factory_set_launch(factory, launch_str);
@@ -1109,6 +1114,13 @@ gboolean RtspServerBin::init(guint8 ch, gboolean crop_en)
 #else
 gboolean RtspServerBin::init(guint8 ch, gboolean crop_en) {
   gboolean ret = 0;
+  const gboolean use_h265 = g_strcmp0(cmdArg.enc, ENC_H265) == 0;
+  const gchar *parser_factory = use_h265 ? "h265parse" : "h264parse";
+  const gchar *encoder_factory =
+      use_h265 ? "vpuenc_hevc" : "vpuenc_h264";
+  const gchar *encoded_media_type =
+      use_h265 ? "video/x-h265" : "video/x-h264";
+  const gchar *payloader_factory = use_h265 ? "rtph265pay" : "rtph264pay";
   rtspServerData.ch = ch;
   // sinkPad = NULL;
   __LOG(LOG_INFO, "[GST][%s:%d] %s ch : %d, crop : %s", _FILE_, __LINE__,
@@ -1122,8 +1134,8 @@ gboolean RtspServerBin::init(guint8 ch, gboolean crop_en) {
   re.convert = gst_element_factory_make("imxvideoconvert_g2d", "convert");
   re.convert2 = gst_element_factory_make("imxvideoconvert_g2d", "convert2");
   re.videoflip = gst_element_factory_make("videoflip", "videoflip");
-  re.parse = gst_element_factory_make("h264parse", "h264parse");
-  re.enc = gst_element_factory_make("vpuenc_h264", "vpuenc_h264");
+  re.parse = gst_element_factory_make(parser_factory, parser_factory);
+  re.enc = gst_element_factory_make(encoder_factory, encoder_factory);
   re.rate = gst_element_factory_make("videorate", "videorate");
   re.sink = gst_element_factory_make("appsink", "appsink");
   re.crop = gst_element_factory_make("videocrop", "crop");
@@ -1170,7 +1182,7 @@ gboolean RtspServerBin::init(guint8 ch, gboolean crop_en) {
   g_object_set(re.capsfilter, "caps", caps, NULL);
   gst_caps_unref(caps);
 
-  GstCaps *caps2 = gst_caps_new_simple("video/x-h264", NULL);
+  GstCaps *caps2 = gst_caps_new_empty_simple(encoded_media_type);
   g_object_set(re.capsfilter2, "caps", caps2, NULL);
   gst_caps_unref(caps2);
 
@@ -1195,6 +1207,12 @@ gboolean RtspServerBin::init(guint8 ch, gboolean crop_en) {
 
   g_object_set(re.enc, "bitrate", cmdArg.cam[ch].bps[STREAM_RTSP], NULL);
   g_object_set(re.enc, "gop-size", cmdArg.cam[ch].gop[STREAM_RTSP], NULL);
+  /* quant is codec-specific; skip it cleanly when the selected encoder does
+   * not expose the property. */
+  enc_set_optional_int(re.enc, "quant", cmdArg.cam[ch].quant[STREAM_RTSP], ch);
+  enc_set_optional_int(re.enc, "profile", cmdArg.cam[ch].profile[STREAM_RTSP], ch);
+  enc_set_optional_int(re.enc, "qp-min", cmdArg.cam[ch].qp_min[STREAM_RTSP], ch);
+  enc_set_optional_int(re.enc, "qp-max", cmdArg.cam[ch].qp_max[STREAM_RTSP], ch);
   const gint bin_queue_ms =
       clamp_int(cmdArg.rtsp_bin_queue_max_time_ms, 0, 2000);
   g_object_set(re.queue, "max-size-time", (guint64)bin_queue_ms * GST_MSECOND,
@@ -1335,8 +1353,9 @@ gboolean RtspServerBin::init(guint8 ch, gboolean crop_en) {
   gchar *launch_str = g_strdup_printf(
       "( appsrc name=%s do-timestamp=1 is-live=1 format=3 ! queue "
       "max-size-buffers=%d max-size-time=0 max-size-bytes=0 leaky=2 ! "
-      "h264parse config-interval=-1 ! rtph264pay name=pay0 config-interval=-1 )",
-      rtspServerData.appSrcName, q_max_buffers);
+      "%s config-interval=-1 ! %s name=pay0 config-interval=-1 )",
+      rtspServerData.appSrcName, q_max_buffers, parser_factory,
+      payloader_factory);
   // gchar *launch_str = g_strdup_printf("( appsrc name=%s do-timestamp=1
   // is-live=1 block=true ! queue max-size-buffers=5 leaky=2
   // min-threshold-time=500000000 ! h264parse ! rtph264pay name=pay0
