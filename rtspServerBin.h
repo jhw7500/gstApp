@@ -37,6 +37,9 @@ typedef struct _RtspServerData
     gboolean dual_bps;
     gboolean mem_flags_logged;
     GMutex lock;    /* appsrc/caps 공유 보호 (streaming·명령·RTSP 서버 스레드) */
+    gint appsrc_full;        /* appsrc 큐 상태: enough-data=1 / need-data=0 (원자적 접근) */
+    gboolean wait_keyframe;  /* 드롭 후 키프레임까지 push 보류 (lock 보호) */
+    gint64 last_enough_log_us;
 } RtspServerData;
 
 typedef struct _RtspServerElement

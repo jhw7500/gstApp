@@ -107,8 +107,22 @@ static GstPadProbeReturn rtsp_pay_src_probe(GstPad *pad,
 
 static void enough_data(GstElement *source, gpointer user_data) {
   RtspServerData *info = (RtspServerData *)user_data;
-  __LOG(LOG_ERR, "[RTSP][%s:%d] ch %d Enough Data !!!", _FILE_, __LINE__,
-        info->ch);
+
+  g_atomic_int_set(&info->appsrc_full, 1);
+  /* push 스레드에서만 emit되므로 스로틀 타임스탬프는 락 불필요 */
+  gint64 now_us = g_get_monotonic_time();
+  if (info->last_enough_log_us == 0 ||
+      (now_us - info->last_enough_log_us) >= 1000000) {
+    info->last_enough_log_us = now_us;
+    __LOG(LOG_WARNING,
+          "[RTSP][%s:%d] ch %d appsrc full — dropping until need-data",
+          _FILE_, __LINE__, info->ch);
+  }
+}
+
+static void need_data(GstElement *source, guint length, gpointer user_data) {
+  RtspServerData *info = (RtspServerData *)user_data;
+  g_atomic_int_set(&info->appsrc_full, 0);
 }
 
 static gboolean cleanRtspSession(GstRTSPServer *server) {
@@ -403,6 +417,9 @@ static void media_configure(GstRTSPMediaFactory *factory, GstRTSPMedia *media,
   g_mutex_lock(&info->lock);
   old_appsrc = info->appsrc;
   info->appsrc = appsrc;
+  /* 새 appsrc는 빈 큐로 시작하므로 플로우 컨트롤 상태 리셋 */
+  g_atomic_int_set(&info->appsrc_full, 0);
+  info->wait_keyframe = FALSE;
   if (info->caps)
     g_object_set(appsrc, "caps", info->caps, NULL);
   else if (fallback_caps)
@@ -463,8 +480,10 @@ media_configure_out:
 
   g_signal_connect(media, "prepared", (GCallback)media_prepared_cb, factory);
   g_signal_connect(media, "unprepared", (GCallback)media_unprepared_cb, info);
-  if (appsrc)
+  if (appsrc) {
     g_signal_connect(appsrc, "enough-data", (GCallback)enough_data, info);
+    g_signal_connect(appsrc, "need-data", (GCallback)need_data, info);
+  }
 
   // g_object_set(element, "rtcp-min-interval", 10.0, NULL);
   // g_object_set(element, "rtcp-max-interval", 60.0, NULL);
@@ -545,10 +564,24 @@ static GstFlowReturn new_sample_handler(GstElement *sink, gpointer userData) {
    * 전순서를 보장한다 (stale caps 덮어쓰기 방지) */
   if (caps_changed && info->caps && info->appsrc)
     g_object_set(info->appsrc, "caps", info->caps, NULL);
+  /* appsrc 큐가 가득 차면(enough-data) 비워질 때까지(need-data) 드롭하고
+   * 재개는 키프레임부터 — PLAY 이전 구간에서 appsrc 내부 큐에 백로그가
+   * 무제한으로 쌓여 재생 시작이 수 초 지연되는 것을 방지한다 */
+  gboolean drop = FALSE;
+  if (g_atomic_int_get(&info->appsrc_full)) {
+    info->wait_keyframe = TRUE;
+    drop = TRUE;
+  } else if (info->wait_keyframe) {
+    if (buffer && !GST_BUFFER_FLAG_IS_SET(buffer, GST_BUFFER_FLAG_DELTA_UNIT))
+      info->wait_keyframe = FALSE;
+    else
+      drop = TRUE;
+  }
   /* lock 밖 push 동안 쓸 스냅샷 — appsrc는 media_unprepared_cb가 언제든
    * 마지막 ref를 해제할 수 있으므로 ref로 수명을 고정한다 */
-  GstElement *appsrc =
-      info->appsrc ? (GstElement *)gst_object_ref(info->appsrc) : NULL;
+  GstElement *appsrc = (!drop && info->appsrc)
+                           ? (GstElement *)gst_object_ref(info->appsrc)
+                           : NULL;
   g_mutex_unlock(&info->lock);
 
 #if 0
@@ -917,6 +950,9 @@ RtspServerBin::RtspServerBin() {
   rtspServerData.last_log_us = 0;
   rtspServerData.dual_bps = TRUE;
   rtspServerData.mem_flags_logged = FALSE;
+  rtspServerData.appsrc_full = 0;
+  rtspServerData.wait_keyframe = FALSE;
+  rtspServerData.last_enough_log_us = 0;
   g_mutex_init(&rtspServerData.lock);
 }
 
