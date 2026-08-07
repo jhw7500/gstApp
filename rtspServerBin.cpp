@@ -459,6 +459,7 @@ static GstFlowReturn new_sample_handler(GstElement *sink, gpointer userData) {
   GstBuffer *buffer;
   RtspServerData *info = (RtspServerData *)userData;
   GstCaps *sample_caps;
+  gboolean caps_changed = FALSE;
 
   //__LOG(LOG_NOTICE, "[GST][%s:%d] %s", _FILE_, __LINE__, __FUNCTION__);
 #ifdef DYNAMIC_CAPS
@@ -486,6 +487,7 @@ static GstFlowReturn new_sample_handler(GstElement *sink, gpointer userData) {
       if (info->caps)
         gst_caps_unref(info->caps);
       info->caps = gst_caps_copy(sample_caps);
+      caps_changed = TRUE;
     }
   }
 
@@ -506,7 +508,8 @@ static GstFlowReturn new_sample_handler(GstElement *sink, gpointer userData) {
   }
 #endif
 
-  if (info->caps)
+  /* appsrc caps는 media_configure()에서 항상 설정되므로 변경 시에만 갱신 */
+  if (caps_changed && info->caps)
     g_object_set(info->appsrc, "caps", info->caps, NULL);
 
   if (!buffer) {
@@ -557,6 +560,23 @@ static GstFlowReturn new_sample_handler(GstElement *sink, gpointer userData) {
   // (do-timestamp=1) avoiding sync issues.
   GstBuffer *out_buffer =
       gst_buffer_copy_region(buffer, GST_BUFFER_COPY_MEMORY, 0, -1);
+
+  /* NO_SHARE 메모리이거나 EXCLUSIVE lock 획득 실패 시 위 copy_region이 실제
+   * memcpy로 동작하므로, 채널당 1회 메모리 공유 여부를 남겨 zero-copy를
+   * 확인한다 (shared=1이면 원본 GstMemory를 ref 공유 = 복사 없음) */
+  if (!info->mem_flags_logged && out_buffer &&
+      gst_buffer_n_memory(buffer) > 0 && gst_buffer_n_memory(out_buffer) > 0) {
+    GstMemory *mem = gst_buffer_peek_memory(buffer, 0);
+    info->mem_flags_logged = TRUE;
+    __LOG(LOG_NOTICE,
+          "[RTSP][%s:%d] ch%d first pushed buffer mem: flags=0x%x no-share=%d "
+          "shared=%d allocator=%s n_mem=%u size=%" G_GSIZE_FORMAT,
+          _FILE_, __LINE__, info->ch, GST_MEMORY_FLAGS(mem),
+          (GST_MEMORY_FLAGS(mem) & GST_MEMORY_FLAG_NO_SHARE) ? 1 : 0,
+          gst_buffer_peek_memory(out_buffer, 0) == mem ? 1 : 0,
+          mem->allocator ? mem->allocator->mem_type : "(none)",
+          gst_buffer_n_memory(buffer), gst_buffer_get_size(buffer));
+  }
 
   // Push the buffer (takes ownership)
   GstFlowReturn push_ret =
@@ -830,6 +850,7 @@ RtspServerBin::RtspServerBin() {
   rtspServerData.last_timestamp = GST_CLOCK_TIME_NONE;
   rtspServerData.last_log_us = 0;
   rtspServerData.dual_bps = TRUE;
+  rtspServerData.mem_flags_logged = FALSE;
 }
 
 RtspServerBin::~RtspServerBin() {

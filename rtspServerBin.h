@@ -35,6 +35,7 @@ typedef struct _RtspServerData
     GstClockTime last_timestamp;
     gint64 last_log_us;
     gboolean dual_bps;
+    gboolean mem_flags_logged;
 } RtspServerData;
 
 typedef struct _RtspServerElement
