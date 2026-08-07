@@ -644,7 +644,6 @@ void RtspServerBin::setBitrate(gint data) {
   __LOG(LOG_NOTICE, "[GST][%s:%d] ch%d set bitrate : %d", _FILE_, __LINE__,
         rtspServerData.ch, bps);
   g_print("rtsp ch%d set bitrate : %d\n", rtspServerData.ch, bps);
-  rtspServerData.caps = NULL;
 }
 
 void RtspServerBin::getFps() {
