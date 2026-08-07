@@ -288,22 +288,38 @@ static gboolean remove_sessions (GstRTSPServer * server)
 
 static void media_unprepared_cb(GstRTSPMedia *media, gpointer user_data) {
   RtspServerData *info = (RtspServerData *)user_data;
+  GstElement *media_bin;
+  GstElement *media_appsrc = NULL;
+  GstElement *appsrc = NULL;
+
   __LOG(LOG_NOTICE, "[RTSP][%s:%d] ch%d media unprepared — clearing appsrc",
         _FILE_, __LINE__, info->ch);
+  /* 이 media 소유의 appsrc만 정리 — 같은 채널의 새 media가 이미 게시한
+   * 교체본을 옛 media의 unprepared가 지우는 것을 방지(세대 매칭) */
+  media_bin = gst_rtsp_media_get_element(media);
+  if (media_bin) {
+    media_appsrc =
+        gst_bin_get_by_name_recurse_up(GST_BIN(media_bin), info->appSrcName);
+    gst_object_unref(media_bin);
+  }
   /* 전역 추적 배열에서 제거 — ref 해제보다 먼저 수행해, lock 하에 배열
    * 항목을 본 쪽(SendEos)이 아직 살아있는 객체를 ref할 수 있게 한다 */
   g_mutex_lock(&g_rtsp_appsrc_lock);
-  if (info->ch < MAX_RTSP_APPSRC)
+  if (info->ch < MAX_RTSP_APPSRC && g_rtsp_appsrc[info->ch] == media_appsrc)
     g_rtsp_appsrc[info->ch] = NULL;
   g_mutex_unlock(&g_rtsp_appsrc_lock);
   /* 스트리밍 스레드가 스냅샷 ref를 쥐고 있을 수 있으므로 lock 안에서는
    * 포인터만 분리하고 unref는 lock 밖에서 수행한다 */
   g_mutex_lock(&info->lock);
-  GstElement *appsrc = info->appsrc;
-  info->appsrc = NULL;
+  if (info->appsrc == media_appsrc) {
+    appsrc = info->appsrc;
+    info->appsrc = NULL;
+  }
   g_mutex_unlock(&info->lock);
   if (appsrc)
     gst_object_unref(appsrc);
+  if (media_appsrc)
+    gst_object_unref(media_appsrc);
 }
 
 /* signal callback when the media is prepared for streaming. We can get the
@@ -362,11 +378,16 @@ static void media_configure(GstRTSPMediaFactory *factory, GstRTSPMedia *media,
   appsrc = gst_bin_get_by_name_recurse_up(GST_BIN(element), info->appSrcName);
   if (appsrc == NULL) {
     __LOG(LOG_ERR, "[GST][%s:%d] appsrc is null", _FILE_, __LINE__);
-    /* 조회 실패 시에도 이전 appsrc를 비워 stale push를 막는다 */
+    /* 조회 실패 시에도 이전 appsrc를 비워 stale push를 막는다.
+     * 전역 배열의 같은 항목도 ref 해제 전에 정리(댕글링 방지) */
     g_mutex_lock(&info->lock);
     old_appsrc = info->appsrc;
     info->appsrc = NULL;
     g_mutex_unlock(&info->lock);
+    g_mutex_lock(&g_rtsp_appsrc_lock);
+    if (info->ch < MAX_RTSP_APPSRC && g_rtsp_appsrc[info->ch] == old_appsrc)
+      g_rtsp_appsrc[info->ch] = NULL;
+    g_mutex_unlock(&g_rtsp_appsrc_lock);
     if (old_appsrc)
       gst_object_unref(old_appsrc);
     goto media_configure_out;
@@ -387,11 +408,8 @@ static void media_configure(GstRTSPMediaFactory *factory, GstRTSPMedia *media,
   else if (fallback_caps)
     g_object_set(appsrc, "caps", fallback_caps, NULL);
   g_mutex_unlock(&info->lock);
-  if (old_appsrc)
-    gst_object_unref(old_appsrc);
-  if (fallback_caps)
-    gst_caps_unref(fallback_caps);
-  /* 전역 추적 배열에 등록 (종료 시 EOS 전송용) */
+  /* 전역 추적 배열 갱신을 old ref 해제보다 먼저 수행 — 배열이 해제된
+   * 객체를 가리키는 창을 없앤다 (SendEos의 lock 하 ref 안전 보장) */
   g_mutex_lock(&g_rtsp_appsrc_lock);
   if (info->ch < MAX_RTSP_APPSRC) {
     g_rtsp_appsrc[info->ch] = appsrc;
@@ -399,6 +417,10 @@ static void media_configure(GstRTSPMediaFactory *factory, GstRTSPMedia *media,
       g_rtsp_appsrc_count = info->ch + 1;
   }
   g_mutex_unlock(&g_rtsp_appsrc_lock);
+  if (old_appsrc)
+    gst_object_unref(old_appsrc);
+  if (fallback_caps)
+    gst_caps_unref(fallback_caps);
   // queue_name = g_strdup_printf("%s", QUEUE_NAME, info->ch);
   //__LOG(LOG_NOTICE, "[GST][%s:%d] appsrc name : %s", _FILE_, __LINE__,
   //appsrc_name); queue = gst_bin_get_by_name_recurse_up(GST_BIN(element),
