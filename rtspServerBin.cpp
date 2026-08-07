@@ -37,6 +37,9 @@ guint removeSesson_id = 0;
 #define MAX_RTSP_APPSRC (MAX_CHANNEL + 1)
 static GstElement *g_rtsp_appsrc[MAX_RTSP_APPSRC] = { NULL };
 static guint8 g_rtsp_appsrc_count = 0;
+/* 배열·count 보호 — media_configure/unprepared(RTSP 스레드)와 종료 경로 공유.
+ * 정적 할당 GMutex는 별도 init 불필요 */
+static GMutex g_rtsp_appsrc_lock;
 
 static gint clamp_int(gint value, gint min_value, gint max_value) {
   if (value < min_value)
@@ -287,13 +290,20 @@ static void media_unprepared_cb(GstRTSPMedia *media, gpointer user_data) {
   RtspServerData *info = (RtspServerData *)user_data;
   __LOG(LOG_NOTICE, "[RTSP][%s:%d] ch%d media unprepared — clearing appsrc",
         _FILE_, __LINE__, info->ch);
-  /* 전역 추적 배열에서 제거 */
+  /* 전역 추적 배열에서 제거 — ref 해제보다 먼저 수행해, lock 하에 배열
+   * 항목을 본 쪽(SendEos)이 아직 살아있는 객체를 ref할 수 있게 한다 */
+  g_mutex_lock(&g_rtsp_appsrc_lock);
   if (info->ch < MAX_RTSP_APPSRC)
     g_rtsp_appsrc[info->ch] = NULL;
-  if (info->appsrc) {
-    gst_object_unref(info->appsrc);
-    info->appsrc = NULL;
-  }
+  g_mutex_unlock(&g_rtsp_appsrc_lock);
+  /* 스트리밍 스레드가 스냅샷 ref를 쥐고 있을 수 있으므로 lock 안에서는
+   * 포인터만 분리하고 unref는 lock 밖에서 수행한다 */
+  g_mutex_lock(&info->lock);
+  GstElement *appsrc = info->appsrc;
+  info->appsrc = NULL;
+  g_mutex_unlock(&info->lock);
+  if (appsrc)
+    gst_object_unref(appsrc);
 }
 
 /* signal callback when the media is prepared for streaming. We can get the
@@ -334,6 +344,9 @@ static void media_configure(GstRTSPMediaFactory *factory, GstRTSPMedia *media,
   // GstElement *src = (GstElement*)user_data;
   RtspServerData *info = (RtspServerData *)user_data;
   GstElement *element;
+  GstElement *appsrc = NULL;
+  GstElement *old_appsrc = NULL;
+  GstCaps *fallback_caps = NULL;
   // GstElement *queue;
   // gchar *queue_name;
   // static GMutex mutex;
@@ -346,30 +359,46 @@ static void media_configure(GstRTSPMediaFactory *factory, GstRTSPMedia *media,
   // name = gst_object_get_name(GST_OBJECT(element));
   __LOG(LOG_NOTICE, "[GST][%s:%d] appsrc name : %s", _FILE_, __LINE__,
         info->appSrcName);
-  info->appsrc =
-      gst_bin_get_by_name_recurse_up(GST_BIN(element), info->appSrcName);
-  if (info->appsrc == NULL) {
+  appsrc = gst_bin_get_by_name_recurse_up(GST_BIN(element), info->appSrcName);
+  if (appsrc == NULL) {
     __LOG(LOG_ERR, "[GST][%s:%d] appsrc is null", _FILE_, __LINE__);
+    /* 조회 실패 시에도 이전 appsrc를 비워 stale push를 막는다 */
+    g_mutex_lock(&info->lock);
+    old_appsrc = info->appsrc;
+    info->appsrc = NULL;
+    g_mutex_unlock(&info->lock);
+    if (old_appsrc)
+      gst_object_unref(old_appsrc);
     goto media_configure_out;
   }
+  {
+    const gboolean use_h265 = g_strcmp0(cmdArg.enc, ENC_H265) == 0;
+    fallback_caps = gst_caps_from_string(
+        use_h265 ? "video/x-h265,stream-format=byte-stream,alignment=au"
+                 : "video/x-h264,stream-format=byte-stream,alignment=au");
+  }
+  /* appsrc 게시와 caps 적용을 한 임계구역에서 수행 — 스트리밍 스레드의
+   * caps 갱신(g_object_set)과 전순서를 보장해 stale caps 덮어쓰기를 막는다 */
+  g_mutex_lock(&info->lock);
+  old_appsrc = info->appsrc;
+  info->appsrc = appsrc;
+  if (info->caps)
+    g_object_set(appsrc, "caps", info->caps, NULL);
+  else if (fallback_caps)
+    g_object_set(appsrc, "caps", fallback_caps, NULL);
+  g_mutex_unlock(&info->lock);
+  if (old_appsrc)
+    gst_object_unref(old_appsrc);
+  if (fallback_caps)
+    gst_caps_unref(fallback_caps);
   /* 전역 추적 배열에 등록 (종료 시 EOS 전송용) */
+  g_mutex_lock(&g_rtsp_appsrc_lock);
   if (info->ch < MAX_RTSP_APPSRC) {
-    g_rtsp_appsrc[info->ch] = info->appsrc;
+    g_rtsp_appsrc[info->ch] = appsrc;
     if (info->ch >= g_rtsp_appsrc_count)
       g_rtsp_appsrc_count = info->ch + 1;
   }
-  if (info->caps)
-    g_object_set(info->appsrc, "caps", info->caps, NULL);
-  else {
-    const gboolean use_h265 = g_strcmp0(cmdArg.enc, ENC_H265) == 0;
-    GstCaps *fallback_caps = gst_caps_from_string(
-        use_h265 ? "video/x-h265,stream-format=byte-stream,alignment=au"
-                 : "video/x-h264,stream-format=byte-stream,alignment=au");
-    if (fallback_caps) {
-      g_object_set(info->appsrc, "caps", fallback_caps, NULL);
-      gst_caps_unref(fallback_caps);
-    }
-  }
+  g_mutex_unlock(&g_rtsp_appsrc_lock);
   // queue_name = g_strdup_printf("%s", QUEUE_NAME, info->ch);
   //__LOG(LOG_NOTICE, "[GST][%s:%d] appsrc name : %s", _FILE_, __LINE__,
   //appsrc_name); queue = gst_bin_get_by_name_recurse_up(GST_BIN(element),
@@ -412,9 +441,8 @@ media_configure_out:
 
   g_signal_connect(media, "prepared", (GCallback)media_prepared_cb, factory);
   g_signal_connect(media, "unprepared", (GCallback)media_unprepared_cb, info);
-  if (info->appsrc)
-    g_signal_connect(info->appsrc, "enough-data", (GCallback)enough_data,
-                     info);
+  if (appsrc)
+    g_signal_connect(appsrc, "enough-data", (GCallback)enough_data, info);
 
   // g_object_set(element, "rtcp-min-interval", 10.0, NULL);
   // g_object_set(element, "rtcp-max-interval", 60.0, NULL);
@@ -481,6 +509,7 @@ static GstFlowReturn new_sample_handler(GstElement *sink, gpointer userData) {
   buffer = gst_sample_get_buffer(sample);
   // gst_sample_unref(sample);
 
+  g_mutex_lock(&info->lock);
   sample_caps = gst_sample_get_caps(sample);
   if (sample_caps) {
     if (!info->caps || !gst_caps_is_equal(info->caps, sample_caps)) {
@@ -490,6 +519,15 @@ static GstFlowReturn new_sample_handler(GstElement *sink, gpointer userData) {
       caps_changed = TRUE;
     }
   }
+  /* appsrc caps 쓰기는 media_configure()와 같은 lock 안에서 수행해
+   * 전순서를 보장한다 (stale caps 덮어쓰기 방지) */
+  if (caps_changed && info->caps && info->appsrc)
+    g_object_set(info->appsrc, "caps", info->caps, NULL);
+  /* lock 밖 push 동안 쓸 스냅샷 — appsrc는 media_unprepared_cb가 언제든
+   * 마지막 ref를 해제할 수 있으므로 ref로 수명을 고정한다 */
+  GstElement *appsrc =
+      info->appsrc ? (GstElement *)gst_object_ref(info->appsrc) : NULL;
+  g_mutex_unlock(&info->lock);
 
 #if 0
     GstFlowReturn ret;
@@ -501,20 +539,19 @@ static GstFlowReturn new_sample_handler(GstElement *sink, gpointer userData) {
 #endif
 
 #if 1
-  if (info->appsrc == NULL || is_interrupted) {
+  if (appsrc == NULL || is_interrupted) {
     // if(info->ch == 0) g_print("ch%d appsrc null return!\n", info->ch);
+    if (appsrc)
+      gst_object_unref(appsrc);
     gst_sample_unref(sample);
     return GST_FLOW_OK;
   }
 #endif
 
-  /* appsrc caps는 media_configure()에서 항상 설정되므로 변경 시에만 갱신 */
-  if (caps_changed && info->caps)
-    g_object_set(info->appsrc, "caps", info->caps, NULL);
-
   if (!buffer) {
     __LOG(LOG_CRIT, "[RTSP][%s:%d] ch%d buffer cannot get from sample", _FILE_,
           __LINE__, info->ch);
+    gst_object_unref(appsrc);
     gst_sample_unref(sample);
     return GST_FLOW_ERROR;
   }
@@ -580,12 +617,13 @@ static GstFlowReturn new_sample_handler(GstElement *sink, gpointer userData) {
 
   // Push the buffer (takes ownership)
   GstFlowReturn push_ret =
-      gst_app_src_push_buffer(GST_APP_SRC(info->appsrc), out_buffer);
+      gst_app_src_push_buffer(GST_APP_SRC(appsrc), out_buffer);
   if (push_ret != GST_FLOW_OK) {
     __LOG(LOG_WARNING, "[RTSP][%s:%d] ch%d appsrc push failed: %d", _FILE_,
           __LINE__, info->ch, push_ret);
   }
 
+  gst_object_unref(appsrc);
   gst_sample_unref(sample);
 
   return GST_FLOW_OK;
@@ -705,17 +743,24 @@ void RtspServerBin::setFps(guint16 data) {
 
 void RtspServerBin::getCaps() {
   GstCaps *caps;
+  GstElement *appsrc;
 
-  if (rtspServerData.appsrc == NULL)
+  g_mutex_lock(&rtspServerData.lock);
+  appsrc = rtspServerData.appsrc
+               ? (GstElement *)gst_object_ref(rtspServerData.appsrc)
+               : NULL;
+  g_mutex_unlock(&rtspServerData.lock);
+  if (appsrc == NULL)
     return;
 
-  g_object_get(rtspServerData.appsrc, "caps", &caps, NULL);
+  g_object_get(appsrc, "caps", &caps, NULL);
   // g_object_get(info->appsrc, "caps", &caps, NULL);
   //__LOG(LOG_NOTICE, "[GST][%s:%d] ch%d get caps : %s", _FILE_, __LINE__, ch,
   //gst_caps_to_string(caps));
   g_print("rtsp ch%d get caps : %s\n", rtspServerData.ch,
           gst_caps_to_string(caps));
   gst_caps_unref(caps);
+  gst_object_unref(appsrc);
 }
 
 void RtspServerBin::setRotation(guint16 data) {
@@ -850,11 +895,13 @@ RtspServerBin::RtspServerBin() {
   rtspServerData.last_log_us = 0;
   rtspServerData.dual_bps = TRUE;
   rtspServerData.mem_flags_logged = FALSE;
+  g_mutex_init(&rtspServerData.lock);
 }
 
 RtspServerBin::~RtspServerBin() {
   __LOG(LOG_INFO, "[GST][%s:%d] %s[%d]", _FILE_, __LINE__, __FUNCTION__,
         rtspServerData.ch);
+  g_mutex_clear(&rtspServerData.lock);
 }
 
 gboolean RtspServerBin::addBinToPipe(GstElement *pipe) {
@@ -1422,14 +1469,29 @@ gboolean RtspServerBin::init(guint8 ch, gboolean crop_en) {
 
 #if 1
 void rtspServerSendEosToAllAppsrc() {
-  for (guint8 i = 0; i < g_rtsp_appsrc_count; i++) {
+  GstElement *targets[MAX_RTSP_APPSRC] = { NULL };
+  guint8 count;
+
+  /* lock 하에 ref 스냅샷을 떠서, unprepared의 unref와 경합해도 EOS 전송
+   * 동안 객체가 살아있도록 한다 */
+  g_mutex_lock(&g_rtsp_appsrc_lock);
+  count = g_rtsp_appsrc_count;
+  for (guint8 i = 0; i < count; i++) {
     if (g_rtsp_appsrc[i]) {
-      __LOG(LOG_INFO, "[RTSP][%s:%d] sending EOS to appsrc ch%d", _FILE_, __LINE__, i);
-      gst_app_src_end_of_stream(GST_APP_SRC(g_rtsp_appsrc[i]));
+      targets[i] = (GstElement *)gst_object_ref(g_rtsp_appsrc[i]);
       g_rtsp_appsrc[i] = NULL;
     }
   }
   g_rtsp_appsrc_count = 0;
+  g_mutex_unlock(&g_rtsp_appsrc_lock);
+
+  for (guint8 i = 0; i < count; i++) {
+    if (targets[i]) {
+      __LOG(LOG_INFO, "[RTSP][%s:%d] sending EOS to appsrc ch%d", _FILE_, __LINE__, i);
+      gst_app_src_end_of_stream(GST_APP_SRC(targets[i]));
+      gst_object_unref(targets[i]);
+    }
+  }
 }
 
 static GstRTSPFilterResult

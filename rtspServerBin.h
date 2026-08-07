@@ -36,6 +36,7 @@ typedef struct _RtspServerData
     gint64 last_log_us;
     gboolean dual_bps;
     gboolean mem_flags_logged;
+    GMutex lock;    /* appsrc/caps 공유 보호 (streaming·명령·RTSP 서버 스레드) */
 } RtspServerData;
 
 typedef struct _RtspServerElement
