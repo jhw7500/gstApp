@@ -897,6 +897,17 @@ void RtspServerBin::getRotation() {
   g_print("rtsp ch%d get rotation : %d\n", rtspServerData.ch, rotation);
 }
 
+void RtspServerBin::forceKeyframe() {
+  if (re.enc == NULL)
+    return;
+
+  GstEvent *event =
+      gst_video_event_new_upstream_force_key_unit(GST_CLOCK_TIME_NONE, TRUE, 0);
+  if (!gst_element_send_event(re.enc, event))
+    __LOG(LOG_ERR, "[GST][%s:%d] ch%d force keyframe send failed", _FILE_,
+          __LINE__, rtspServerData.ch);
+}
+
 void RtspServerBin::setGop(guint16 data) {
   gint gop;
 

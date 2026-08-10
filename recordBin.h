@@ -61,6 +61,7 @@ public :
     void setRotation(guint16 data);
     void getRotation();
     void setGop(guint16 data);
+    void forceKeyframe();
     void getGop();
     void getKeyframe();
     void setkeyframe(guint16 data);
