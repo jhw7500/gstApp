@@ -1099,8 +1099,8 @@ gboolean RtspServerBin::audioInit() {
   const gint q_max_buffers =
       clamp_int(cmdArg.rtsp_factory_queue_max_buffers, 1, 120);
   gchar *launch_str = g_strdup_printf(
-      "appsrc name=%s do-timestamp=1 is-live=1 format=3 ! queue "
-      "max-size-buffers=%d max-size-time=0 max-size-bytes=0 leaky=2 ! "
+      "appsrc name=%s do-timestamp=1 is-live=1 format=3 max-bytes=16384 "
+      "! queue max-size-buffers=%d max-size-time=0 max-size-bytes=0 leaky=2 ! "
       "mpegaudioparse ! rtpmpapay name=pay0 pt=97 config-interval=-1 )",
       rtspServerData.appSrcName, q_max_buffers);
   // gchar *launch_str = g_strdup_printf("appsrc name=%s do-timestamp=1
@@ -1476,8 +1476,8 @@ gboolean RtspServerBin::init(guint8 ch, gboolean crop_en) {
   const gint q_max_buffers =
       clamp_int(cmdArg.rtsp_factory_queue_max_buffers, 1, 120);
   gchar *launch_str = g_strdup_printf(
-      "( appsrc name=%s do-timestamp=1 is-live=1 format=3 ! queue "
-      "max-size-buffers=%d max-size-time=0 max-size-bytes=0 leaky=2 ! "
+      "( appsrc name=%s do-timestamp=1 is-live=1 format=3 max-bytes=65536 "
+      "! queue max-size-buffers=%d max-size-time=0 max-size-bytes=0 leaky=2 ! "
       "%s config-interval=-1 ! %s name=pay0 config-interval=-1 )",
       rtspServerData.appSrcName, q_max_buffers, parser_factory,
       payloader_factory);
