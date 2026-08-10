@@ -99,6 +99,8 @@
 #define DEFAULT_RTSP_APPSINK_MAX_BUFFERS 2
 #define DEFAULT_RTSP_FACTORY_QUEUE_MAX_BUFFERS 2
 #define DEFAULT_RTSP_BIN_QUEUE_MAX_TIME_MS 200
+/* video appsrc 백로그 상한 — IDR(실측 최대 ~140KB) + 여유. 16K~2M로 클램프 */
+#define DEFAULT_RTSP_APPSRC_MAX_BYTES (192 * 1024)
 
 // Platform device mapping defaults
 // Target mapping (confirmed via sysfs):

@@ -121,9 +121,22 @@ static void enough_data(GstElement *source, gpointer user_data) {
   }
 }
 
+/* 강제 IDR 요청 최소 간격 — 혼잡(TCP 백프레셔) 시 드롭 사이클마다 대형
+ * IDR이 반복 투입되어 혼잡을 악화시키는 되먹임을 차단한다 */
+#define RTSP_KICK_MIN_INTERVAL_US G_USEC_PER_SEC
+
 static void request_keyframe(RtspServerData *info) {
   if (info->kick_sink == NULL)
     return;
+  gint64 now_us = g_get_monotonic_time();
+  g_mutex_lock(&info->lock);
+  if (info->last_kick_us != 0 &&
+      (now_us - info->last_kick_us) < RTSP_KICK_MIN_INTERVAL_US) {
+    g_mutex_unlock(&info->lock);
+    return;
+  }
+  info->last_kick_us = now_us;
+  g_mutex_unlock(&info->lock);
   /* appsink에 upstream force-key-unit을 보내면 tee를 거슬러 vpuenc까지
    * 전달된다 — 접속 직후/드롭 재개 시 IDR 대기(GOP 위상)를 단축 */
   GstEvent *event =
@@ -978,6 +991,7 @@ RtspServerBin::RtspServerBin() {
   rtspServerData.wait_keyframe = FALSE;
   rtspServerData.last_enough_log_us = 0;
   rtspServerData.kick_sink = NULL;
+  rtspServerData.last_kick_us = 0;
   g_mutex_init(&rtspServerData.lock);
 }
 
@@ -1500,12 +1514,14 @@ gboolean RtspServerBin::init(guint8 ch, gboolean crop_en) {
   // rtspServerData.appSrcName);
   const gint q_max_buffers =
       clamp_int(cmdArg.rtsp_factory_queue_max_buffers, 1, 120);
+  const gint appsrc_max_bytes =
+      clamp_int(cmdArg.rtsp_appsrc_max_bytes, 16384, 2097152);
   gchar *launch_str = g_strdup_printf(
-      "( appsrc name=%s do-timestamp=1 is-live=1 format=3 max-bytes=65536 "
+      "( appsrc name=%s do-timestamp=1 is-live=1 format=3 max-bytes=%d "
       "! queue max-size-buffers=%d max-size-time=0 max-size-bytes=0 leaky=2 ! "
       "%s config-interval=-1 ! %s name=pay0 config-interval=-1 )",
-      rtspServerData.appSrcName, q_max_buffers, parser_factory,
-      payloader_factory);
+      rtspServerData.appSrcName, appsrc_max_bytes, q_max_buffers,
+      parser_factory, payloader_factory);
   /* 접속 시 강제 키프레임 요청 경로 (video 전용 — audio는 NULL 유지) */
   rtspServerData.kick_sink = re.sink;
   // gchar *launch_str = g_strdup_printf("( appsrc name=%s do-timestamp=1
