@@ -605,14 +605,17 @@ static GstFlowReturn new_sample_handler(GstElement *sink, gpointer userData) {
    * 재개는 키프레임부터 — PLAY 이전 구간에서 appsrc 내부 큐에 백로그가
    * 무제한으로 쌓여 재생 시작이 수 초 지연되는 것을 방지한다 */
   gboolean drop = FALSE;
+  gboolean want_key = FALSE;
   if (g_atomic_int_get(&info->appsrc_full)) {
     info->wait_keyframe = TRUE;
     drop = TRUE;
   } else if (info->wait_keyframe) {
     if (buffer && !GST_BUFFER_FLAG_IS_SET(buffer, GST_BUFFER_FLAG_DELTA_UNIT))
       info->wait_keyframe = FALSE;
-    else
+    else {
       drop = TRUE;
+      want_key = TRUE;
+    }
   }
   /* lock 밖 push 동안 쓸 스냅샷 — appsrc는 media_unprepared_cb가 언제든
    * 마지막 ref를 해제할 수 있으므로 ref로 수명을 고정한다 */
@@ -620,6 +623,11 @@ static GstFlowReturn new_sample_handler(GstElement *sink, gpointer userData) {
                            ? (GstElement *)gst_object_ref(info->appsrc)
                            : NULL;
   g_mutex_unlock(&info->lock);
+
+  /* 스로틀로 유실된 IDR 요청의 지연 재시도 — 키프레임 대기 중이면 매 프레임
+   * 재요청하되, request_keyframe 내부 스로틀이 실제 전송을 1회/초로 제한 */
+  if (want_key)
+    request_keyframe(info);
 
 #if 0
     GstFlowReturn ret;
