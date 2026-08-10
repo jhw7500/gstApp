@@ -1936,6 +1936,14 @@ gint ParserClass::cmd_parser(gchar *buffer, gint len, gpointer data) {
           return -1;
         }
 
+        /* videorate 가 없으면 인코더단이 소스 레이트 변경을 흡수하지 못한다.
+         * 소스와 인코더 capsfilter 를 어느 순서로 바꾸든 중간에 caps 불일치
+         * 구간이 생겨 v4l2src 까지 재협상이 전파되고 채널이 정지한다. */
+        if (!cmdArg.videorate_en) {
+          g_print("videorate disabled (use --evrate 1). use 'set fps cam %d' instead\n", key);
+          return -1;
+        }
+
         /* 1) Driver FSYNC change via v4l2 subdev ioctl */
         set_v4l2_subdev_fps(0, key);
         if (cmdArg.v4l_subdev_csi1 != cmdArg.v4l_subdev_csi0)

@@ -241,6 +241,12 @@ void VideoBin::setFps(guint16 fps) {
   gst_structure_get_int(s, "height", &height);
   gst_caps_unref(old_caps);
 
+  if (width <= 0 || height <= 0) {
+    __LOG(LOG_ERR, "[GST][%s:%d] csi%d invalid caps (%dx%d), fps unchanged",
+          _FILE_, __LINE__, videoData.csi, width, height);
+    return;
+  }
+
   GstCaps *new_caps = gst_caps_new_simple("video/x-raw",
       "width", G_TYPE_INT, width,
       "height", G_TYPE_INT, height,
@@ -257,8 +263,19 @@ void VideoBin::setFps(guint16 fps) {
     gst_caps_unref(new_caps);
     return;
   }
-  /* 스트리밍 스레드가 완전히 멈춘 뒤에 caps 를 교체해야 한다 */
-  gst_element_get_state(be.bin, NULL, NULL, 5 * GST_SECOND);
+  /* 스트리밍 스레드가 완전히 멈춘 뒤에 caps 를 교체해야 한다. 전환이
+   * 끝나지 않았는데 바꾸면 협상 실패로 채널이 정지하므로, 미완료면
+   * caps 를 건드리지 않고 원래 상태로 되돌린다. */
+  GstState cur_state = GST_STATE_VOID_PENDING;
+  if (gst_element_get_state(be.bin, &cur_state, NULL, 5 * GST_SECOND) !=
+          GST_STATE_CHANGE_SUCCESS ||
+      cur_state != GST_STATE_READY) {
+    __LOG(LOG_ERR, "[GST][%s:%d] csi%d READY not reached (state:%s), fps unchanged",
+          _FILE_, __LINE__, videoData.csi, gst_element_state_get_name(cur_state));
+    gst_caps_unref(new_caps);
+    gst_element_sync_state_with_parent(be.bin);
+    return;
+  }
 
   g_object_set(be.capsfilter, "caps", new_caps, NULL);
   gst_caps_unref(new_caps);
