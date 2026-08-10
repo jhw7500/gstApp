@@ -14,6 +14,7 @@
 #include <gst/app/gstappsink.h>
 #include <gst/app/gstappsrc.h>
 #include <gst/rtsp-server/rtsp-server.h>
+#include <gst/video/video.h>
 
 static GstPadProbeReturn
 drop_no_pts_probe_rtsp(GstPad *pad, GstPadProbeInfo *info, gpointer user_data)
@@ -120,9 +121,29 @@ static void enough_data(GstElement *source, gpointer user_data) {
   }
 }
 
+static void request_keyframe(RtspServerData *info) {
+  if (info->kick_sink == NULL)
+    return;
+  /* appsink에 upstream force-key-unit을 보내면 tee를 거슬러 vpuenc까지
+   * 전달된다 — 접속 직후/드롭 재개 시 IDR 대기(GOP 위상)를 단축 */
+  GstEvent *event =
+      gst_video_event_new_upstream_force_key_unit(GST_CLOCK_TIME_NONE, TRUE, 0);
+  if (!gst_element_send_event(info->kick_sink, event))
+    __LOG(LOG_INFO, "[RTSP][%s:%d] ch%d force-keyunit send failed", _FILE_,
+          __LINE__, info->ch);
+}
+
 static void need_data(GstElement *source, guint length, gpointer user_data) {
   RtspServerData *info = (RtspServerData *)user_data;
+  gboolean want_key;
+
   g_atomic_int_set(&info->appsrc_full, 0);
+  /* 드롭 구간 종료 — 키프레임 대기 중이면 즉시 IDR을 요청해 재개 지연 제거 */
+  g_mutex_lock(&info->lock);
+  want_key = info->wait_keyframe;
+  g_mutex_unlock(&info->lock);
+  if (want_key)
+    request_keyframe(info);
 }
 
 static gboolean cleanRtspSession(GstRTSPServer *server) {
@@ -438,6 +459,9 @@ static void media_configure(GstRTSPMediaFactory *factory, GstRTSPMedia *media,
     gst_object_unref(old_appsrc);
   if (fallback_caps)
     gst_caps_unref(fallback_caps);
+  /* 새 media 접속 — GOP 위상과 무관하게 즉시 IDR을 받아 prepare(SDP용
+   * SPS/PPS/IDR 대기)와 첫 화면 표시까지의 지연을 단축한다 */
+  request_keyframe(info);
   // queue_name = g_strdup_printf("%s", QUEUE_NAME, info->ch);
   //__LOG(LOG_NOTICE, "[GST][%s:%d] appsrc name : %s", _FILE_, __LINE__,
   //appsrc_name); queue = gst_bin_get_by_name_recurse_up(GST_BIN(element),
@@ -953,6 +977,7 @@ RtspServerBin::RtspServerBin() {
   rtspServerData.appsrc_full = 0;
   rtspServerData.wait_keyframe = FALSE;
   rtspServerData.last_enough_log_us = 0;
+  rtspServerData.kick_sink = NULL;
   g_mutex_init(&rtspServerData.lock);
 }
 
@@ -1481,6 +1506,8 @@ gboolean RtspServerBin::init(guint8 ch, gboolean crop_en) {
       "%s config-interval=-1 ! %s name=pay0 config-interval=-1 )",
       rtspServerData.appSrcName, q_max_buffers, parser_factory,
       payloader_factory);
+  /* 접속 시 강제 키프레임 요청 경로 (video 전용 — audio는 NULL 유지) */
+  rtspServerData.kick_sink = re.sink;
   // gchar *launch_str = g_strdup_printf("( appsrc name=%s do-timestamp=1
   // is-live=1 block=true ! queue max-size-buffers=5 leaky=2
   // min-threshold-time=500000000 ! h264parse ! rtph264pay name=pay0
