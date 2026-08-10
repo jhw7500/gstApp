@@ -41,6 +41,7 @@ typedef struct _RtspServerData
     gboolean wait_keyframe;  /* 드롭 후 키프레임까지 push 보류 (lock 보호) */
     gint64 last_enough_log_us;
     GstElement *kick_sink;   /* 강제 키프레임 이벤트 주입용 appsink (borrowed, init 시 1회 설정) */
+    gint64 last_kick_us;     /* 강제 키프레임 요청 스로틀 (lock 보호) */
 } RtspServerData;
 
 typedef struct _RtspServerElement

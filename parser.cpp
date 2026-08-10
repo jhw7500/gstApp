@@ -244,6 +244,7 @@ void ParserClass::init_arg(gchar *argv) {
   arg.rtsp_appsink_max_buffers = DEFAULT_RTSP_APPSINK_MAX_BUFFERS;
   arg.rtsp_factory_queue_max_buffers = DEFAULT_RTSP_FACTORY_QUEUE_MAX_BUFFERS;
   arg.rtsp_bin_queue_max_time_ms = DEFAULT_RTSP_BIN_QUEUE_MAX_TIME_MS;
+  arg.rtsp_appsrc_max_bytes = DEFAULT_RTSP_APPSRC_MAX_BYTES;
 
   arg.queue_main_src_time_ms = DEFAULT_QUEUE_MAIN_SRC_TIME_MS;
   arg.queue_enc_src_time_ms = DEFAULT_QUEUE_ENC_SRC_TIME_MS;
@@ -601,6 +602,8 @@ gint ParserClass::json_parser(const gchar *path, const gchar *header) {
                                    &arg.rtsp_factory_queue_max_buffers);
       json_object_get_int_optional(tune_obj, "rtsp_bin_queue_max_time_ms",
                                    &arg.rtsp_bin_queue_max_time_ms);
+      json_object_get_int_optional(tune_obj, "rtsp_appsrc_max_bytes",
+                                   &arg.rtsp_appsrc_max_bytes);
     }
 
     // [Queue Tuning] Common/Record/Capture pipeline settings
@@ -1199,10 +1202,11 @@ gint ParserClass::check_arg() {
 
     __LOG(LOG_NOTICE,
           "[%s][%s:%d] rtsp_tune factory_latency_ms:%d appsink_max_buffers:%d "
-          "factory_queue_max_buffers:%d bin_queue_max_time_ms:%d",
+          "factory_queue_max_buffers:%d bin_queue_max_time_ms:%d "
+          "appsrc_max_bytes:%d",
           LOG_KEY, _FILE_, __LINE__, arg.rtsp_factory_latency_ms,
           arg.rtsp_appsink_max_buffers, arg.rtsp_factory_queue_max_buffers,
-          arg.rtsp_bin_queue_max_time_ms);
+          arg.rtsp_bin_queue_max_time_ms, arg.rtsp_appsrc_max_bytes);
   }
   __LOG(LOG_NOTICE,
         "[%s][%s:%d] queue_tune main_src:%dms enc_src:%dms rec_sink:%dms cap_src:%dms",

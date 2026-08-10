@@ -204,6 +204,7 @@ typedef struct _CmdArg
     gint rtsp_appsink_max_buffers;
     gint rtsp_factory_queue_max_buffers;
     gint rtsp_bin_queue_max_time_ms;
+    gint rtsp_appsrc_max_bytes;
 
     gint v4l_subdev_csi0;
     gint v4l_subdev_csi1;
