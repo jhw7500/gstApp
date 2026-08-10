@@ -1966,24 +1966,57 @@ gint ParserClass::cmd_parser(gchar *buffer, gint len, gpointer data) {
           for (i = 0; i < MAX_CHANNEL; i++) {
             if (!cmdArg.cam[i].enable)
               continue;
+
+            /* gop 은 프레임 수라 fps 만 바꾸면 IDR 시간 간격이 그대로 늘어난다
+             * (120 프레임: 60fps 에서 2초, 20fps 에서 6초). 플레이어가 화면을
+             * 복구하려면 IDR 을 기다려야 하므로 시간 간격을 유지하도록
+             * fps 비율로 재조정한다. cmdArg.fps[] 갱신 전에 계산해야 한다. */
+            gint prev_fps = cmdArg.fps[STREAM_REC][i];
+            gint new_gop = cmdArg.cam[i].gop[STREAM_REC];
+            if (prev_fps > 0 && new_gop > 0) {
+              new_gop = (gint)(((gint64)new_gop * key + prev_fps / 2) / prev_fps);
+              if (new_gop < 1)
+                new_gop = 1;
+              if (new_gop > MAX_GOP_SIZE)
+                new_gop = MAX_GOP_SIZE;
+            }
+
             if (cmdArg.dual_enc) {
-              if (cmdArg.stream_en[STREAM_REC])
+              if (cmdArg.stream_en[STREAM_REC]) {
                 recordBin[i].setFps(key);
-              if (cmdArg.stream_en[STREAM_RTSP])
+                recordBin[i].setGop(new_gop);
+                recordBin[i].setBitrate(cmdArg.cam[i].bps[STREAM_REC]);
+              }
+              if (cmdArg.stream_en[STREAM_RTSP]) {
                 rtspServerBin[i].setFps(key);
+                rtspServerBin[i].setGop(new_gop);
+                rtspServerBin[i].setBitrate(cmdArg.cam[i].bps[STREAM_RTSP]);
+              }
             } else {
               if (encoderBin) {
                 encoderBin[i].setFps(key);
                 if (encoderBin[i].re.rate)
                   g_object_set(encoderBin[i].re.rate, "max-rate", (gint)key, NULL);
+                /* setGop/setBitrate 는 re.enc NULL 가드가 없다 */
+                if (encoderBin[i].re.enc) {
+                  encoderBin[i].setGop(new_gop);
+                  /* caps 변경 후 rate control 이 옛 framerate 기준으로 남아
+                   * 비트레이트가 폭주하는 것을 막기 위해 재적용한다 */
+                  encoderBin[i].setBitrate(cmdArg.cam[i].bps[STREAM_REC]);
+                }
+                /* 새 파라미터셋을 즉시 내보내 플레이어 복구를 앞당기고,
+                 * 채널 간 IDR 위상을 맞춰 split skew 도 줄인다 */
+                encoderBin[i].forceKeyframe();
               }
             }
+            cmdArg.cam[i].gop[STREAM_REC] = new_gop;
+            cmdArg.cam[i].gop[STREAM_RTSP] = new_gop;
             cmdArg.fps[STREAM_REC][i] = key;
             cmdArg.fps[STREAM_RTSP][i] = key;
           }
         }
 
-        __LOG(LOG_NOTICE, "[GST][%s:%d] set main fps=%d (cam + video + rate)", _FILE_, __LINE__, key);
+        __LOG(LOG_NOTICE, "[GST][%s:%d] set main fps=%d (cam + video + rate + gop/idr)", _FILE_, __LINE__, key);
       } else
         g_print("wrong cmd!\n");
     } else if (compareBuf(token, "rotate", 6)) {
