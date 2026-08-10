@@ -223,7 +223,7 @@ void VideoBin::getIoMode() {
 }
 
 void VideoBin::setFps(guint16 fps) {
-  if (be.capsfilter == NULL) {
+  if (be.capsfilter == NULL || be.bin == NULL) {
     __LOG(LOG_ERR, "[GST][%s:%d] csi%d capsfilter not initialized", _FILE_, __LINE__, videoData.csi);
     return;
   }
@@ -245,10 +245,31 @@ void VideoBin::setFps(guint16 fps) {
       "width", G_TYPE_INT, width,
       "height", G_TYPE_INT, height,
       "framerate", GST_TYPE_FRACTION, (gint)fps, 1, NULL);
+
+  /* v4l2src 는 스트리밍 중 caps 재협상을 지원하지 않는다. PLAYING 상태에서
+   * capsfilter 를 바꾸면 현재 고정된 caps 와 교집합이 없어 협상이 실패하고
+   * not-negotiated(-4) 로 파이프라인이 정지한다. 소스 bin 을 READY 로 내려
+   * 협상을 무효화한 뒤 caps 를 바꾸고 부모 상태로 복귀시킨다. */
+  if (gst_element_set_state(be.bin, GST_STATE_READY) ==
+      GST_STATE_CHANGE_FAILURE) {
+    __LOG(LOG_ERR, "[GST][%s:%d] csi%d set READY failed, fps unchanged", _FILE_,
+          __LINE__, videoData.csi);
+    gst_caps_unref(new_caps);
+    return;
+  }
+  /* 스트리밍 스레드가 완전히 멈춘 뒤에 caps 를 교체해야 한다 */
+  gst_element_get_state(be.bin, NULL, NULL, 5 * GST_SECOND);
+
   g_object_set(be.capsfilter, "caps", new_caps, NULL);
   gst_caps_unref(new_caps);
 
-  __LOG(LOG_NOTICE, "[GST][%s:%d] csi%d set capsfilter fps=%d (%dx%d)",
+  if (!gst_element_sync_state_with_parent(be.bin)) {
+    __LOG(LOG_ERR, "[GST][%s:%d] csi%d resume to parent state failed", _FILE_,
+          __LINE__, videoData.csi);
+    return;
+  }
+
+  __LOG(LOG_NOTICE, "[GST][%s:%d] csi%d set capsfilter fps=%d (%dx%d) via READY cycle",
         _FILE_, __LINE__, videoData.csi, fps, width, height);
 }
 

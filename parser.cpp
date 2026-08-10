@@ -1950,7 +1950,10 @@ gint ParserClass::cmd_parser(gchar *buffer, gint len, gpointer data) {
             videoBin[i].setFps(key);
         }
 
-        /* 3) Update encoder videorate max-rate (only when videorate is enabled) */
+        /* 3) Update encoder framerate (only when videorate is enabled).
+         * 인코더 capsfilter 가 videorate 의 출력 레이트를 정하므로, 여기를
+         * 갱신하지 않으면 소스만 20fps 로 내려도 videorate 가 기존 60fps 로
+         * 프레임을 복제한다. videorate 하류라 재협상은 안전하다. */
         if (cmdArg.videorate_en) {
           for (i = 0; i < MAX_CHANNEL; i++) {
             if (!cmdArg.cam[i].enable)
@@ -1961,9 +1964,14 @@ gint ParserClass::cmd_parser(gchar *buffer, gint len, gpointer data) {
               if (cmdArg.stream_en[STREAM_RTSP])
                 rtspServerBin[i].setFps(key);
             } else {
-              if (encoderBin && encoderBin[i].re.rate)
-                g_object_set(encoderBin[i].re.rate, "max-rate", (gint)key, NULL);
+              if (encoderBin) {
+                encoderBin[i].setFps(key);
+                if (encoderBin[i].re.rate)
+                  g_object_set(encoderBin[i].re.rate, "max-rate", (gint)key, NULL);
+              }
             }
+            cmdArg.fps[STREAM_REC][i] = key;
+            cmdArg.fps[STREAM_RTSP][i] = key;
           }
         }
 
