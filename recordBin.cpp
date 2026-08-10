@@ -13,6 +13,7 @@
 #include "recordBin.h"
 #include <gst/app/gstappsrc.h>
 #include <gst/app/gstappsink.h>
+#include <gst/video/video.h>
 
 #if 0
 static void eos_callback(GstAppSink *appsink, gpointer user_data) 
@@ -271,6 +272,16 @@ void RecordBin::getRotation()
     g_object_get(re.convert, "rotation", &rotation, NULL);
     //__LOG(LOG_NOTICE, "[GST][%s:%d] ch%d get rotation : %d", _FILE_, __LINE__, ch, rotation);
     g_print("rec ch%d get rotation : %d\n", ch, rotation);
+}
+
+void RecordBin::forceKeyframe()
+{
+    if (re.enc == NULL)
+        return;
+
+    GstEvent *event = gst_video_event_new_upstream_force_key_unit(GST_CLOCK_TIME_NONE, TRUE, 0);
+    if (!gst_element_send_event(re.enc, event))
+        __LOG(LOG_ERR, "[GST][%s:%d] ch%d force keyframe send failed", _FILE_, __LINE__, ch);
 }
 
 void RecordBin::setGop(guint16 data)

@@ -166,6 +166,21 @@ static void enc_profile_sanity(gint *slot, gint lo, gint hi, gint def,
   enc_knob_sanity(slot, lo, hi, def, "profile", stream, ch);
 }
 
+/* gop 은 프레임 수라 fps 만 바꾸면 IDR 시간 간격이 따라 변한다(120 프레임:
+ * 60fps 에서 2초, 20fps 에서 6초). 간격을 유지하도록 fps 비율로 환산한다.
+ * 환산 근거가 없으면(값이 0 이하) 원값을 그대로 둔다. */
+static gint enc_gop_rescale(gint gop, gint prev_fps, gint new_fps) {
+  if (gop <= 0 || prev_fps <= 0 || new_fps <= 0)
+    return gop;
+
+  gint scaled = (gint)(((gint64)gop * new_fps + prev_fps / 2) / prev_fps);
+  if (scaled < 1)
+    scaled = 1;
+  if (scaled > MAX_GOP_SIZE)
+    scaled = MAX_GOP_SIZE;
+  return scaled;
+}
+
 /* gop 0 means "one GOP per second": resolve it against the stream's own fps so
  * the keyframe interval follows fps. 0 must not reach the encoder — see the
  * DEFAULT_GOP_SIZE comment in parser.h. */
@@ -1967,39 +1982,38 @@ gint ParserClass::cmd_parser(gchar *buffer, gint len, gpointer data) {
             if (!cmdArg.cam[i].enable)
               continue;
 
-            /* gop 은 프레임 수라 fps 만 바꾸면 IDR 시간 간격이 그대로 늘어난다
-             * (120 프레임: 60fps 에서 2초, 20fps 에서 6초). 플레이어가 화면을
-             * 복구하려면 IDR 을 기다려야 하므로 시간 간격을 유지하도록
-             * fps 비율로 재조정한다. cmdArg.fps[] 갱신 전에 계산해야 한다. */
-            gint prev_fps = cmdArg.fps[STREAM_REC][i];
-            gint new_gop = cmdArg.cam[i].gop[STREAM_REC];
-            if (prev_fps > 0 && new_gop > 0) {
-              new_gop = (gint)(((gint64)new_gop * key + prev_fps / 2) / prev_fps);
-              if (new_gop < 1)
-                new_gop = 1;
-              if (new_gop > MAX_GOP_SIZE)
-                new_gop = MAX_GOP_SIZE;
-            }
+            /* IDR 시간 간격을 유지하도록 gop 을 환산한다. dual_enc 에서는
+             * rec/rtsp 가 독립 인코더라 각자의 gop·fps 로 계산해야 한다.
+             * cmdArg.fps[] 갱신 전에 수행해야 이전 fps 를 읽을 수 있다. */
+            gint gop_rec = enc_gop_rescale(cmdArg.cam[i].gop[STREAM_REC],
+                                           cmdArg.fps[STREAM_REC][i], key);
+            gint gop_rtsp = enc_gop_rescale(cmdArg.cam[i].gop[STREAM_RTSP],
+                                            cmdArg.fps[STREAM_RTSP][i], key);
 
             if (cmdArg.dual_enc) {
               if (cmdArg.stream_en[STREAM_REC]) {
                 recordBin[i].setFps(key);
-                recordBin[i].setGop(new_gop);
+                recordBin[i].setGop(gop_rec);
                 recordBin[i].setBitrate(cmdArg.cam[i].bps[STREAM_REC]);
+                recordBin[i].forceKeyframe();
               }
               if (cmdArg.stream_en[STREAM_RTSP]) {
                 rtspServerBin[i].setFps(key);
-                rtspServerBin[i].setGop(new_gop);
+                rtspServerBin[i].setGop(gop_rtsp);
                 rtspServerBin[i].setBitrate(cmdArg.cam[i].bps[STREAM_RTSP]);
+                rtspServerBin[i].forceKeyframe();
               }
+              cmdArg.cam[i].gop[STREAM_REC] = gop_rec;
+              cmdArg.cam[i].gop[STREAM_RTSP] = gop_rtsp;
             } else {
               if (encoderBin) {
                 encoderBin[i].setFps(key);
                 if (encoderBin[i].re.rate)
                   g_object_set(encoderBin[i].re.rate, "max-rate", (gint)key, NULL);
-                /* setGop/setBitrate 는 re.enc NULL 가드가 없다 */
+                /* EncoderBin::setGop/setBitrate 만 re.enc NULL 가드가 없다.
+                 * record/rtsp 쪽은 각 메서드가 자체 검사한다. */
                 if (encoderBin[i].re.enc) {
-                  encoderBin[i].setGop(new_gop);
+                  encoderBin[i].setGop(gop_rec);
                   /* caps 변경 후 rate control 이 옛 framerate 기준으로 남아
                    * 비트레이트가 폭주하는 것을 막기 위해 재적용한다 */
                   encoderBin[i].setBitrate(cmdArg.cam[i].bps[STREAM_REC]);
@@ -2008,9 +2022,10 @@ gint ParserClass::cmd_parser(gchar *buffer, gint len, gpointer data) {
                  * 채널 간 IDR 위상을 맞춰 split skew 도 줄인다 */
                 encoderBin[i].forceKeyframe();
               }
+              /* 단일 인코더는 rec 값이 rtsp 슬롯도 대표한다(enc_knob_mirror) */
+              cmdArg.cam[i].gop[STREAM_REC] = gop_rec;
+              cmdArg.cam[i].gop[STREAM_RTSP] = gop_rec;
             }
-            cmdArg.cam[i].gop[STREAM_REC] = new_gop;
-            cmdArg.cam[i].gop[STREAM_RTSP] = new_gop;
             cmdArg.fps[STREAM_REC][i] = key;
             cmdArg.fps[STREAM_RTSP][i] = key;
           }
