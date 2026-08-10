@@ -14,6 +14,7 @@
 #include <gst/app/gstappsink.h>
 #include <gst/app/gstappsrc.h>
 #include <gst/rtsp-server/rtsp-server.h>
+#include <gst/video/video.h>
 
 static GstPadProbeReturn
 drop_no_pts_probe_rtsp(GstPad *pad, GstPadProbeInfo *info, gpointer user_data)
@@ -37,6 +38,9 @@ guint removeSesson_id = 0;
 #define MAX_RTSP_APPSRC (MAX_CHANNEL + 1)
 static GstElement *g_rtsp_appsrc[MAX_RTSP_APPSRC] = { NULL };
 static guint8 g_rtsp_appsrc_count = 0;
+/* 배열·count 보호 — media_configure/unprepared(RTSP 스레드)와 종료 경로 공유.
+ * 정적 할당 GMutex는 별도 init 불필요 */
+static GMutex g_rtsp_appsrc_lock;
 
 static gint clamp_int(gint value, gint min_value, gint max_value) {
   if (value < min_value)
@@ -104,8 +108,42 @@ static GstPadProbeReturn rtsp_pay_src_probe(GstPad *pad,
 
 static void enough_data(GstElement *source, gpointer user_data) {
   RtspServerData *info = (RtspServerData *)user_data;
-  __LOG(LOG_ERR, "[RTSP][%s:%d] ch %d Enough Data !!!", _FILE_, __LINE__,
-        info->ch);
+
+  g_atomic_int_set(&info->appsrc_full, 1);
+  /* push 스레드에서만 emit되므로 스로틀 타임스탬프는 락 불필요 */
+  gint64 now_us = g_get_monotonic_time();
+  if (info->last_enough_log_us == 0 ||
+      (now_us - info->last_enough_log_us) >= 1000000) {
+    info->last_enough_log_us = now_us;
+    __LOG(LOG_WARNING,
+          "[RTSP][%s:%d] ch %d appsrc full — dropping until need-data",
+          _FILE_, __LINE__, info->ch);
+  }
+}
+
+static void request_keyframe(RtspServerData *info) {
+  if (info->kick_sink == NULL)
+    return;
+  /* appsink에 upstream force-key-unit을 보내면 tee를 거슬러 vpuenc까지
+   * 전달된다 — 접속 직후/드롭 재개 시 IDR 대기(GOP 위상)를 단축 */
+  GstEvent *event =
+      gst_video_event_new_upstream_force_key_unit(GST_CLOCK_TIME_NONE, TRUE, 0);
+  if (!gst_element_send_event(info->kick_sink, event))
+    __LOG(LOG_INFO, "[RTSP][%s:%d] ch%d force-keyunit send failed", _FILE_,
+          __LINE__, info->ch);
+}
+
+static void need_data(GstElement *source, guint length, gpointer user_data) {
+  RtspServerData *info = (RtspServerData *)user_data;
+  gboolean want_key;
+
+  g_atomic_int_set(&info->appsrc_full, 0);
+  /* 드롭 구간 종료 — 키프레임 대기 중이면 즉시 IDR을 요청해 재개 지연 제거 */
+  g_mutex_lock(&info->lock);
+  want_key = info->wait_keyframe;
+  g_mutex_unlock(&info->lock);
+  if (want_key)
+    request_keyframe(info);
 }
 
 static gboolean cleanRtspSession(GstRTSPServer *server) {
@@ -285,15 +323,38 @@ static gboolean remove_sessions (GstRTSPServer * server)
 
 static void media_unprepared_cb(GstRTSPMedia *media, gpointer user_data) {
   RtspServerData *info = (RtspServerData *)user_data;
+  GstElement *media_bin;
+  GstElement *media_appsrc = NULL;
+  GstElement *appsrc = NULL;
+
   __LOG(LOG_NOTICE, "[RTSP][%s:%d] ch%d media unprepared — clearing appsrc",
         _FILE_, __LINE__, info->ch);
-  /* 전역 추적 배열에서 제거 */
-  if (info->ch < MAX_RTSP_APPSRC)
+  /* 이 media 소유의 appsrc만 정리 — 같은 채널의 새 media가 이미 게시한
+   * 교체본을 옛 media의 unprepared가 지우는 것을 방지(세대 매칭) */
+  media_bin = gst_rtsp_media_get_element(media);
+  if (media_bin) {
+    media_appsrc =
+        gst_bin_get_by_name_recurse_up(GST_BIN(media_bin), info->appSrcName);
+    gst_object_unref(media_bin);
+  }
+  /* 전역 추적 배열에서 제거 — ref 해제보다 먼저 수행해, lock 하에 배열
+   * 항목을 본 쪽(SendEos)이 아직 살아있는 객체를 ref할 수 있게 한다 */
+  g_mutex_lock(&g_rtsp_appsrc_lock);
+  if (info->ch < MAX_RTSP_APPSRC && g_rtsp_appsrc[info->ch] == media_appsrc)
     g_rtsp_appsrc[info->ch] = NULL;
-  if (info->appsrc) {
-    gst_object_unref(info->appsrc);
+  g_mutex_unlock(&g_rtsp_appsrc_lock);
+  /* 스트리밍 스레드가 스냅샷 ref를 쥐고 있을 수 있으므로 lock 안에서는
+   * 포인터만 분리하고 unref는 lock 밖에서 수행한다 */
+  g_mutex_lock(&info->lock);
+  if (info->appsrc == media_appsrc) {
+    appsrc = info->appsrc;
     info->appsrc = NULL;
   }
+  g_mutex_unlock(&info->lock);
+  if (appsrc)
+    gst_object_unref(appsrc);
+  if (media_appsrc)
+    gst_object_unref(media_appsrc);
 }
 
 /* signal callback when the media is prepared for streaming. We can get the
@@ -334,6 +395,9 @@ static void media_configure(GstRTSPMediaFactory *factory, GstRTSPMedia *media,
   // GstElement *src = (GstElement*)user_data;
   RtspServerData *info = (RtspServerData *)user_data;
   GstElement *element;
+  GstElement *appsrc = NULL;
+  GstElement *old_appsrc = NULL;
+  GstCaps *fallback_caps = NULL;
   // GstElement *queue;
   // gchar *queue_name;
   // static GMutex mutex;
@@ -346,30 +410,58 @@ static void media_configure(GstRTSPMediaFactory *factory, GstRTSPMedia *media,
   // name = gst_object_get_name(GST_OBJECT(element));
   __LOG(LOG_NOTICE, "[GST][%s:%d] appsrc name : %s", _FILE_, __LINE__,
         info->appSrcName);
-  info->appsrc =
-      gst_bin_get_by_name_recurse_up(GST_BIN(element), info->appSrcName);
-  if (info->appsrc == NULL) {
+  appsrc = gst_bin_get_by_name_recurse_up(GST_BIN(element), info->appSrcName);
+  if (appsrc == NULL) {
     __LOG(LOG_ERR, "[GST][%s:%d] appsrc is null", _FILE_, __LINE__);
+    /* 조회 실패 시에도 이전 appsrc를 비워 stale push를 막는다.
+     * 전역 배열의 같은 항목도 ref 해제 전에 정리(댕글링 방지) */
+    g_mutex_lock(&info->lock);
+    old_appsrc = info->appsrc;
+    info->appsrc = NULL;
+    g_mutex_unlock(&info->lock);
+    g_mutex_lock(&g_rtsp_appsrc_lock);
+    if (info->ch < MAX_RTSP_APPSRC && g_rtsp_appsrc[info->ch] == old_appsrc)
+      g_rtsp_appsrc[info->ch] = NULL;
+    g_mutex_unlock(&g_rtsp_appsrc_lock);
+    if (old_appsrc)
+      gst_object_unref(old_appsrc);
     goto media_configure_out;
   }
-  /* 전역 추적 배열에 등록 (종료 시 EOS 전송용) */
+  {
+    const gboolean use_h265 = g_strcmp0(cmdArg.enc, ENC_H265) == 0;
+    fallback_caps = gst_caps_from_string(
+        use_h265 ? "video/x-h265,stream-format=byte-stream,alignment=au"
+                 : "video/x-h264,stream-format=byte-stream,alignment=au");
+  }
+  /* appsrc 게시와 caps 적용을 한 임계구역에서 수행 — 스트리밍 스레드의
+   * caps 갱신(g_object_set)과 전순서를 보장해 stale caps 덮어쓰기를 막는다 */
+  g_mutex_lock(&info->lock);
+  old_appsrc = info->appsrc;
+  info->appsrc = appsrc;
+  /* 새 appsrc는 빈 큐로 시작하므로 플로우 컨트롤 상태 리셋 */
+  g_atomic_int_set(&info->appsrc_full, 0);
+  info->wait_keyframe = FALSE;
+  if (info->caps)
+    g_object_set(appsrc, "caps", info->caps, NULL);
+  else if (fallback_caps)
+    g_object_set(appsrc, "caps", fallback_caps, NULL);
+  g_mutex_unlock(&info->lock);
+  /* 전역 추적 배열 갱신을 old ref 해제보다 먼저 수행 — 배열이 해제된
+   * 객체를 가리키는 창을 없앤다 (SendEos의 lock 하 ref 안전 보장) */
+  g_mutex_lock(&g_rtsp_appsrc_lock);
   if (info->ch < MAX_RTSP_APPSRC) {
-    g_rtsp_appsrc[info->ch] = info->appsrc;
+    g_rtsp_appsrc[info->ch] = appsrc;
     if (info->ch >= g_rtsp_appsrc_count)
       g_rtsp_appsrc_count = info->ch + 1;
   }
-  if (info->caps)
-    g_object_set(info->appsrc, "caps", info->caps, NULL);
-  else {
-    const gboolean use_h265 = g_strcmp0(cmdArg.enc, ENC_H265) == 0;
-    GstCaps *fallback_caps = gst_caps_from_string(
-        use_h265 ? "video/x-h265,stream-format=byte-stream,alignment=au"
-                 : "video/x-h264,stream-format=byte-stream,alignment=au");
-    if (fallback_caps) {
-      g_object_set(info->appsrc, "caps", fallback_caps, NULL);
-      gst_caps_unref(fallback_caps);
-    }
-  }
+  g_mutex_unlock(&g_rtsp_appsrc_lock);
+  if (old_appsrc)
+    gst_object_unref(old_appsrc);
+  if (fallback_caps)
+    gst_caps_unref(fallback_caps);
+  /* 새 media 접속 — GOP 위상과 무관하게 즉시 IDR을 받아 prepare(SDP용
+   * SPS/PPS/IDR 대기)와 첫 화면 표시까지의 지연을 단축한다 */
+  request_keyframe(info);
   // queue_name = g_strdup_printf("%s", QUEUE_NAME, info->ch);
   //__LOG(LOG_NOTICE, "[GST][%s:%d] appsrc name : %s", _FILE_, __LINE__,
   //appsrc_name); queue = gst_bin_get_by_name_recurse_up(GST_BIN(element),
@@ -412,9 +504,10 @@ media_configure_out:
 
   g_signal_connect(media, "prepared", (GCallback)media_prepared_cb, factory);
   g_signal_connect(media, "unprepared", (GCallback)media_unprepared_cb, info);
-  if (info->appsrc)
-    g_signal_connect(info->appsrc, "enough-data", (GCallback)enough_data,
-                     info);
+  if (appsrc) {
+    g_signal_connect(appsrc, "enough-data", (GCallback)enough_data, info);
+    g_signal_connect(appsrc, "need-data", (GCallback)need_data, info);
+  }
 
   // g_object_set(element, "rtcp-min-interval", 10.0, NULL);
   // g_object_set(element, "rtcp-max-interval", 60.0, NULL);
@@ -481,6 +574,7 @@ static GstFlowReturn new_sample_handler(GstElement *sink, gpointer userData) {
   buffer = gst_sample_get_buffer(sample);
   // gst_sample_unref(sample);
 
+  g_mutex_lock(&info->lock);
   sample_caps = gst_sample_get_caps(sample);
   if (sample_caps) {
     if (!info->caps || !gst_caps_is_equal(info->caps, sample_caps)) {
@@ -490,6 +584,29 @@ static GstFlowReturn new_sample_handler(GstElement *sink, gpointer userData) {
       caps_changed = TRUE;
     }
   }
+  /* appsrc caps 쓰기는 media_configure()와 같은 lock 안에서 수행해
+   * 전순서를 보장한다 (stale caps 덮어쓰기 방지) */
+  if (caps_changed && info->caps && info->appsrc)
+    g_object_set(info->appsrc, "caps", info->caps, NULL);
+  /* appsrc 큐가 가득 차면(enough-data) 비워질 때까지(need-data) 드롭하고
+   * 재개는 키프레임부터 — PLAY 이전 구간에서 appsrc 내부 큐에 백로그가
+   * 무제한으로 쌓여 재생 시작이 수 초 지연되는 것을 방지한다 */
+  gboolean drop = FALSE;
+  if (g_atomic_int_get(&info->appsrc_full)) {
+    info->wait_keyframe = TRUE;
+    drop = TRUE;
+  } else if (info->wait_keyframe) {
+    if (buffer && !GST_BUFFER_FLAG_IS_SET(buffer, GST_BUFFER_FLAG_DELTA_UNIT))
+      info->wait_keyframe = FALSE;
+    else
+      drop = TRUE;
+  }
+  /* lock 밖 push 동안 쓸 스냅샷 — appsrc는 media_unprepared_cb가 언제든
+   * 마지막 ref를 해제할 수 있으므로 ref로 수명을 고정한다 */
+  GstElement *appsrc = (!drop && info->appsrc)
+                           ? (GstElement *)gst_object_ref(info->appsrc)
+                           : NULL;
+  g_mutex_unlock(&info->lock);
 
 #if 0
     GstFlowReturn ret;
@@ -501,20 +618,19 @@ static GstFlowReturn new_sample_handler(GstElement *sink, gpointer userData) {
 #endif
 
 #if 1
-  if (info->appsrc == NULL || is_interrupted) {
+  if (appsrc == NULL || is_interrupted) {
     // if(info->ch == 0) g_print("ch%d appsrc null return!\n", info->ch);
+    if (appsrc)
+      gst_object_unref(appsrc);
     gst_sample_unref(sample);
     return GST_FLOW_OK;
   }
 #endif
 
-  /* appsrc caps는 media_configure()에서 항상 설정되므로 변경 시에만 갱신 */
-  if (caps_changed && info->caps)
-    g_object_set(info->appsrc, "caps", info->caps, NULL);
-
   if (!buffer) {
     __LOG(LOG_CRIT, "[RTSP][%s:%d] ch%d buffer cannot get from sample", _FILE_,
           __LINE__, info->ch);
+    gst_object_unref(appsrc);
     gst_sample_unref(sample);
     return GST_FLOW_ERROR;
   }
@@ -580,12 +696,13 @@ static GstFlowReturn new_sample_handler(GstElement *sink, gpointer userData) {
 
   // Push the buffer (takes ownership)
   GstFlowReturn push_ret =
-      gst_app_src_push_buffer(GST_APP_SRC(info->appsrc), out_buffer);
+      gst_app_src_push_buffer(GST_APP_SRC(appsrc), out_buffer);
   if (push_ret != GST_FLOW_OK) {
     __LOG(LOG_WARNING, "[RTSP][%s:%d] ch%d appsrc push failed: %d", _FILE_,
           __LINE__, info->ch, push_ret);
   }
 
+  gst_object_unref(appsrc);
   gst_sample_unref(sample);
 
   return GST_FLOW_OK;
@@ -705,17 +822,24 @@ void RtspServerBin::setFps(guint16 data) {
 
 void RtspServerBin::getCaps() {
   GstCaps *caps;
+  GstElement *appsrc;
 
-  if (rtspServerData.appsrc == NULL)
+  g_mutex_lock(&rtspServerData.lock);
+  appsrc = rtspServerData.appsrc
+               ? (GstElement *)gst_object_ref(rtspServerData.appsrc)
+               : NULL;
+  g_mutex_unlock(&rtspServerData.lock);
+  if (appsrc == NULL)
     return;
 
-  g_object_get(rtspServerData.appsrc, "caps", &caps, NULL);
+  g_object_get(appsrc, "caps", &caps, NULL);
   // g_object_get(info->appsrc, "caps", &caps, NULL);
   //__LOG(LOG_NOTICE, "[GST][%s:%d] ch%d get caps : %s", _FILE_, __LINE__, ch,
   //gst_caps_to_string(caps));
   g_print("rtsp ch%d get caps : %s\n", rtspServerData.ch,
           gst_caps_to_string(caps));
   gst_caps_unref(caps);
+  gst_object_unref(appsrc);
 }
 
 void RtspServerBin::setRotation(guint16 data) {
@@ -850,11 +974,17 @@ RtspServerBin::RtspServerBin() {
   rtspServerData.last_log_us = 0;
   rtspServerData.dual_bps = TRUE;
   rtspServerData.mem_flags_logged = FALSE;
+  rtspServerData.appsrc_full = 0;
+  rtspServerData.wait_keyframe = FALSE;
+  rtspServerData.last_enough_log_us = 0;
+  rtspServerData.kick_sink = NULL;
+  g_mutex_init(&rtspServerData.lock);
 }
 
 RtspServerBin::~RtspServerBin() {
   __LOG(LOG_INFO, "[GST][%s:%d] %s[%d]", _FILE_, __LINE__, __FUNCTION__,
         rtspServerData.ch);
+  g_mutex_clear(&rtspServerData.lock);
 }
 
 gboolean RtspServerBin::addBinToPipe(GstElement *pipe) {
@@ -994,8 +1124,8 @@ gboolean RtspServerBin::audioInit() {
   const gint q_max_buffers =
       clamp_int(cmdArg.rtsp_factory_queue_max_buffers, 1, 120);
   gchar *launch_str = g_strdup_printf(
-      "appsrc name=%s do-timestamp=1 is-live=1 format=3 ! queue "
-      "max-size-buffers=%d max-size-time=0 max-size-bytes=0 leaky=2 ! "
+      "appsrc name=%s do-timestamp=1 is-live=1 format=3 max-bytes=16384 "
+      "! queue max-size-buffers=%d max-size-time=0 max-size-bytes=0 leaky=2 ! "
       "mpegaudioparse ! rtpmpapay name=pay0 pt=97 config-interval=-1 )",
       rtspServerData.appSrcName, q_max_buffers);
   // gchar *launch_str = g_strdup_printf("appsrc name=%s do-timestamp=1
@@ -1371,11 +1501,13 @@ gboolean RtspServerBin::init(guint8 ch, gboolean crop_en) {
   const gint q_max_buffers =
       clamp_int(cmdArg.rtsp_factory_queue_max_buffers, 1, 120);
   gchar *launch_str = g_strdup_printf(
-      "( appsrc name=%s do-timestamp=1 is-live=1 format=3 ! queue "
-      "max-size-buffers=%d max-size-time=0 max-size-bytes=0 leaky=2 ! "
+      "( appsrc name=%s do-timestamp=1 is-live=1 format=3 max-bytes=65536 "
+      "! queue max-size-buffers=%d max-size-time=0 max-size-bytes=0 leaky=2 ! "
       "%s config-interval=-1 ! %s name=pay0 config-interval=-1 )",
       rtspServerData.appSrcName, q_max_buffers, parser_factory,
       payloader_factory);
+  /* 접속 시 강제 키프레임 요청 경로 (video 전용 — audio는 NULL 유지) */
+  rtspServerData.kick_sink = re.sink;
   // gchar *launch_str = g_strdup_printf("( appsrc name=%s do-timestamp=1
   // is-live=1 block=true ! queue max-size-buffers=5 leaky=2
   // min-threshold-time=500000000 ! h264parse ! rtph264pay name=pay0
@@ -1422,14 +1554,29 @@ gboolean RtspServerBin::init(guint8 ch, gboolean crop_en) {
 
 #if 1
 void rtspServerSendEosToAllAppsrc() {
-  for (guint8 i = 0; i < g_rtsp_appsrc_count; i++) {
+  GstElement *targets[MAX_RTSP_APPSRC] = { NULL };
+  guint8 count;
+
+  /* lock 하에 ref 스냅샷을 떠서, unprepared의 unref와 경합해도 EOS 전송
+   * 동안 객체가 살아있도록 한다 */
+  g_mutex_lock(&g_rtsp_appsrc_lock);
+  count = g_rtsp_appsrc_count;
+  for (guint8 i = 0; i < count; i++) {
     if (g_rtsp_appsrc[i]) {
-      __LOG(LOG_INFO, "[RTSP][%s:%d] sending EOS to appsrc ch%d", _FILE_, __LINE__, i);
-      gst_app_src_end_of_stream(GST_APP_SRC(g_rtsp_appsrc[i]));
+      targets[i] = (GstElement *)gst_object_ref(g_rtsp_appsrc[i]);
       g_rtsp_appsrc[i] = NULL;
     }
   }
   g_rtsp_appsrc_count = 0;
+  g_mutex_unlock(&g_rtsp_appsrc_lock);
+
+  for (guint8 i = 0; i < count; i++) {
+    if (targets[i]) {
+      __LOG(LOG_INFO, "[RTSP][%s:%d] sending EOS to appsrc ch%d", _FILE_, __LINE__, i);
+      gst_app_src_end_of_stream(GST_APP_SRC(targets[i]));
+      gst_object_unref(targets[i]);
+    }
+  }
 }
 
 static GstRTSPFilterResult
