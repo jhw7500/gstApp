@@ -78,6 +78,11 @@ void EncoderBin::setFps(guint16 data)
     GstCaps *caps;
     gchar *caps_str;
 
+    if (re.capsfilter == NULL) {
+        __LOG(LOG_ERR, "[GST][%s:%d] ch%d capsfilter not initialized", _FILE_, __LINE__, encData.ch);
+        return;
+    }
+
 #if 0
     g_object_get(re.rate, "max-rate", &fps, NULL);
     __LOG(LOG_NOTICE, "[GST][%s:%d] ch%d get max-rate : %d", _FILE_, __LINE__, ch, fps);
