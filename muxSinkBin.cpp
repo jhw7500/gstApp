@@ -589,6 +589,20 @@ gchararray format_location(GstElement *sink, guint arg0, gpointer data) {
 
   // 시작 시간 기록 (chk_cam_operate.sh용 - 대표 채널에서만 수행)
   if (info->ch == marker_channel) {
+    // 파일명에 쓰인 세션(분)을 별도로 남긴다. 벽시계 분과 어긋날 수 있어
+    // (경계 직전 호출 시 naming 이 다음 분으로 올림) 검사 측이 이 값으로
+    // 대조해야 한다. 트리거인 start_video_time_chk 보다 먼저 기록한다.
+    // 부분 기록이 읽히지 않도록 임시 파일에 쓴 뒤 rename 으로 원자적 게시한다.
+    // 실패 시 임시 파일만 지워, 검사 측이 기존 방식으로 폴백하게 둔다.
+    const char *sess_tmp = "/tmp/start_video_session_chk.tmp";
+    int sfd = open(sess_tmp, O_WRONLY | O_CREAT | O_TRUNC, 0644);
+    if (sfd >= 0) {
+      size_t sess_len = strlen(local_ts_str);
+      gboolean sess_ok = (write(sfd, local_ts_str, sess_len) == (ssize_t)sess_len);
+      close(sfd);
+      if (!sess_ok || rename(sess_tmp, "/tmp/start_video_session_chk") != 0)
+        unlink(sess_tmp);
+    }
     // [I/O 안정성] O_TRUNC 없이 열고 락 획득 후에만 truncate 수행
     int fd = open("/tmp/start_video_time_chk", O_WRONLY | O_CREAT, 0644);
     if (fd >= 0) {
