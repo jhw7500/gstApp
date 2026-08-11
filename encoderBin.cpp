@@ -24,6 +24,274 @@ drop_no_pts_probe(GstPad *pad, GstPadProbeInfo *info, gpointer user_data)
     return GST_PAD_PROBE_OK;
 }
 
+/* [계측] 채널별 enc 큐/인코더 상태. queue_tune.enc_stat_sec > 0 일 때만 활성화되며
+ * 0(기본)이면 프로브도 타이머도 설치하지 않아 상시 비용이 없다.
+ * 목적: 4채널 동시 운용의 상한이 VPU 처리량인지(H1) 큐 기아인지(H2) 구분. */
+typedef struct {
+    GstElement *queue;
+    guint64 q_in;          /* 큐 sink 도착 프레임 */
+    guint64 q_out;         /* 큐 src 통과 프레임 (q_in - q_out = leaky 드롭) */
+    guint64 enc_out;       /* 인코더 출력 프레임 */
+    guint64 overrun;       /* 큐 포화 횟수 (leaky 여도 발생) */
+    guint lvl_buf_max;     /* current-level-buffers 워터마크 = 업스트림 풀 상한 단서 */
+    gint64 enc_last_us;    /* 직전 인코더 출력 시각 (monotonic) */
+    gint64 enc_gap_max_us; /* 인코더 출력 최대 간격 = VPU 스톨 지표 */
+    gboolean active;
+} EncStat;
+
+static EncStat g_encStat[MAX_CHANNEL];
+
+#define ENC_NODATA_WARN_SEC     5   /* 무데이터 감시 주기 */
+#define ENC_NODATA_STRIKES      2   /* 다른 채널이 흐르는 중이면 10초만에 경고 */
+#define ENC_NODATA_COLD_STRIKES 12  /* 전 채널 무데이터(기동 중)면 60초 유예 */
+
+/* 활성 채널 수 (메모리 예산 분배용) */
+static guint enc_active_channels(void)
+{
+    guint n = 0;
+    for (guint i = 0; i < MAX_CHANNEL; i++)
+        if (cmdArg.cam[i].enable)
+            n++;
+    return n ? n : 1;
+}
+
+/* 무데이터 감시용으로 항상 설치된다. 평시 비용은 증가 연산 1회.
+ * 레벨 워터마크 샘플링은 계측이 켜졌을 때만 수행한다. */
+static GstPadProbeReturn
+enc_q_in_probe(GstPad *pad, GstPadProbeInfo *info, gpointer user_data)
+{
+    EncStat *s = &g_encStat[GPOINTER_TO_INT(user_data)];
+    s->q_in++;
+    /* 큐가 가장 찬 시점에 근접한 샘플 (삽입 직전이라 실제보다 1 작을 수 있음) */
+    if (cmdArg.queue_enc_stat_sec > 0 && s->queue) {
+        guint lvl = 0;
+        g_object_get(s->queue, "current-level-buffers", &lvl, NULL);
+        if (lvl > s->lvl_buf_max)
+            s->lvl_buf_max = lvl;
+    }
+    return GST_PAD_PROBE_OK;
+}
+
+/* [무데이터 감시] 소스가 죽어 프레임이 한 장도 안 들어오는 채널을 찾아낸다.
+ * 그 채널의 sink 는 preroll 을 못 하고, 그러면 파이프라인 전체가 PAUSED 에
+ * 고착되어 '파일이 안 생김' 으로만 드러난다. 원인 채널을 바로 지목하기 위한 감시. */
+static gboolean enc_nodata_watch(gpointer user_data)
+{
+    static guint64 prev[MAX_CHANNEL];
+    static guint strike[MAX_CHANNEL];
+    static gboolean warned[MAX_CHANNEL];
+    static gboolean any_data_seen = FALSE;
+
+    if (!any_data_seen) {
+        for (gint i = 0; i < MAX_CHANNEL; i++) {
+            if (g_encStat[i].q_in > 0) {
+                any_data_seen = TRUE;
+                break;
+            }
+        }
+    }
+
+    for (gint i = 0; i < MAX_CHANNEL; i++) {
+        EncStat *s = &g_encStat[i];
+        if (!s->active || !cmdArg.cam[i].enable)
+            continue;
+        if ((g_link_disconnect_mask >> i) & 1) {  /* 링크 끊김은 별도 감시 대상 */
+            strike[i] = 0;
+            prev[i] = s->q_in;
+            continue;
+        }
+
+        guint64 cur = s->q_in;
+        if (cur != prev[i]) {
+            if (warned[i]) {
+                __LOG(LOG_NOTICE, "[GST][%s:%d] ch%d data resumed (in=%" G_GUINT64_FORMAT ")",
+                      _FILE_, __LINE__, i, cur);
+                warned[i] = FALSE;
+            }
+            strike[i] = 0;
+            prev[i] = cur;
+            continue;
+        }
+
+        strike[i]++;
+        /* 다른 채널이 이미 흐르고 있으면 그 채널만 죽은 것이므로 빨리 경고하고,
+         * 아직 아무 채널도 데이터가 없으면 기동 지연(play delay)일 수 있어 길게 기다린다. */
+        guint limit = any_data_seen ? ENC_NODATA_STRIKES : ENC_NODATA_COLD_STRIKES;
+        if (strike[i] < limit)
+            continue;
+        if (warned[i] && (strike[i] % (30 / ENC_NODATA_WARN_SEC)) != 0)
+            continue;  /* 첫 경고 후에는 30초 간격으로만 반복 */
+
+        __LOG(LOG_ERR,
+              "[GST][%s:%d] ch%d NO DATA for %ds - zero frames reached enc-queue"
+              " (csi%d source not delivering). This channel's sink cannot preroll,"
+              " which stalls the whole pipeline in PAUSED and produces no files.",
+              _FILE_, __LINE__, i, strike[i] * ENC_NODATA_WARN_SEC, i / 2);
+        warned[i] = TRUE;
+    }
+    return G_SOURCE_CONTINUE;
+}
+
+static GstPadProbeReturn
+enc_q_out_probe(GstPad *pad, GstPadProbeInfo *info, gpointer user_data)
+{
+    g_encStat[GPOINTER_TO_INT(user_data)].q_out++;
+    return GST_PAD_PROBE_OK;
+}
+
+static GstPadProbeReturn
+enc_out_probe(GstPad *pad, GstPadProbeInfo *info, gpointer user_data)
+{
+    EncStat *s = &g_encStat[GPOINTER_TO_INT(user_data)];
+    gint64 now = g_get_monotonic_time();
+    s->enc_out++;
+    if (s->enc_last_us) {
+        gint64 gap = now - s->enc_last_us;
+        if (gap > s->enc_gap_max_us)
+            s->enc_gap_max_us = gap;
+    }
+    s->enc_last_us = now;
+    return GST_PAD_PROBE_OK;
+}
+
+static void enc_queue_overrun_cb(GstElement *queue, gpointer user_data)
+{
+    g_encStat[GPOINTER_TO_INT(user_data)].overrun++;
+}
+
+/* 주기 리포트: 직전 구간 증분과 누적 워터마크를 함께 찍는다. */
+static gboolean enc_stat_report(gpointer user_data)
+{
+    static guint64 prev_in[MAX_CHANNEL], prev_out[MAX_CHANNEL];
+    static guint64 prev_enc[MAX_CHANNEL], prev_over[MAX_CHANNEL];
+    gint period = cmdArg.queue_enc_stat_sec > 0 ? cmdArg.queue_enc_stat_sec : 1;
+
+    for (gint i = 0; i < MAX_CHANNEL; i++) {
+        EncStat *s = &g_encStat[i];
+        if (!s->active || !s->queue)
+            continue;
+
+        guint lvl_buf = 0, lvl_byte = 0;
+        guint max_bytes = 0;
+        g_object_get(s->queue, "current-level-buffers", &lvl_buf,
+                     "current-level-bytes", &lvl_byte,
+                     "max-size-bytes", &max_bytes, NULL);
+
+        guint64 d_in = s->q_in - prev_in[i];
+        guint64 d_out = s->q_out - prev_out[i];
+        guint64 d_enc = s->enc_out - prev_enc[i];
+        guint64 d_over = s->overrun - prev_over[i];
+        /* q_in/q_out 을 원자적으로 읽지 않으므로 그 사이에 버퍼가 통과하면
+         * out 이 in 을 한 개 앞설 수 있다. 음수 leak 은 0 으로 본다. */
+        gint64 d_leak = (gint64)d_in - (gint64)d_out;
+        if (d_leak < 0)
+            d_leak = 0;
+        prev_in[i] = s->q_in;
+        prev_out[i] = s->q_out;
+        prev_enc[i] = s->enc_out;
+        prev_over[i] = s->overrun;
+
+        __LOG(LOG_NOTICE,
+              "[GST][%s:%d] ch%d enc-stat[%ds] in=%" G_GUINT64_FORMAT "(%.1ffps)"
+              " out=%" G_GUINT64_FORMAT " leak=%" G_GINT64_FORMAT
+              " enc=%" G_GUINT64_FORMAT "(%.1ffps) overrun=%" G_GUINT64_FORMAT
+              " lvl=%u buf/%u B (max %u buf) max-bytes=%u enc_gap_max=%.1fms",
+              _FILE_, __LINE__, i, period,
+              d_in, (gdouble)d_in / period,
+              d_out, d_leak,
+              d_enc, (gdouble)d_enc / period,
+              d_over, lvl_buf, lvl_byte, s->lvl_buf_max, max_bytes,
+              s->enc_gap_max_us / 1000.0);
+
+        s->enc_gap_max_us = 0;  /* 구간별 최대값으로 재시작 */
+    }
+    return G_SOURCE_CONTINUE;
+}
+
+/* [진단/튜닝] enc 큐 sink pad 의 negotiated caps 를 채널당 1회 읽어
+ *  (1) 실효 큐 깊이를 기록하고,
+ *  (2) queue_tune.enc_src_frames > 0 이면 실제 프레임 크기 기반으로 큐를 재사이징한다.
+ * 큐는 crop 앞이라 프레임은 CSI 통짜(width*2 x height)이고, dual(GPU crop) 경로는
+ * RGBx 32bpp 라 FHD 에서는 기본 max-size-bytes(10MB)가 단일 프레임보다 작아진다. */
+static GstPadProbeReturn
+enc_queue_caps_probe(GstPad *pad, GstPadProbeInfo *info, gpointer user_data)
+{
+    gint ch = GPOINTER_TO_INT(user_data);
+    GstCaps *caps = gst_pad_get_current_caps(pad);
+    if (!caps)
+        return GST_PAD_PROBE_OK;  /* 아직 negotiate 전 - 다음 버퍼에서 재시도 */
+
+    GstBuffer *buf = GST_PAD_PROBE_INFO_BUFFER(info);
+    gsize frame_bytes = buf ? gst_buffer_get_size(buf) : 0;
+
+    GstStructure *s = gst_caps_get_structure(caps, 0);
+    gint w = 0, h = 0, fps_n = 0, fps_d = 1;
+    const gchar *fmt = gst_structure_get_string(s, "format");
+    gst_structure_get_int(s, "width", &w);
+    gst_structure_get_int(s, "height", &h);
+    gst_structure_get_fraction(s, "framerate", &fps_n, &fps_d);
+
+    GstElement *queue = gst_pad_get_parent_element(pad);
+
+    /* (2) 프레임 수 기준 동적 사이징 */
+    if (queue && frame_bytes > 0 && cmdArg.queue_enc_src_frames > 0) {
+        gint n = CLAMP(cmdArg.queue_enc_src_frames,
+                       QUEUE_ENC_FRAMES_MIN, QUEUE_ENC_FRAMES_MAX);
+        gint n_req = n;
+        const gchar *capped = "none";
+
+        if (cmdArg.queue_enc_budget_mb > 0) {
+            guint64 budget = (guint64)cmdArg.queue_enc_budget_mb * 1024 * 1024;
+            guint64 per_ch = budget / enc_active_channels();
+            gint n_budget = (gint)(per_ch / frame_bytes);
+            if (n_budget < QUEUE_ENC_FRAMES_MIN)
+                n_budget = QUEUE_ENC_FRAMES_MIN;
+            if (n_budget < n) {
+                n = n_budget;
+                capped = "budget";
+            }
+        }
+
+        guint64 want = (guint64)n * (guint64)frame_bytes;
+        /* 구속조건을 바이트 하나로 통일 - max-size-time 의 침묵 override 제거 */
+        g_object_set(queue, "max-size-bytes", (guint)want,
+                            "max-size-time", (guint64)0, NULL);
+        __LOG(LOG_NOTICE,
+              "[GST][%s:%d] ch%d enc-queue resize: %d frames requested -> %d applied"
+              " (%" G_GUINT64_FORMAT " B, cap=%s, budget=%dMB/%uch)",
+              _FILE_, __LINE__, ch, n_req, n, want, capped,
+              cmdArg.queue_enc_budget_mb, enc_active_channels());
+    }
+
+    guint max_bytes = 0;
+    guint64 max_time = 0;
+    if (queue)
+        g_object_get(queue, "max-size-bytes", &max_bytes, "max-size-time", &max_time, NULL);
+
+    gchar *caps_str = gst_caps_to_string(caps);
+    __LOG(LOG_NOTICE, "[GST][%s:%d] ch%d enc-queue caps: %s", _FILE_, __LINE__, ch, caps_str);
+    g_free(caps_str);
+
+    /* (1) 바이트/시간 상한이 각각 몇 프레임 = 몇 ms 인지 환산해 실효 깊이 확정 */
+    if (frame_bytes > 0 && fps_n > 0) {
+        gdouble frames = (gdouble)max_bytes / (gdouble)frame_bytes;
+        gdouble bytes_ms = frames * 1000.0 * (gdouble)fps_d / (gdouble)fps_n;
+        gdouble time_ms = (max_time > 0) ? (gdouble)max_time / (gdouble)GST_MSECOND : G_MAXDOUBLE;
+        __LOG(LOG_NOTICE,
+              "[GST][%s:%d] ch%d enc-queue depth: %dx%d %s fps=%d/%d frame=%" G_GSIZE_FORMAT "B"
+              " | max-bytes=%u(%.2f frames=%.0fms) max-time=%s -> effective %.0fms (%s limited)",
+              _FILE_, __LINE__, ch, w, h, fmt ? fmt : "?", fps_n, fps_d, frame_bytes,
+              max_bytes, frames, bytes_ms,
+              (max_time > 0) ? "set" : "disabled",
+              MIN(bytes_ms, time_ms), (bytes_ms <= time_ms) ? "bytes" : "time");
+    }
+
+    if (queue)
+        gst_object_unref(queue);
+    gst_caps_unref(caps);
+    return GST_PAD_PROBE_REMOVE;  /* 1회만 */
+}
+
 EncoderBin* EncoderBin::getInstance()
 {
 	static EncoderBin instance;
@@ -413,6 +681,66 @@ gboolean EncoderBin::init(guint8 ch)
     //g_object_set(re.queue, "max-size-time", GST_SECOND, "max-size-buffers", cmdArg.fps[STREAM_RTSP][ch], "leaky", LEAKY_DOWNSTREAM, NULL);
     // [Queue 최적화] 시간 기반 고정 버퍼링 (JSON 설정값 사용)
     g_object_set(re.queue, "max-size-time", cmdArg.queue_enc_src_time_ms*GST_MSECOND, "max-size-buffers", 0, "leaky", LEAKY_DOWNSTREAM, NULL);
+    /* [진단] 프레임 규격/실효 큐 깊이 1회 기록 + (설정 시) 프레임 수 기준 재사이징 */
+    {
+        GstPad *qsink = gst_element_get_static_pad(re.queue, "sink");
+        if (qsink) {
+            gst_pad_add_probe(qsink, GST_PAD_PROBE_TYPE_BUFFER,
+                              (GstPadProbeCallback)enc_queue_caps_probe,
+                              GINT_TO_POINTER((gint)ch), NULL);
+            gst_object_unref(qsink);
+        }
+    }
+
+    /* [무데이터 감시] 항상 설치한다. 프레임당 증가 연산 1회뿐이라 비용이 없고,
+     * 소스가 죽어 파일이 안 생기는 기동 실패를 로그만으로 자기 진단하게 해준다. */
+    {
+        EncStat *st = &g_encStat[ch];
+        st->queue = re.queue;
+        st->active = TRUE;
+
+        GstPad *p = gst_element_get_static_pad(re.queue, "sink");
+        if (p) {
+            gst_pad_add_probe(p, GST_PAD_PROBE_TYPE_BUFFER,
+                              (GstPadProbeCallback)enc_q_in_probe,
+                              GINT_TO_POINTER((gint)ch), NULL);
+            gst_object_unref(p);
+        }
+
+        static gboolean nodata_timer_installed = FALSE;
+        if (!nodata_timer_installed) {
+            nodata_timer_installed = TRUE;
+            g_timeout_add_seconds(ENC_NODATA_WARN_SEC, enc_nodata_watch, NULL);
+        }
+    }
+
+    /* [계측] enc_stat_sec > 0 일 때만 나머지 카운팅/시그널/리포트를 추가한다. */
+    if (cmdArg.queue_enc_stat_sec > 0) {
+        GstPad *p = gst_element_get_static_pad(re.queue, "src");
+        if (p) {
+            gst_pad_add_probe(p, GST_PAD_PROBE_TYPE_BUFFER,
+                              (GstPadProbeCallback)enc_q_out_probe,
+                              GINT_TO_POINTER((gint)ch), NULL);
+            gst_object_unref(p);
+        }
+        p = gst_element_get_static_pad(re.enc, "src");
+        if (p) {
+            gst_pad_add_probe(p, GST_PAD_PROBE_TYPE_BUFFER,
+                              (GstPadProbeCallback)enc_out_probe,
+                              GINT_TO_POINTER((gint)ch), NULL);
+            gst_object_unref(p);
+        }
+        g_signal_connect(re.queue, "overrun", G_CALLBACK(enc_queue_overrun_cb),
+                         GINT_TO_POINTER((gint)ch));
+
+        static gboolean stat_timer_installed = FALSE;
+        if (!stat_timer_installed) {
+            stat_timer_installed = TRUE;
+            g_timeout_add_seconds(cmdArg.queue_enc_stat_sec, enc_stat_report, NULL);
+            __LOG(LOG_NOTICE, "[GST][%s:%d] enc-stat enabled (period %ds)",
+                  _FILE_, __LINE__, cmdArg.queue_enc_stat_sec);
+        }
+    }
     /* videorate 없을 때 PTS 없는 버퍼가 mp4mux에 도달하면 크래시 발생.
      * enc src pad에서 PTS 없는 버퍼를 드롭하여 방지. */
     if (!cmdArg.videorate_en) {

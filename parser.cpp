@@ -265,6 +265,9 @@ void ParserClass::init_arg(gchar *argv) {
   arg.queue_enc_src_time_ms = DEFAULT_QUEUE_ENC_SRC_TIME_MS;
   arg.queue_rec_sink_time_ms = DEFAULT_QUEUE_REC_SINK_TIME_MS;
   arg.queue_cap_src_time_ms = DEFAULT_QUEUE_CAP_SRC_TIME_MS;
+  arg.queue_enc_src_frames = DEFAULT_QUEUE_ENC_SRC_FRAMES;
+  arg.queue_enc_budget_mb = DEFAULT_QUEUE_ENC_BUDGET_MB;
+  arg.queue_enc_stat_sec = DEFAULT_QUEUE_ENC_STAT_SEC;
 
   arg.v4l_subdev_csi0 = DEFAULT_V4L_SUBDEV_CSI0;
   arg.v4l_subdev_csi1 = DEFAULT_V4L_SUBDEV_CSI1;
@@ -631,6 +634,9 @@ gint ParserClass::json_parser(const gchar *path, const gchar *header) {
       json_object_get_int_optional(target_obj, "enc_src_time_ms", &arg.queue_enc_src_time_ms);
       json_object_get_int_optional(target_obj, "rec_sink_time_ms", &arg.queue_rec_sink_time_ms);
       json_object_get_int_optional(target_obj, "cap_src_time_ms", &arg.queue_cap_src_time_ms);
+      json_object_get_int_optional(target_obj, "enc_src_frames", &arg.queue_enc_src_frames);
+      json_object_get_int_optional(target_obj, "enc_budget_mb", &arg.queue_enc_budget_mb);
+      json_object_get_int_optional(target_obj, "enc_stat_sec", &arg.queue_enc_stat_sec);
     }
 
     // Optional platform device mapping overrides.
@@ -1224,10 +1230,12 @@ gint ParserClass::check_arg() {
           arg.rtsp_bin_queue_max_time_ms, arg.rtsp_appsrc_max_bytes);
   }
   __LOG(LOG_NOTICE,
-        "[%s][%s:%d] queue_tune main_src:%dms enc_src:%dms rec_sink:%dms cap_src:%dms",
+        "[%s][%s:%d] queue_tune main_src:%dms enc_src:%dms rec_sink:%dms cap_src:%dms"
+        " | enc_frames:%d enc_budget:%dMB enc_stat:%ds",
         LOG_KEY, _FILE_, __LINE__, arg.queue_main_src_time_ms,
         arg.queue_enc_src_time_ms, arg.queue_rec_sink_time_ms,
-        arg.queue_cap_src_time_ms);
+        arg.queue_cap_src_time_ms, arg.queue_enc_src_frames,
+        arg.queue_enc_budget_mb, arg.queue_enc_stat_sec);
 
   if (arg.stream_en[STREAM_CAP]) {
     if (arg.cap.queue_size <= 0) {
