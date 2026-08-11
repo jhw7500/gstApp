@@ -33,6 +33,9 @@
 #define MIN_SPLIT_INTERVAL_SEC 5
 #define SNAP_BACK_GRACE_PERIOD_MS 58000
 #define MILLISECONDS_IN_MINUTE 60000
+/* 분할 직후 ~ 새 조각 open(format_location) 전까지의 '값 없음' 표식.
+ * split_msec 은 분 내 오프셋이라 항상 0..59999 이므로 음수는 충돌하지 않는다. */
+#define SPLIT_MSEC_UNSET (-1)
 #define CAM_STATE_RECORDING_DIR "/tmp/cam_state/recording"
 #define CAM_STATE_RECORDING_ACTUAL_FILE CAM_STATE_RECORDING_DIR "/start_video_time_actual"
 
@@ -418,30 +421,33 @@ static void splitCheck(gpointer data, guint8 startSec) {
 
   if (diff >= 0) {
     gboolean is_fully_aligned = TRUE;
-    gint splitMax = 0, splitMin = 59999;
+    gint splitMax = G_MININT, splitMin = G_MAXINT;
     gint active_count = 0;
 
     for (i = 0; i < MAX_CHANNEL; i++) {
       if (!cmdArg.cam[i].enable) continue;
       if ((g_link_disconnect_mask >> i) & 1) continue;  // disconnect 채널 skip
       gint sm = muxSinkBin[i].getSplitMsec();
+      if (sm == SPLIT_MSEC_UNSET) continue;  // 새 조각 미개시 → 판단 보류
       active_count++;
 
-      // [리뷰 반영] Wrap-around를 고려한 오차 절대 거리 계산 (예: 59.9s = 0.1s 오차)
-      gint drift_ms = sm;
-      if (drift_ms > MAX_SNAPBACK_DRIFT_MS) {
-          drift_ms = MILLISECONDS_IN_MINUTE - drift_ms;
-      }
+      // Wrap-around 보정: 분 경계 기준 '부호 있는' 오차로 환산 (예: 59900 -> -100)
+      gint signed_ms = (sm > MAX_SNAPBACK_DRIFT_MS)
+                           ? (sm - MILLISECONDS_IN_MINUTE)
+                           : sm;
+      gint drift_ms = ABS(signed_ms);
 
       if (diff < 5) {
-        __LOG(LOG_DEBUG, "[GST][%s:%d] ch%d sm:%dms, drift:%dms, diff:%ds", _FILE_, __LINE__, i, sm, drift_ms, diff);
+        __LOG(LOG_DEBUG, "[GST][%s:%d] ch%d sm:%dms, signed:%dms, drift:%dms, diff:%ds", _FILE_, __LINE__, i, sm, signed_ms, drift_ms, diff);
       }
 
       // 정시성 판단: 절대 오차가 허용 범위 이내인가?
       if (drift_ms >= cmdArg.split_max_msec) is_fully_aligned = FALSE;
 
-      if (sm > splitMax) splitMax = sm;
-      if (sm < splitMin) splitMin = sm;
+      // 채널 간 스큐는 부호 있는 값으로 비교해야 분 경계에서 뒤집히지 않는다.
+      // (raw 비교 시 59900 과 100 의 차이가 170ms 가 아니라 59800ms 로 계산됨)
+      if (signed_ms > splitMax) splitMax = signed_ms;
+      if (signed_ms < splitMin) splitMin = signed_ms;
     }
 
     // 채널 간 스큐(Skew) 확인
@@ -455,7 +461,7 @@ static void splitCheck(gpointer data, guint8 startSec) {
           if (!cmdArg.cam[i].enable) continue;
           if ((g_link_disconnect_mask >> i) & 1) continue;
           muxSinkBin[i].splitNow(NULL, FALSE);
-          muxSinkBin[i].setSplitMsec(DEFAULT_SPLIT_MAX_MSEC);
+          muxSinkBin[i].setSplitMsec(SPLIT_MSEC_UNSET);
         }
         need_first_split = FALSE;
       }
@@ -474,6 +480,7 @@ static void splitCheck(gpointer data, guint8 startSec) {
       if (!cmdArg.cam[i].enable) continue;
       if ((g_link_disconnect_mask >> i) & 1) continue;
       gint sm = muxSinkBin[i].getSplitMsec();
+      if (sm == SPLIT_MSEC_UNSET) continue;  // 새 조각 미개시 → 유예 판단 제외
       if (sm >= SNAP_BACK_GRACE_PERIOD_MS && (diff * 1000 < cmdArg.split_max_msec)) {
         do_force = FALSE; break;
       }
@@ -509,7 +516,7 @@ static void splitCheck(gpointer data, guint8 startSec) {
         if (!cmdArg.cam[i].enable) continue;
         if ((g_link_disconnect_mask >> i) & 1) continue;
         muxSinkBin[i].splitNow(NULL, FALSE);
-        muxSinkBin[i].setSplitMsec(DEFAULT_SPLIT_MAX_MSEC);
+        muxSinkBin[i].setSplitMsec(SPLIT_MSEC_UNSET);
       }
       target_min = (target_min + cmdArg.duration) % 60;
       last_split_ts = g_get_monotonic_time();
