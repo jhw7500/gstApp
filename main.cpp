@@ -60,6 +60,80 @@ static GMutex pool_mutex;
 // 드라이버 sysfs에서 읽은 disconnect 비트마스크 (bit0=ch0, bit1=ch1, bit2=ch2, bit3=ch3)
 int g_link_disconnect_mask = 0;
 
+/* 파이프라인이 ASYNC_DONE(preroll 완료)에 도달했는지. sink 중 하나라도 버퍼를
+ * 받지 못하면 여기 도달하지 못하고 파일이 하나도 생기지 않는다. */
+static gboolean g_async_done_seen = FALSE;
+
+#define LINK_STATUS_RECHECK_SEC 5   /* PLAYING 후 link_status 재확인 시점 */
+#define PLAYING_WATCH_SEC       15  /* PLAYING 요청 후 preroll 완료 감시 시점 */
+
+/* link_status 는 3상태다: 0=connected, >0=disconnect, <0/읽기실패=unverified.
+ * unverified 를 disconnect 로 뭉개면 멀쩡한 채널을 정렬 판정에서 배제해 버리고,
+ * connected 로 뭉개면 끊긴 채널을 계속 물고 간다. 그래서 미확인은 이전 판정을 유지한다.
+ * 드라이버는 STREAMON(= PLAYING 전이) 때 max9296_load_regs() 에서 이 값을 채우므로
+ * PLAYING 이전 읽기는 -1(미확인)이 정상이며, 그래서 PLAYING 이후 재확인이 필요하다. */
+static void update_link_disconnect_mask(VideoBin *vb, const gchar *phase) {
+  static const char *sysfs_link[] = {
+      "/sys/bus/i2c/devices/2-0048/link_status",  // CSI0 (i2c2, ch0/ch1)
+      "/sys/bus/i2c/devices/1-0048/link_status",  // CSI1 (i2c1, ch2/ch3)
+  };
+
+  for (int idx = 0; idx < MAX_VIDEO_SRC; idx++) {
+    if (vb[idx].be.bin == NULL) continue;
+
+    int link_val = -1;
+    const gchar *how = "read fail";
+    int fd = open(sysfs_link[idx], O_RDONLY);
+    if (fd < 0) {
+      how = "open fail";
+    } else {
+      char buf[16] = {0};
+      int n = read(fd, buf, sizeof(buf) - 1);
+      close(fd);
+      if (n > 0) {
+        link_val = atoi(buf);
+        how = "sysfs";
+      }
+    }
+
+    int mask_bits = (0x3 << (idx * 2));
+    const gchar *state;
+    if (link_val < 0) {
+      state = "unverified";  /* 이전 판정 유지 - disconnect 로 취급하지 않는다 */
+    } else if (link_val > 0) {
+      g_link_disconnect_mask |= mask_bits;
+      state = "disconnect";
+    } else {
+      g_link_disconnect_mask &= ~mask_bits;
+      state = "connected";
+    }
+
+    __LOG((link_val > 0) ? LOG_WARNING : LOG_NOTICE,
+          "[GST][%s:%d] CSI%d(ch%d/ch%d) link_status=%d (%s via %s) phase=%s mask=0x%x",
+          _FILE_, __LINE__, idx, idx * 2, idx * 2 + 1, link_val, state, how,
+          phase, g_link_disconnect_mask);
+  }
+}
+
+static gboolean link_status_recheck_cb(gpointer data) {
+  update_link_disconnect_mask((VideoBin *)data, "post-playing");
+  return G_SOURCE_REMOVE;
+}
+
+/* PLAYING 을 요청했는데도 preroll 이 끝나지 않으면 파일이 하나도 안 생긴다.
+ * 지금까지 이 실패는 'Got async-done message' 로그의 '부재' 로만 드러나서
+ * 정상 로그와 대조해야만 알 수 있었다. */
+static gboolean playing_watch_cb(gpointer data) {
+  if (!g_async_done_seen) {
+    __LOG(LOG_ERR,
+          "[GST][%s:%d] pipeline NOT prerolled %ds after PLAYING request (no ASYNC_DONE)"
+          " - some sink never received a buffer, so no files will be created."
+          " Check the per-channel 'NO DATA' warnings to find which source is dead.",
+          _FILE_, __LINE__, PLAYING_WATCH_SEC);
+  }
+  return G_SOURCE_REMOVE;
+}
+
 static GAsyncQueue *fragment_closed_queue = NULL;
 static GThread *fragment_closed_thread = NULL;
 
@@ -329,6 +403,10 @@ gboolean bus_message_parse(GstBus *bus, GstMessage *message, gpointer data) {
 
   case GST_MESSAGE_ASYNC_DONE:
   case GST_MESSAGE_STREAM_START:
+    /* 최상위 파이프라인의 ASYNC_DONE 만 preroll 완료로 인정한다 (bin 도 올려보냄) */
+    if (GST_MESSAGE_TYPE(message) == GST_MESSAGE_ASYNC_DONE &&
+        pipeline != NULL && GST_MESSAGE_SRC(message) == GST_OBJECT(pipeline))
+      g_async_done_seen = TRUE;
     __LOG(LOG_NOTICE, "[GST][%s:%d] Got %s message from %s", _FILE_, __LINE__,
           GST_MESSAGE_TYPE_NAME(message), GST_OBJECT_NAME(message->src));
     break;
@@ -1121,33 +1199,9 @@ gint main(gint argc, gchar *argv[]) {
   }
 #endif
 
-  // delay 후 link_status sysfs 읽어 disconnect된 CSI의 watchdog 비활성화
-  {
-    const char *sysfs_link[] = {
-      "/sys/bus/i2c/devices/2-0048/link_status",  // CSI0 (i2c2, ch0/ch1)
-      "/sys/bus/i2c/devices/1-0048/link_status",  // CSI1 (i2c1, ch2/ch3)
-    };
-    for (int idx = 0; idx < MAX_VIDEO_SRC; idx++) {
-      if (videoBin[idx].be.bin == NULL) continue;
-      int fd = open(sysfs_link[idx], O_RDONLY);
-      if (fd < 0) continue;
-      char buf[16] = {0};
-      int n = read(fd, buf, sizeof(buf) - 1);
-      close(fd);
-      if (n <= 0) continue;
-      int link_val = atoi(buf);
-      if (link_val > 0) {
-        // CSI0(idx=0) → ch0/ch1 (bit0,bit1), CSI1(idx=1) → ch2/ch3 (bit2,bit3)
-        g_link_disconnect_mask |= (0x3 << (idx * 2));
-        if (videoBin[idx].be.watchdog != NULL) {
-          __LOG(LOG_WARNING,
-                "[GST][%s:%d] CSI%d link_status=%d (disconnect)",
-                _FILE_, __LINE__, idx, link_val);
-          //g_object_set(videoBin[idx].be.watchdog, "timeout", 0, NULL);
-        }
-      }
-    }
-  }
+  // delay 후 link_status 1차 확인. 이 시점은 아직 STREAMON 전이라 대부분 미확인(-1)
+  // 으로 나오며, 확정값은 PLAYING 이후 link_status_recheck_cb 가 갱신한다.
+  update_link_disconnect_mask(videoBin, "pre-playing");
 
   sd_mount_flag = check_sd_mount_flag();
   if (sd_mount_flag == 0) {
@@ -1165,6 +1219,13 @@ gint main(gint argc, gchar *argv[]) {
     gst_object_unref(pipeline);
     goto main_end;
   }
+
+  /* link_status 는 STREAMON 때 드라이버가 채우므로 PLAYING 이후에 다시 읽어야
+   * 확정값이 나온다. 그리고 preroll 이 끝나지 않는 실패는 지금까지 로그의
+   * '부재' 로만 드러났으므로 능동적으로 감시한다. */
+  g_timeout_add_seconds(LINK_STATUS_RECHECK_SEC, link_status_recheck_cb,
+                        videoBin);
+  g_timeout_add_seconds(PLAYING_WATCH_SEC, playing_watch_cb, NULL);
 
   if (cmdArg.input_en) {
     terminalThread = g_thread_new(
