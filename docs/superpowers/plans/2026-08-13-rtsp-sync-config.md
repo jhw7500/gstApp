@@ -522,9 +522,10 @@ rtk git diff --check
 ```bash
 rtk ./make-for-imx8 clean
 rtk ./make-for-imx8 -j4
+rtk ./make-for-imx8 -j4 bin/rtspFrameSyncClient bin/decoderRecoveryClient
 ```
 
-Expected: `bin/gstApp` builds; record existing warnings separately and reject new warnings attributable to this change.
+Expected: `bin/gstApp` and both target-side validation clients build; record existing warnings separately and reject new warnings attributable to this change.
 
 - [ ] **Step 3: Run JSON and CLI target contracts**
 
