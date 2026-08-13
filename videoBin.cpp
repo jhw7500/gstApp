@@ -47,9 +47,6 @@
 #define V4L2_CID_MCP4018_POWER_CH0 (V4L2_CID_USER_BASE + 0x1020)
 #define V4L2_CID_MCP4018_POWER_CH1 (V4L2_CID_USER_BASE + 0x1021)
 
-#define V4L2_SYNC_TRACE_ENV "GSTAPP_V4L2_SYNC_TRACE_SEC"
-#define V4L2_SYNC_TRACE_MAX_SEC 3600
-
 typedef struct {
   guint8 csi;
   guint duration_sec;
@@ -144,22 +141,9 @@ static GstPadProbeReturn v4l2_sync_trace_probe(GstPad *pad,
 }
 
 static void install_v4l2_sync_trace(GstElement *src, guint8 csi) {
-  const gchar *env = g_getenv(V4L2_SYNC_TRACE_ENV);
-  gchar *end = NULL;
-  gint64 duration_sec;
-
-  if (!env || !*env)
+  guint duration_sec = (guint)cmdArg.v4l2_sync_trace_sec;
+  if (duration_sec == 0)
     return;
-
-  duration_sec = g_ascii_strtoll(env, &end, 10);
-  if (!end || *end != '\0' || duration_sec <= 0 ||
-      duration_sec > V4L2_SYNC_TRACE_MAX_SEC) {
-    __LOG(LOG_WARNING,
-          "[V4L2_SYNC][%s:%d] ignoring invalid %s=%s (valid: 1..%d)",
-          _FILE_, __LINE__, V4L2_SYNC_TRACE_ENV, env,
-          V4L2_SYNC_TRACE_MAX_SEC);
-    return;
-  }
 
   GstPad *src_pad = gst_element_get_static_pad(src, "src");
   if (!src_pad) {
@@ -170,7 +154,7 @@ static void install_v4l2_sync_trace(GstElement *src, guint8 csi) {
 
   V4l2SyncTrace *trace = g_new0(V4l2SyncTrace, 1);
   trace->csi = csi;
-  trace->duration_sec = (guint)duration_sec;
+  trace->duration_sec = duration_sec;
 
   gulong probe_id = gst_pad_add_probe(
       src_pad, GST_PAD_PROBE_TYPE_BUFFER, v4l2_sync_trace_probe, trace,

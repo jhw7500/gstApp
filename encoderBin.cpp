@@ -44,9 +44,6 @@ static EncStat g_encStat[MAX_CHANNEL];
 #define ENC_NODATA_WARN_SEC     5   /* 무데이터 감시 주기 */
 #define ENC_NODATA_STRIKES      2   /* 다른 채널이 흐르는 중이면 10초만에 경고 */
 #define ENC_NODATA_COLD_STRIKES 12  /* 전 채널 무데이터(기동 중)면 60초 유예 */
-#define CHANNEL_SYNC_TRACE_ENV "GSTAPP_CHANNEL_SYNC_TRACE_SEC"
-#define CHANNEL_SYNC_TRACE_MAX_SEC 3600
-
 typedef struct {
     guint8 ch;
     const gchar *stage;
@@ -376,30 +373,9 @@ static void install_channel_rate_lineage(GstElement *rate, guint8 ch)
 
 static guint channel_sync_trace_duration(void)
 {
-    static gboolean initialized = FALSE;
-    static guint duration_sec = 0;
-
-    if (initialized)
-        return duration_sec;
-
-    initialized = TRUE;
-    const gchar *env = g_getenv(CHANNEL_SYNC_TRACE_ENV);
-    if (!env || !*env)
-        return 0;
-
-    gchar *end = NULL;
-    gint64 value = g_ascii_strtoll(env, &end, 10);
-    if (!end || *end != '\0' || value <= 0 ||
-        value > CHANNEL_SYNC_TRACE_MAX_SEC) {
-        __LOG(LOG_WARNING,
-              "[CHANNEL_SYNC][%s:%d] ignoring invalid %s=%s (valid: 1..%d)",
-              _FILE_, __LINE__, CHANNEL_SYNC_TRACE_ENV, env,
-              CHANNEL_SYNC_TRACE_MAX_SEC);
-        return 0;
-    }
-
-    duration_sec = (guint)value;
-    return duration_sec;
+    return cmdArg.channel_sync_trace_sec > 0
+               ? (guint)cmdArg.channel_sync_trace_sec
+               : 0;
 }
 
 static GstPadProbeReturn

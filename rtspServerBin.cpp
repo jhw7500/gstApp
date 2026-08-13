@@ -44,12 +44,6 @@ static guint8 g_rtsp_appsrc_count = 0;
  * 정적 할당 GMutex는 별도 init 불필요 */
 static GMutex g_rtsp_appsrc_lock;
 
-#define RTSP_SYNC_TRACE_ENV "GSTAPP_RTSP_SYNC_TRACE_SEC"
-#define RTSP_FRAME_ID_SEI_ENV "GSTAPP_RTSP_FRAME_ID_SEI"
-#define RTSP_TEST_STALL_CH_ENV "GSTAPP_RTSP_TEST_STALL_CH"
-#define RTSP_TEST_STALL_AFTER_ENV "GSTAPP_RTSP_TEST_STALL_AFTER_SEC"
-#define RTSP_TEST_STALL_DURATION_ENV "GSTAPP_RTSP_TEST_STALL_DURATION_SEC"
-#define RTSP_SYNC_TRACE_MAX_SEC 3600
 #define RTSP_SYNC_FNV_OFFSET G_GUINT64_CONSTANT(1469598103934665603)
 #define RTSP_SYNC_FNV_PRIME G_GUINT64_CONSTANT(1099511628211)
 #define RTSP_VIDEO_CLOCK_RATE 90000
@@ -156,27 +150,12 @@ typedef struct {
 
 static gboolean rtsp_test_stall_config(guint8 ch, guint *after_sec,
                                        guint *duration_sec) {
-  const gchar *ch_env = g_getenv(RTSP_TEST_STALL_CH_ENV);
-  const gchar *after_env = g_getenv(RTSP_TEST_STALL_AFTER_ENV);
-  const gchar *duration_env = g_getenv(RTSP_TEST_STALL_DURATION_ENV);
-  if (!ch_env || !after_env || !duration_env)
+  if (cmdArg.rtsp_test_stall_ch != ch ||
+      cmdArg.rtsp_test_stall_duration_sec <= 0)
     return FALSE;
 
-  gchar *end = NULL;
-  gint64 target_ch = g_ascii_strtoll(ch_env, &end, 10);
-  if (!end || *end != '\0' || target_ch != ch)
-    return FALSE;
-
-  gint64 after = g_ascii_strtoll(after_env, &end, 10);
-  if (!end || *end != '\0' || after <= 0 || after > 3600)
-    return FALSE;
-
-  gint64 duration = g_ascii_strtoll(duration_env, &end, 10);
-  if (!end || *end != '\0' || duration <= 0 || duration > 60)
-    return FALSE;
-
-  *after_sec = (guint)after;
-  *duration_sec = (guint)duration;
+  *after_sec = (guint)cmdArg.rtsp_test_stall_after_sec;
+  *duration_sec = (guint)cmdArg.rtsp_test_stall_duration_sec;
   return TRUE;
 }
 
@@ -218,43 +197,13 @@ static guint64 rtsp_sync_hash_u64(guint64 hash, guint64 value) {
 }
 
 static guint rtsp_sync_trace_duration() {
-  static gboolean initialized = FALSE;
-  static guint duration_sec = 0;
-
-  if (initialized)
-    return duration_sec;
-
-  initialized = TRUE;
-  const gchar *env = g_getenv(RTSP_SYNC_TRACE_ENV);
-  if (!env || !*env)
-    return 0;
-
-  gchar *end = NULL;
-  gint64 value = g_ascii_strtoll(env, &end, 10);
-  if (!end || *end != '\0' || value <= 0 ||
-      value > RTSP_SYNC_TRACE_MAX_SEC) {
-    __LOG(LOG_WARNING,
-          "[RTSP_SYNC][%s:%d] ignoring invalid %s=%s (valid: 1..%d)",
-          _FILE_, __LINE__, RTSP_SYNC_TRACE_ENV, env,
-          RTSP_SYNC_TRACE_MAX_SEC);
-    return 0;
-  }
-
-  duration_sec = (guint)value;
-  return duration_sec;
+  return cmdArg.rtsp_sync_trace_sec > 0
+             ? (guint)cmdArg.rtsp_sync_trace_sec
+             : 0;
 }
 
 static gboolean rtsp_frame_id_sei_enabled() {
-  static gboolean initialized = FALSE;
-  static gboolean enabled = FALSE;
-
-  if (!initialized) {
-    const gchar *env = g_getenv(RTSP_FRAME_ID_SEI_ENV);
-    enabled = env && g_strcmp0(env, "1") == 0;
-    initialized = TRUE;
-  }
-
-  return enabled;
+  return cmdArg.rtsp_frame_id_sei;
 }
 
 static GstBuffer *rtsp_frame_id_sei_insert(RtspServerData *info,
@@ -758,17 +707,24 @@ static void rtsp_sync_install_media_probes(RtspServerData *info,
                                            GstElement *element,
                                            GstElement *appsrc) {
   RtspSyncTrace *trace = (RtspSyncTrace *)info->sync_trace;
-  if (!trace)
+  guint stall_after_sec = 0;
+  guint stall_duration_sec = 0;
+  gboolean stall_matches = rtsp_test_stall_config(
+      info->ch, &stall_after_sec, &stall_duration_sec);
+  if (!trace && !stall_matches)
     return;
 
-  GstPad *pad = gst_element_get_static_pad(appsrc, "src");
-  if (pad) {
-    RtspSyncProbeCtx *ctx = g_new0(RtspSyncProbeCtx, 1);
-    ctx->trace = trace;
-    ctx->kind = RTSP_SYNC_STAGE_APPSRC;
-    gst_pad_add_probe(pad, GST_PAD_PROBE_TYPE_BUFFER,
-                      rtsp_sync_buffer_probe, ctx, g_free);
-    gst_object_unref(pad);
+  GstPad *pad = NULL;
+  if (trace) {
+    pad = gst_element_get_static_pad(appsrc, "src");
+    if (pad) {
+      RtspSyncProbeCtx *ctx = g_new0(RtspSyncProbeCtx, 1);
+      ctx->trace = trace;
+      ctx->kind = RTSP_SYNC_STAGE_APPSRC;
+      gst_pad_add_probe(pad, GST_PAD_PROBE_TYPE_BUFFER,
+                        rtsp_sync_buffer_probe, ctx, g_free);
+      gst_object_unref(pad);
+    }
   }
 
   GstElement *pay =
@@ -779,22 +735,21 @@ static void rtsp_sync_install_media_probes(RtspServerData *info,
     return;
   }
 
-  pad = gst_element_get_static_pad(pay, "sink");
-  if (pad) {
-    RtspSyncProbeCtx *ctx = g_new0(RtspSyncProbeCtx, 1);
-    ctx->trace = trace;
-    ctx->kind = RTSP_SYNC_STAGE_PAY;
-    gst_pad_add_probe(pad, GST_PAD_PROBE_TYPE_BUFFER,
-                      rtsp_sync_buffer_probe, ctx, g_free);
-    gst_object_unref(pad);
+  if (trace) {
+    pad = gst_element_get_static_pad(pay, "sink");
+    if (pad) {
+      RtspSyncProbeCtx *ctx = g_new0(RtspSyncProbeCtx, 1);
+      ctx->trace = trace;
+      ctx->kind = RTSP_SYNC_STAGE_PAY;
+      gst_pad_add_probe(pad, GST_PAD_PROBE_TYPE_BUFFER,
+                        rtsp_sync_buffer_probe, ctx, g_free);
+      gst_object_unref(pad);
+    }
   }
 
   pad = gst_element_get_static_pad(pay, "src");
   if (pad) {
-    guint stall_after_sec = 0;
-    guint stall_duration_sec = 0;
-    if (rtsp_test_stall_config(info->ch, &stall_after_sec,
-                               &stall_duration_sec)) {
+    if (stall_matches) {
       RtspTestStallCtx *stall_ctx = g_new0(RtspTestStallCtx, 1);
       stall_ctx->ch = info->ch;
       stall_ctx->after_sec = stall_after_sec;
@@ -804,10 +759,12 @@ static void rtsp_sync_install_media_probes(RtspServerData *info,
                                           GST_PAD_PROBE_TYPE_BUFFER_LIST),
                         rtsp_test_stall_probe, stall_ctx, g_free);
     }
-    gst_pad_add_probe(pad,
-                      (GstPadProbeType)(GST_PAD_PROBE_TYPE_BUFFER |
-                                        GST_PAD_PROBE_TYPE_BUFFER_LIST),
-                      rtsp_sync_rtp_probe, trace, NULL);
+    if (trace) {
+      gst_pad_add_probe(pad,
+                        (GstPadProbeType)(GST_PAD_PROBE_TYPE_BUFFER |
+                                          GST_PAD_PROBE_TYPE_BUFFER_LIST),
+                        rtsp_sync_rtp_probe, trace, NULL);
+    }
     gst_object_unref(pad);
   }
   gst_object_unref(pay);
@@ -1243,17 +1200,22 @@ static void media_configure(GstRTSPMediaFactory *factory, GstRTSPMedia *media,
                  : "video/x-h264,stream-format=byte-stream,alignment=au");
   }
   /* appsrc를 streaming thread에 게시하기 전에 probe를 먼저 설치해 첫 push부터
-   * 빠짐없이 측정한다. 환경변수가 없으면 이 함수는 즉시 반환한다. */
+   * 빠짐없이 측정한다. trace와 stall이 모두 꺼져 있으면 즉시 반환한다. */
   rtsp_sync_install_media_probes(info, element, appsrc);
-  out_queue =
-      gst_bin_get_by_name_recurse_up(GST_BIN(element), "rtsp_out_queue");
-  if (out_queue) {
-    g_signal_connect(out_queue, "overrun",
-                     (GCallback)rtsp_factory_queue_overrun, info);
-    gst_object_unref(out_queue);
-  } else {
-    __LOG(LOG_ERR, "[RTSP_SYNC][%s:%d] ch=%u rtsp_out_queue not found",
-          _FILE_, __LINE__, info->ch);
+  if (info->sync_trace) {
+    out_queue =
+        gst_bin_get_by_name_recurse_up(GST_BIN(element), "rtsp_out_queue");
+    if (out_queue) {
+      g_signal_connect(out_queue, "overrun",
+                       (GCallback)rtsp_factory_queue_overrun, info);
+      __LOG(LOG_NOTICE,
+            "[RTSP_SYNC][%s:%d] ch=%u rtsp_out_queue overrun callback connected",
+            _FILE_, __LINE__, info->ch);
+      gst_object_unref(out_queue);
+    } else {
+      __LOG(LOG_ERR, "[RTSP_SYNC][%s:%d] ch=%u rtsp_out_queue not found",
+            _FILE_, __LINE__, info->ch);
+    }
   }
   /* appsrc 게시와 caps 적용을 한 임계구역에서 수행 — 스트리밍 스레드의
    * caps 갱신(g_object_set)과 전순서를 보장해 stale caps 덮어쓰기를 막는다 */
