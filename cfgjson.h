@@ -24,6 +24,15 @@ typedef enum {
 CfgArrStatus cfg_get_int_array(json_object *obj, const char *name, gint *out,
                                gsize n);
 
+typedef enum {
+  CFG_BOOL_OK = 0,
+  CFG_BOOL_MISSING,
+  CFG_BOOL_BAD_TYPE,
+  CFG_BOOL_BAD_VALUE
+} CfgBoolStatus;
+
+CfgBoolStatus cfg_get_bool(json_object *obj, const char *name, gboolean *out);
+
 #ifdef __cplusplus
 }
 #endif
