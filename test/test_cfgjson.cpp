@@ -135,6 +135,15 @@ int main(void) {
     json_object_put(o);
   }
 
+  /* 14. Explicit JSON null is present, not missing → BAD_TYPE + unchanged */
+  {
+    json_object *o = J("{\"frame_id_sei\":null}");
+    gboolean out = TRUE;
+    CHECK(cfg_get_bool(o, "frame_id_sei", &out) == CFG_BOOL_BAD_TYPE);
+    CHECK(out == TRUE);
+    json_object_put(o);
+  }
+
   printf("\ncfgjson test: %d checks, %d failures -> %s\n", g_checks, g_failures,
          g_failures ? "FAILED" : "PASSED");
   return g_failures ? 1 : 0;

@@ -10,16 +10,12 @@
 #include <signal.h>
 #include <string.h>
 
+#include "rtspValidation.h"
+
 #define SYNC_CHANNELS 4
-#define FRAME_ID_MAGIC_SIZE 8
-#define FRAME_ID_PAYLOAD_REST_SIZE 20
 #define DEFAULT_TEST_SECONDS 60
 #define DEFAULT_QUEUE_LIMIT 300
 #define SYNC_EPOCHS 8
-
-static const guint8 frame_id_magic[FRAME_ID_MAGIC_SIZE] = {
-    'G', 'S', 'T', 'S', 'Y', 'N', 'C', '1'
-};
 
 typedef struct
 {
@@ -67,6 +63,12 @@ struct _ClientData
     gint stall_after;
     gint stall_duration;
     gint stall_delay_ms;
+    gint expect_gap_channel;
+    gboolean expect_sei;
+    gboolean expect_eos;
+    gboolean allow_startup_loss;
+    gboolean fatal_bus;
+    gboolean eos_seen;
     gboolean stall_active;
     gboolean stall_started;
     gboolean stall_completed;
@@ -101,9 +103,14 @@ struct _ClientData
     guint64 channel_last_gap_last_id[SYNC_CHANNELS];
     guint64 channel_groups_after_gap[SYNC_CHANNELS];
     guint64 channel_duplicates[SYNC_CHANNELS];
+    guint64 channel_backwards[SYNC_CHANNELS];
     guint64 initial_drops[SYNC_CHANNELS];
     guint64 alignment_drops[SYNC_CHANNELS];
+    guint64 missing_sei[SYNC_CHANNELS];
+    guint64 startup_missing_sei[SYNC_CHANNELS];
     guint64 invalid_sei[SYNC_CHANNELS];
+    guint64 startup_gaps[SYNC_CHANNELS];
+    guint64 startup_gap_events[SYNC_CHANNELS];
     GstClockTime receive_spread_min;
     GstClockTime receive_spread_max;
     guint64 receive_spread_sum;
@@ -172,51 +179,6 @@ static void signal_handler(gint signum)
     }
     if (signal_loop)
         g_main_loop_quit(signal_loop);
-}
-
-static gboolean read_frame_id(const guint8 *data, gsize size,
-                              guint8 *version, guint8 *channel,
-                              guint64 *frame_id, guint64 *origin_pts)
-{
-    if (!data || size < FRAME_ID_MAGIC_SIZE + FRAME_ID_PAYLOAD_REST_SIZE)
-        return FALSE;
-
-    for (gsize offset = 0;
-         offset + FRAME_ID_MAGIC_SIZE + FRAME_ID_PAYLOAD_REST_SIZE <= size;
-         offset++)
-    {
-        if (memcmp(data + offset, frame_id_magic, FRAME_ID_MAGIC_SIZE) != 0)
-            continue;
-
-        guint8 payload[FRAME_ID_PAYLOAD_REST_SIZE] = { 0 };
-        guint payload_size = 0;
-        guint zero_count = 0;
-        gsize pos = offset + FRAME_ID_MAGIC_SIZE;
-
-        while (pos < size && payload_size < sizeof(payload))
-        {
-            guint8 value = data[pos++];
-            if (zero_count >= 2 && value == 0x03)
-            {
-                zero_count = 0;
-                continue;
-            }
-
-            payload[payload_size++] = value;
-            zero_count = value == 0 ? zero_count + 1 : 0;
-        }
-
-        if (payload_size != sizeof(payload))
-            return FALSE;
-
-        *version = payload[0];
-        *channel = payload[1];
-        *frame_id = GST_READ_UINT64_BE(payload + 4);
-        *origin_pts = GST_READ_UINT64_BE(payload + 12);
-        return TRUE;
-    }
-
-    return FALSE;
 }
 
 static void update_spread(GstClockTime spread, GstClockTime *minimum,
@@ -291,11 +253,22 @@ static gboolean create_channel_pipeline(ClientData *client, guint ch,
         return FALSE;
     }
 
-    g_signal_connect(sink, "new-sample", G_CALLBACK(new_sample_handler),
-                     &client->channel[ch]);
+    if (g_signal_connect(sink, "new-sample",
+                         G_CALLBACK(new_sample_handler),
+                         &client->channel[ch]) == 0)
+    {
+        gst_object_unref(sink);
+        destroy_channel_pipeline(client, ch);
+        return FALSE;
+    }
     gst_object_unref(sink);
 
     GstBus *bus = gst_element_get_bus(client->pipeline[ch]);
+    if (!bus)
+    {
+        destroy_channel_pipeline(client, ch);
+        return FALSE;
+    }
     client->bus_watch_id[ch] =
         gst_bus_add_watch(bus, bus_handler, &client->channel[ch]);
     gst_object_unref(bus);
@@ -572,46 +545,89 @@ static GstFlowReturn new_sample_handler(GstAppSink *sink, gpointer user_data)
 
     GstSample *sample = gst_app_sink_pull_sample(sink);
     if (!sample)
+    {
+        g_mutex_lock(&client->lock);
+        client->fatal_bus = TRUE;
+        client->stop_reason = "sample-error";
+        client->stop_time_us = g_get_monotonic_time();
+        g_mutex_unlock(&client->lock);
+        g_main_loop_quit(client->loop);
         return GST_FLOW_ERROR;
+    }
 
     GstBuffer *buffer = gst_sample_get_buffer(sample);
     GstMapInfo map = GST_MAP_INFO_INIT;
-    guint8 version = 0;
-    guint8 payload_channel = 0;
-    guint64 frame_id = 0;
-    guint64 origin_pts = 0;
-    gboolean magic_present = FALSE;
-    gboolean valid = buffer && gst_buffer_map(buffer, &map, GST_MAP_READ) &&
-                     read_frame_id(map.data, map.size, &version,
-                                   &payload_channel, &frame_id, &origin_pts);
-
-    if (buffer && map.data) {
-        for (gsize i = 0; i + FRAME_ID_MAGIC_SIZE <= map.size; i++) {
-            if (memcmp(map.data + i, frame_id_magic, FRAME_ID_MAGIC_SIZE) == 0) {
-                magic_present = TRUE;
-                break;
-            }
-        }
+    RtspFrameIdRecord record = {};
+    RtspFrameIdParseStatus parse_status = RTSP_FRAME_ID_PARSE_MALFORMED;
+    gsize sample_size = 0;
+    if (buffer && gst_buffer_map(buffer, &map, GST_MAP_READ))
+    {
+        sample_size = map.size;
+        parse_status = rtsp_frame_id_parse_au(
+            map.data, map.size, (guint8)channel->ch, &record);
+        gst_buffer_unmap(buffer, &map);
     }
 
-    if (buffer && map.data)
-        gst_buffer_unmap(buffer, &map);
-
     g_mutex_lock(&client->lock);
-    if (!valid || version != 1 || payload_channel != channel->ch)
+    if (parse_status == RTSP_FRAME_ID_PARSE_NOT_FRAME)
+    {
+        g_mutex_unlock(&client->lock);
+        gst_sample_unref(sample);
+        return GST_FLOW_OK;
+    }
+    if (parse_status == RTSP_FRAME_ID_PARSE_NOT_FOUND)
+    {
+        client->missing_sei[channel->ch]++;
+        if (!client->barrier_ready && client->barrier_count == 0)
+            client->startup_missing_sei[channel->ch]++;
+        if (client->missing_sei[channel->ch] <= 2)
+            g_print("FRAME_SYNC_MISSING ch=%u size=%" G_GSIZE_FORMAT
+                    " flags=0x%x pts_ns=%" G_GUINT64_FORMAT
+                    " dts_ns=%" G_GUINT64_FORMAT "\n",
+                    channel->ch, sample_size,
+                    buffer ? GST_BUFFER_FLAGS(buffer) : 0,
+                    buffer && GST_BUFFER_PTS_IS_VALID(buffer)
+                        ? GST_BUFFER_PTS(buffer) : GST_CLOCK_TIME_NONE,
+                    buffer && GST_BUFFER_DTS_IS_VALID(buffer)
+                        ? GST_BUFFER_DTS(buffer) : GST_CLOCK_TIME_NONE);
+        g_mutex_unlock(&client->lock);
+        gst_sample_unref(sample);
+        return GST_FLOW_OK;
+    }
+    if (parse_status != RTSP_FRAME_ID_PARSE_OK)
     {
         client->invalid_sei[channel->ch]++;
         if (client->invalid_sei[channel->ch] <= 2)
             g_print("FRAME_SYNC_INVALID ch=%u size=%" G_GSIZE_FORMAT
-                    " magic=%d version=%u payload_ch=%u\n",
-                    channel->ch, map.size, magic_present, version,
-                    payload_channel);
+                    " parse_status=%d\n",
+                    channel->ch, sample_size, parse_status);
         g_mutex_unlock(&client->lock);
         gst_sample_unref(sample);
         return GST_FLOW_OK;
     }
 
     guint ch = channel->ch;
+    const guint64 frame_id = record.frame_id;
+    const guint64 origin_pts = record.origin_pts;
+    RtspFrameOrder order = rtsp_frame_order_check(
+        client->channel_frames[ch] > 0, client->channel_last_id[ch], frame_id);
+    if (order == RTSP_FRAME_ORDER_DUPLICATE ||
+        order == RTSP_FRAME_ORDER_BACKWARD)
+    {
+        if (order == RTSP_FRAME_ORDER_DUPLICATE)
+            client->channel_duplicates[ch]++;
+        else
+            client->channel_backwards[ch]++;
+        g_print("FRAME_SYNC_REJECT_ORDER ch=%u id=%" G_GUINT64_FORMAT
+                " previous=%" G_GUINT64_FORMAT " order=%s\n",
+                ch, frame_id, client->channel_last_id[ch],
+                order == RTSP_FRAME_ORDER_DUPLICATE ? "duplicate" :
+                                                      "backward");
+        g_mutex_unlock(&client->lock);
+        gst_sample_unref(sample);
+        return GST_FLOW_OK;
+    }
+
     if (client->stall_completed && !client->stall_release_seen &&
         client->stall_channel == (gint)ch)
     {
@@ -629,7 +645,7 @@ static GstFlowReturn new_sample_handler(GstAppSink *sink, gpointer user_data)
     else if (client->expect_reconnect_first[ch])
     {
         guint64 skipped = 0;
-        if (frame_id > client->channel_last_id[ch] + 1)
+        if (order == RTSP_FRAME_ORDER_GAP)
         {
             skipped = frame_id - client->channel_last_id[ch] - 1;
             client->reconnect_skipped_ids[ch] += skipped;
@@ -640,15 +656,20 @@ static GstFlowReturn new_sample_handler(GstAppSink *sink, gpointer user_data)
                 G_GUINT64_FORMAT " skipped=%" G_GUINT64_FORMAT "\n",
                 ch, client->epoch, frame_id, skipped);
     }
-    else if (frame_id > client->channel_last_id[ch] + 1)
+    else if (order == RTSP_FRAME_ORDER_GAP)
     {
+        const guint64 skipped = frame_id - client->channel_last_id[ch] - 1;
         client->channel_gap_events[ch]++;
         client->channel_last_gap_first_id[ch] =
             client->channel_last_id[ch] + 1;
         client->channel_last_gap_last_id[ch] = frame_id - 1;
         client->channel_groups_after_gap[ch] = 0;
-        client->channel_gaps[ch] +=
-            frame_id - client->channel_last_id[ch] - 1;
+        client->channel_gaps[ch] += skipped;
+        if (!client->barrier_ready && client->barrier_count == 0)
+        {
+            client->startup_gap_events[ch]++;
+            client->startup_gaps[ch] += skipped;
+        }
         g_print("FRAME_SYNC_GAP ch=%u event=%" G_GUINT64_FORMAT
                 " first_missing=%" G_GUINT64_FORMAT " last_missing=%"
                 G_GUINT64_FORMAT " next_id=%" G_GUINT64_FORMAT "\n",
@@ -656,11 +677,6 @@ static GstFlowReturn new_sample_handler(GstAppSink *sink, gpointer user_data)
                 client->channel_last_gap_first_id[ch],
                 client->channel_last_gap_last_id[ch], frame_id);
     }
-    else if (frame_id <= client->channel_last_id[ch])
-    {
-        client->channel_duplicates[ch]++;
-    }
-
     client->channel_frames[ch]++;
     client->channel_last_id[ch] = frame_id;
 
@@ -705,18 +721,26 @@ static gboolean bus_handler(GstBus *bus, GstMessage *message,
         if (error)
             g_error_free(error);
         g_free(debug);
+        g_mutex_lock(&client->lock);
+        client->fatal_bus = TRUE;
         client->stop_reason = "error";
         client->stop_time_us = g_get_monotonic_time();
+        g_mutex_unlock(&client->lock);
         g_main_loop_quit(client->loop);
-        break;
+        client->bus_watch_id[channel->ch] = 0;
+        return G_SOURCE_REMOVE;
     }
     case GST_MESSAGE_EOS:
         g_print("FRAME_SYNC_EOS ch=%u source=%s\n",
                 channel->ch, GST_OBJECT_NAME(message->src));
+        g_mutex_lock(&client->lock);
+        client->eos_seen = TRUE;
         client->stop_reason = "eos";
         client->stop_time_us = g_get_monotonic_time();
+        g_mutex_unlock(&client->lock);
         g_main_loop_quit(client->loop);
-        break;
+        client->bus_watch_id[channel->ch] = 0;
+        return G_SOURCE_REMOVE;
     default:
         break;
     }
@@ -727,8 +751,10 @@ static gboolean bus_handler(GstBus *bus, GstMessage *message,
 static gboolean timeout_handler(gpointer user_data)
 {
     ClientData *client = (ClientData *)user_data;
+    g_mutex_lock(&client->lock);
     client->stop_reason = "timeout";
     client->stop_time_us = g_get_monotonic_time();
+    g_mutex_unlock(&client->lock);
     g_main_loop_quit(client->loop);
     return G_SOURCE_REMOVE;
 }
@@ -759,7 +785,8 @@ static void print_summary(ClientData *client)
             " receive_spread_max_ns=%" G_GUINT64_FORMAT
             " pts_spread_min_ns=%" G_GUINT64_FORMAT
             " pts_spread_avg_ns=%" G_GUINT64_FORMAT
-            " pts_spread_max_ns=%" G_GUINT64_FORMAT "\n",
+            " pts_spread_max_ns=%" G_GUINT64_FORMAT
+            " fatal_bus=%d eos=%d\n",
             client->stop_reason, elapsed_ms, client->barrier_ready,
             client->barrier_id, client->groups,
             client->barrier_count, client->reconnect_started,
@@ -773,7 +800,8 @@ static void print_summary(ClientData *client)
             receive_avg, client->receive_spread_max,
             client->pts_spread_min == GST_CLOCK_TIME_NONE
                 ? 0 : client->pts_spread_min,
-            pts_avg, client->pts_spread_max);
+            pts_avg, client->pts_spread_max,
+            client->fatal_bus, client->eos_seen);
 
     if (client->stall_channel >= 0)
     {
@@ -823,21 +851,36 @@ static void print_summary(ClientData *client)
                 " first_id=%" G_GUINT64_FORMAT " last_id=%"
                 G_GUINT64_FORMAT " gaps=%" G_GUINT64_FORMAT
                 " gap_events=%" G_GUINT64_FORMAT
+                " startup_gaps=%" G_GUINT64_FORMAT
+                " startup_gap_events=%" G_GUINT64_FORMAT
+                " operational_gap_events=%" G_GUINT64_FORMAT
                 " last_gap_first=%" G_GUINT64_FORMAT
                 " last_gap_last=%" G_GUINT64_FORMAT
                 " groups_after_gap=%" G_GUINT64_FORMAT
-                " duplicates=%" G_GUINT64_FORMAT " initial_drop=%"
+                " duplicates=%" G_GUINT64_FORMAT " backwards=%"
+                G_GUINT64_FORMAT " initial_drop=%"
                 G_GUINT64_FORMAT " alignment_drop=%" G_GUINT64_FORMAT
-                " invalid_sei=%" G_GUINT64_FORMAT " queued=%u\n",
+                " missing_sei=%" G_GUINT64_FORMAT " invalid_sei=%"
+                G_GUINT64_FORMAT " startup_missing_sei=%"
+                G_GUINT64_FORMAT " operational_missing_sei=%"
+                G_GUINT64_FORMAT " queued=%u\n",
                 ch, client->channel_frames[ch],
                 client->channel_first_id[ch], client->channel_last_id[ch],
                 client->channel_gaps[ch], client->channel_gap_events[ch],
+                client->startup_gaps[ch],
+                client->startup_gap_events[ch],
+                client->channel_gap_events[ch] -
+                    client->startup_gap_events[ch],
                 client->channel_last_gap_first_id[ch],
                 client->channel_last_gap_last_id[ch],
                 client->channel_groups_after_gap[ch],
                 client->channel_duplicates[ch],
+                client->channel_backwards[ch],
                 client->initial_drops[ch], client->alignment_drops[ch],
-                client->invalid_sei[ch],
+                client->missing_sei[ch], client->invalid_sei[ch],
+                client->startup_missing_sei[ch],
+                client->missing_sei[ch] -
+                    client->startup_missing_sei[ch],
                 g_queue_get_length(&client->queue[ch]));
         if (client->reconnect_skipped_ids[ch] > 0)
         {
@@ -865,6 +908,10 @@ int main(int argc, char *argv[])
     gint stall_after = 0;
     gint stall_duration = 0;
     gint stall_delay_ms = 0;
+    gint expect_gap_channel = -1;
+    gboolean expect_sei = TRUE;
+    gboolean expect_eos = FALSE;
+    gboolean allow_startup_loss = FALSE;
     GOptionEntry options[] = {
         { "host", 0, 0, G_OPTION_ARG_STRING, &host, "RTSP server host", NULL },
         { "port", 0, 0, G_OPTION_ARG_INT, &port, "RTSP server port", NULL },
@@ -892,6 +939,16 @@ int main(int argc, char *argv[])
           &stall_duration, "Client-side stall duration in seconds", NULL },
         { "stall-delay-ms", 0, 0, G_OPTION_ARG_INT,
           &stall_delay_ms, "Delay per sample during stall", NULL },
+        { "expect-gap-channel", 0, 0, G_OPTION_ARG_INT,
+          &expect_gap_channel,
+          "Channel allowed one or more intentional forward gaps", NULL },
+        { "expect-sei", 0, 0, G_OPTION_ARG_INT, &expect_sei,
+          "Require Frame ID SEI (0=OFF smoke, 1=strict; default 1)", NULL },
+        { "expect-eos", 0, 0, G_OPTION_ARG_NONE, &expect_eos,
+          "Treat EOS as the expected terminal condition", NULL },
+        { "allow-startup-loss", 0, 0, G_OPTION_ARG_NONE,
+          &allow_startup_loss,
+          "Allow only pre-first-barrier missing SEI/forward-ID loss", NULL },
         { NULL }
     };
 
@@ -912,6 +969,12 @@ int main(int argc, char *argv[])
     if (port <= 0 || port > 65535 || seconds <= 0)
     {
         g_printerr("invalid port or seconds\n");
+        return 1;
+    }
+    if (reconnect_channel < -1 || stall_channel < -1 ||
+        expect_gap_channel < -1)
+    {
+        g_printerr("channel options must be -1 or a video channel\n");
         return 1;
     }
     if (reconnect_channel >= 0 && reconnect_count == 0)
@@ -953,6 +1016,24 @@ int main(int argc, char *argv[])
         g_printerr("stall and reconnect modes cannot be combined\n");
         return 1;
     }
+    if (expect_sei != FALSE && expect_sei != TRUE)
+    {
+        g_printerr("expect-sei must be 0 or 1\n");
+        return 1;
+    }
+    if (expect_gap_channel >= SYNC_CHANNELS ||
+        (expect_gap_channel >= 0 &&
+         (stall_channel >= 0 || reconnect_channel >= 0)))
+    {
+        g_printerr("invalid or conflicting expect-gap-channel\n");
+        return 1;
+    }
+    if (!expect_sei && (expect_gap_channel >= 0 || stall_channel >= 0 ||
+                        reconnect_channel >= 0 || allow_startup_loss))
+    {
+        g_printerr("SEI OFF smoke cannot combine with impairment modes\n");
+        return 1;
+    }
 
     ClientData client = {};
     client.loop = g_main_loop_new(NULL, FALSE);
@@ -968,6 +1049,10 @@ int main(int argc, char *argv[])
     client.stall_after = stall_after;
     client.stall_duration = stall_duration;
     client.stall_delay_ms = stall_delay_ms;
+    client.expect_gap_channel = expect_gap_channel;
+    client.expect_sei = expect_sei;
+    client.expect_eos = expect_eos;
+    client.allow_startup_loss = allow_startup_loss;
     client.host = host;
     client.user = user;
     client.password = password;
@@ -1021,7 +1106,7 @@ int main(int argc, char *argv[])
             g_printerr("pipeline ch%u state change failed\n", ch);
             for (guint cleanup = 0; cleanup < SYNC_CHANNELS; cleanup++)
                 destroy_channel_pipeline(&client, cleanup);
-            return 1;
+            return 2;
         }
     }
 
@@ -1029,12 +1114,15 @@ int main(int argc, char *argv[])
             " reconnect_channel=%d reconnect_after=%d reconnect_gap=%d"
             " reconnect_count=%d reconnect_interval=%d"
             " stall_channel=%d stall_after=%d stall_duration=%d"
-            " stall_delay_ms=%d\n",
+            " stall_delay_ms=%d expect_gap_channel=%d expect_sei=%d"
+            " expect_eos=%d allow_startup_loss=%d\n",
             host, port, seconds, client.reconnect_channel,
             client.reconnect_after, client.reconnect_gap,
             client.reconnect_count, client.reconnect_interval,
             client.stall_channel, client.stall_after,
-            client.stall_duration, client.stall_delay_ms);
+            client.stall_duration, client.stall_delay_ms,
+            client.expect_gap_channel, client.expect_sei,
+            client.expect_eos, client.allow_startup_loss);
     client.start_time_us = g_get_monotonic_time();
     g_main_loop_run(client.loop);
     if (client.stop_time_us == 0)
@@ -1057,8 +1145,40 @@ int main(int argc, char *argv[])
     g_free(user);
     g_free(host);
 
-    gboolean success = client.barrier_ready && client.groups > 0 &&
-                       client.group_mismatches == 0;
+    gboolean success = rtsp_validation_stop_is_expected(
+        client.stop_reason, client.fatal_bus, client.eos_seen,
+        client.expect_eos);
+    success = success && client.group_mismatches == 0;
+    if (client.expect_sei)
+        success = success && client.barrier_ready && client.groups > 0;
+    else
+        success = success && !client.barrier_ready && client.groups == 0;
+
+    for (guint ch = 0; ch < SYNC_CHANNELS; ch++)
+    {
+        const gboolean gap_expected =
+            client.expect_gap_channel == (gint)ch ||
+            client.stall_channel == (gint)ch;
+        RtspFrameSyncChannelValidation validation = {};
+        validation.expect_sei = client.expect_sei;
+        validation.expect_gap = gap_expected;
+        validation.allow_startup_loss = client.allow_startup_loss;
+        validation.accepted_frames = client.channel_frames[ch];
+        validation.missing_sei = client.missing_sei[ch];
+        validation.invalid_sei = client.invalid_sei[ch];
+        validation.duplicates = client.channel_duplicates[ch];
+        validation.backwards = client.channel_backwards[ch];
+        validation.gap_events = client.channel_gap_events[ch];
+        validation.groups_after_gap = client.channel_groups_after_gap[ch];
+        validation.startup_missing_sei =
+            client.startup_missing_sei[ch];
+        validation.startup_gap_events = client.startup_gap_events[ch];
+        success = success &&
+                  rtsp_frame_sync_channel_validation_success(&validation);
+
+        if (client.expect_gap_channel < 0 && client.stall_channel < 0)
+            success = success && client.alignment_drops[ch] == 0;
+    }
     if (client.reconnect_channel >= 0)
     {
         success = success && client.reconnect_started &&

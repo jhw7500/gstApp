@@ -902,6 +902,17 @@ gint main(gint argc, gchar *argv[]) {
   // TestBin audioBin;
   AudioBin audioBin;
 
+  /* Start the server before any video or audio factory registers a mount.
+   * Keeping this outside the video loop also supports an audio-only RTSP
+   * configuration and avoids passing a NULL mount table to audioInit(). */
+  if (cmdArg.stream_en[STREAM_RTSP]) {
+    if (!rtspServerStart()) {
+      __LOG(LOG_CRIT, "[RTSP][%s:%d] rtsp server attach failed", _FILE_,
+            __LINE__);
+      goto main_end;
+    }
+  }
+
   for (i = 0; i < MAX_CHANNEL; i++) {
     // if(!(cmdArg.ch_enable & (0x1 << i))) continue;
     if (!cmdArg.cam[i].enable)
@@ -1034,12 +1045,6 @@ gint main(gint argc, gchar *argv[]) {
     }
 
     if (cmdArg.stream_en[STREAM_RTSP]) {
-      if (!rtspServerStart()) {
-        __LOG(LOG_CRIT, "[RTSP][%s:%d] rtsp server attach failed", _FILE_,
-              __LINE__);
-        goto main_end;
-      }
-
       if (!rtspServerBin[i].init(i, cmdArg.crop_en[csiNum])) {
         __LOG(LOG_CRIT, "[GST][%s:%d] ch%d rtsp pad link err", _FILE_, __LINE__,
               i);
@@ -1079,47 +1084,63 @@ gint main(gint argc, gchar *argv[]) {
       // __LINE__, chNum);
     }
 
-    if (cmdArg.audio_en) {
+  }
 
-      audioBin.init();
+  /* AudioBin is shared by every recording mux and the audio RTSP mount.  It
+   * must be constructed once, after all enabled video/mux bins exist; doing
+   * this in the channel loop rebuilt the same named elements for every camera
+   * and prevented the H.265 + audio configuration from reaching PLAYING. */
+  if (cmdArg.audio_en) {
+    if (!audioBin.init()) {
+      __LOG(LOG_CRIT, "[GST][%s:%d] audio bin init err", _FILE_, __LINE__);
+      goto main_end;
+    }
 
-      if (!audioBin.addBinSrcPad(i)) {
-        __LOG(LOG_CRIT, "[GST][%s:%d] ch%d audio src pad add err", _FILE_,
-              __LINE__, i);
-        goto main_end;
-      }
+    if (cmdArg.stream_en[STREAM_REC]) {
+      for (i = 0; i < MAX_CHANNEL; i++) {
+        if (!cmdArg.cam[i].enable)
+          continue;
 
-      if (!muxSinkBin[i].addBinAudioSinkPad()) {
-        __LOG(LOG_CRIT, "[GST][%s:%d] ch%d audio sink pad add err", _FILE_,
-              __LINE__, i);
-        goto main_end;
-      }
+        if (!audioBin.addBinSrcPad(i)) {
+          __LOG(LOG_CRIT, "[GST][%s:%d] ch%d audio src pad add err", _FILE_,
+                __LINE__, i);
+          goto main_end;
+        }
 
-      if (gst_pad_link(audioBin.getBinSrcPad(i),
-                       muxSinkBin[i].getBinAudioSinkPad()) != GST_PAD_LINK_OK) {
-        __LOG(LOG_CRIT, "[GST][%s:%d] ch%d audio pad link err", _FILE_,
-              __LINE__, i);
-        // return -1;
-        goto main_end;
-      } else
+        if (!muxSinkBin[i].addBinAudioSinkPad()) {
+          __LOG(LOG_CRIT, "[GST][%s:%d] ch%d audio sink pad add err", _FILE_,
+                __LINE__, i);
+          goto main_end;
+        }
+
+        if (gst_pad_link(audioBin.getBinSrcPad(i),
+                         muxSinkBin[i].getBinAudioSinkPad()) !=
+            GST_PAD_LINK_OK) {
+          __LOG(LOG_CRIT, "[GST][%s:%d] ch%d audio pad link err", _FILE_,
+                __LINE__, i);
+          goto main_end;
+        }
         __LOG(LOG_INFO, "[GST][%s:%d] ch%d audio pad link", _FILE_, __LINE__,
               i);
-#if 1
-      if (rtspServerBin[4].audioInit()) {
-        if (!audioBin.addBinSrcPad(4)) {
-          __LOG(LOG_CRIT, "[GST][%s:%d] rtsp audio src pad add err", _FILE_,
-                __LINE__);
-          goto main_end;
-        }
-
-        if (gst_pad_link(audioBin.getBinSrcPad(4),
-                         rtspServerBin[4].getBinSinkPad()) != GST_PAD_LINK_OK) {
-          __LOG(LOG_CRIT, "[GST][%s:%d] rtsp audio pad link err", _FILE_,
-                __LINE__);
-          goto main_end;
-        }
       }
-#endif
+    }
+
+    if (cmdArg.stream_en[STREAM_RTSP]) {
+      if (!rtspServerBin[4].audioInit()) {
+        __LOG(LOG_CRIT, "[GST][%s:%d] rtsp audio init err", _FILE_, __LINE__);
+        goto main_end;
+      }
+      if (!audioBin.addBinSrcPad(4)) {
+        __LOG(LOG_CRIT, "[GST][%s:%d] rtsp audio src pad add err", _FILE_,
+              __LINE__);
+        goto main_end;
+      }
+      if (gst_pad_link(audioBin.getBinSrcPad(4),
+                       rtspServerBin[4].getBinSinkPad()) != GST_PAD_LINK_OK) {
+        __LOG(LOG_CRIT, "[GST][%s:%d] rtsp audio pad link err", _FILE_,
+              __LINE__);
+        goto main_end;
+      }
     }
   }
 

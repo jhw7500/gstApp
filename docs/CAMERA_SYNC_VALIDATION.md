@@ -41,7 +41,7 @@
 | CSI0 구성 | bus 2, AP1302 `0x11`=ch0, `0x12`=ch1 |
 | CSI1 구성 | bus 1, AP1302 `0x11`=ch2, `0x12`=ch3 |
 | 물리 동기 신호 | CSI0/CSI1의 센서와 ISP가 동일 FSYNC pin 사용 |
-| V4L2 장치 | CSI0=`/dev/video3`, CSI1=`/dev/video4` |
+| V4L2 장치 | CSI0(bus 2)=`/dev/video4`, CSI1(bus 1)=`/dev/video3` |
 | V4L2 프레임 구성 | CSI별 FHD 2채널을 3840x1080 한 프레임으로 결합 |
 
 공통 FSYNC 배선은 하드웨어 구성 사실이다. 아래 시험은 센서 노출 시작 신호를
@@ -2033,6 +2033,18 @@ mv /root/shared_v/edgeconf_pim.json.sync.tmp \
      복구됐다. 전체 공통 group은 279개, `group_mismatches=0`이므로 서로 다른
      Frame ID를 한 group으로 묶은 사례는 없었다.
 
+6. **종료 시점 `GST_FLOW_FLUSHING` 기록 보완**
+   - **직접 측정:** JSON ON server log의 ch3에서 1회(line 94), CLI OFF server
+     log의 ch0/ch1에서 각 1회(lines 82, 86), 합계 3회의
+     `appsrc push failed: -2`가 있었다. `-2`는 `GST_FLOW_FLUSHING`이며 세 건은
+     모두 해당 수동 process의 종료/NULL 전환 시각에 기록됐다.
+   - **직접 측정:** 각 시험의 정상 측정 구간과 20초 trace summary에서는
+     operational `push_fail`이 0이었고 server/client 생존성 실패도 없었다.
+   - **해석(추론):** 위 세 건은 실행 중 전송 장애가 아니라 종료 과정에서
+     downstream이 flushing 상태로 먼저 바뀐 뒤 남은 producer callback이
+     push한 teardown race로 판단한다. 이 해석은 로그 시각과 상태 전환 순서에
+     근거한 추론이며, 정상 운용 중 push failure와 구분해 기록한다.
+
 #### 해석과 판정 한계
 
 - **해석:** 기본값에서는 기존 RTSP 동작을 유지하며 모든 선택 probe가
@@ -2064,6 +2076,160 @@ mv /root/shared_v/edgeconf_pim.json.sync.tmp \
 
 운영 service를 복구하고 위 항목을 확인한 뒤에만 원격 원시 자료와 시험
 binary를 삭제했다. 삭제 전 모든 raw log는 위 로컬 경로에 복사했다.
+
+
+### 3.30 최종 검토 결함 보완과 RTSP 세대/decoder/종료 검증
+
+#### 목적과 구현 범위
+
+3.29의 설정 시험 뒤 최종 코드 검토에서 발견된 Critical 2건, Important 6건,
+Minor 3건을 한 번에 보완했다. 이 절은 각 결함의 코드/결정적 시험 근거와
+타겟에서 직접 측정한 결과를 구분해 기록한다.
+
+1. **SEI 대상과 입력 계약**
+   - 공통 sample handler와 삽입 helper 모두 video channel
+     `0..MAX_CHANNEL-1`, H.265, 고정 caps
+     `video/x-h265,stream-format=byte-stream,alignment=au`, 양의 framerate와
+     완전한 Annex-B AU를 확인한 뒤에만 SEI parser를 호출한다.
+   - single/dual encoder의 RTSP 경로 모두 `h265parse` 뒤 strict capsfilter를
+     지나 appsink에 도달한다. audio ch4는 MPEG 경로로만 전달되며 SEI 대상이
+     아니다.
+   - shared `AudioBin`은 video loop 뒤 한 번만 초기화하고 recording mux와
+     RTSP ch4로 fan-out한다. RTSP server는 mount 등록 전에 한 번만 시작하며,
+     record-only audio에서는 ch4 RTSP mount를 만들지 않는다.
+
+2. **Frame ID rate**
+   - payload Frame ID는 설정 배열이 아니라 sample의 실제 negotiated caps
+     framerate와 PTS에서 계산한다.
+   - single encoder에서는 effective RTSP fps를 record encoder fps와 맞추고,
+     dual encoder는 독립 RTSP fps를 유지한다. zero/invalid fraction과 channel
+     범위 오류는 output sentinel을 바꾸지 않고 실패한다.
+
+3. **엄격한 standalone client와 decoder 판정**
+   - Frame ID client는 bounded Annex-B scanner로 모든 NAL header를 검증하고,
+     prefix/suffix SEI type, payload type 4, size 30, T.35 `ff/c1`, magic
+     `GSTSYNC1`, version/channel/reserved, big-endian 64-bit 값과 정확한 RBSP
+     trailing bits를 확인한다. 임의 byte 검색은 제거했다.
+   - duplicate/backward ID는 queue/last-ID 갱신 전에 거부한다. 기본 모드는
+     missing/invalid/duplicate/backward/gap/alignment와 ERROR/EOS를 모두
+     실패로 판정한다. OFF, 의도적 channel gap, reconnect/startup loss는
+     충돌 불가능한 명시 option에서만 허용한다.
+   - decoder client는 ERROR/EOS를 fatal로 추적하고, threshold 이상의 **매
+     qualifying gap**마다 이전 recovery 증거를 초기화한다. PASS에는 gap 전
+     decoded sample, 주입 gap, 그 뒤 IDR, 그 IDR 이후 decoded sample이 모두
+     필요하다.
+
+4. **media generation과 종료**
+   - media configure마다 refcounted generation을 새로 만들고 trace/probe/pad/
+     signal hook를 소유하게 했다. callback은 generation ref를 들고 inactive
+     또는 과거 generation을 거부한다. unprepare는 먼저 deactivate한 뒤
+     일치하는 generation만 detach하고 hook를 lock 밖에서 제거한다.
+   - test stall은 20ms 이하 slice로 interruption/generation active 상태를
+     확인하고 완료 또는 취소 뒤 `GST_PAD_PROBE_REMOVE`를 반환한다.
+   - 종료 시 listener source ID를 먼저 제거하고 기존 RTSP client를
+     `GST_RTSP_FILTER_REMOVE`로 닫은 뒤 timer, mount와 server ref를 해제한다.
+     이 순서는 종료 도중 새 media가 생성되거나 `gst_deinit()`이 남은 RTSP
+     task를 기다리는 상황을 막는다.
+
+5. **설정과 trace 의미**
+   - `cfg_get_bool()`은 `json_object_object_get_ex()`로 absent와 explicit null을
+     구분한다. null은 `CFG_BOOL_BAD_TYPE`이며 caller output은 그대로다.
+   - trace용 `origin_index`와 표준 timestamp meta duration의 ordinal 저장을
+     제거했다. duration은 `GST_CLOCK_TIME_NONE`, timestamp는 원본 PTS만 담는다.
+   - 3.29의 teardown `GST_FLOW_FLUSHING` 3건과 1절의 CSI/video device mapping도
+     각각 직접 측정/추론 구분과 실제 default에 맞게 보정했다.
+
+#### 결정적 local/target test
+
+`testRtspSync`는 caps/AU/rate/generation/cancel core를 63개 assertion으로,
+`testRtspValidation`은 Annex-B/SEI/verdict/IDR/최신-gap recovery를 92개
+assertion으로 검증했다. `testCfgjson`은 explicit null과 unchanged sentinel을
+포함한 30개 assertion을 통과했다. source gate는 media hook 수명, strict caps,
+RTSP listener/client/mount teardown, shared audio 및 server-start 순서를 확인한다.
+
+타겟 시험 환경은 server `192.168.214.4`, client `192.168.214.8`이다. 운영
+`/usr/local/bin/gstApp`를 변경하지 않고 시험 binary는 `/tmp`에만 복사해 SHA를
+확인했다. 전체 기능 실행 `20260813_230702`의 시험 server SHA는
+`050f294df8b705126d81134759967db1b5fec7b163c5c880e8b9edc5ec72ed93`,
+최종 teardown 보완 뒤 집중 실행의 server SHA는
+`ce279732e7115e3677405c3ed657db2ef3534fd4ba06e46a14fd9f22637adf5b`이다.
+
+#### 직접 측정한 사실
+
+1. **기본/엄격 parser 판정**
+   - 기본 OFF 60초에서 네 channel은 압축 AU 906/906/909/908개를 받았고
+     barrier/group은 0, invalid SEI와 fatal bus는 0이었다.
+   - JSON ON strict 60초에서 공통 ID 68..961의 894 group을 만들었다. 네
+     channel의 operational missing, invalid, duplicate, backward, gap,
+     alignment drop과 `group_mismatches`는 모두 0이었다.
+   - 최종 binary 집중 실행 `20260813_235111`에서 ch1을 6회 재접속했다.
+     7 epoch, 510 group을 만들었고 네 channel의 missing/invalid/duplicate/
+     backward/gap은 모두 0, `fatal_bus=0`, `group_mismatches=0`이었다.
+
+2. **H.265 + MPEG audio ch4**
+   - 최종 binary 실행 `20260813_235446`에서 ch4
+     `rtpmpadepay ! mpegaudioparse` client가 정상 종료했고 `media connect ch:4`를
+     확인했다. server에서 Frame ID enable log는 video ch0~ch3 네 건뿐이며
+     ch4 삽입 시도/실패는 0이었다.
+   - video 네 generation의 20초 summary는 channel당 300 frame, SEI
+     inserted/failed 300/0, push failure 0이었다. strict client는 ID 85..907의
+     823 group, 모든 channel missing/invalid/gap/duplicate/backward 0,
+     mismatch 0이었다.
+
+3. **서로 다른 single-encoder 설정 fps**
+   - `frec=30, frtsp=15`에서 35초 동안 ID 140..1179의 1,040 group,
+     `frec=15, frtsp=30`에서 ID 70..599의 530 group을 만들었다.
+   - 두 방향 모두 네 channel의 operational gap, duplicate, backward,
+     missing/invalid SEI와 group mismatch가 0이었다. 따라서 실제 negotiated
+     encoder rate와 Frame ID 증가율이 일치했다.
+
+4. **generation reconnect와 decoder recovery**
+   - 20초 RTSP trace 도중 ch2를 2초 끊은 실행에서 generation 1 deactivate,
+     generation 2 enable과 새 300-frame summary를 각각 확인했다. client는 두
+     epoch에서 941 group, reconnect 1/1, mismatch 0이었다.
+   - decoder 시험은 server가 ch2를 4초 정체한 start/end log를 각각 1회 남겼다.
+     client가 측정한 qualifying gap은 4,042.145ms였다. gap 전 decode, gap 뒤
+     recovery IDR 21개와 그 IDR 이후 decode를 확인해 `verdict=PASS`였으며
+     fatal/EOS는 0이었다.
+
+5. **3600초 stall 취소와 process 종료**
+   - 최종 binary 실행 `20260813_234804`에서 SIGTERM log
+     `14:49:03.636`, stall cancel `14:49:03.646`으로 취소 표식은 약 10ms 뒤
+     나타났다. pipeline unref는 `14:49:03.978`이었다.
+   - identity/start-time을 고정한 `/proc` 100ms poll에서 PID는 4번째 poll 안에
+     사라져 `EXITED=1`이었다. 한 시간을 기다리거나 watchdog KILL을 사용하지
+     않았다.
+
+#### 해석, 한계와 원복
+
+- **직접 측정:** 위 숫자는 각 raw log의 summary와 harness assertion에서 읽은
+  값이다. 마지막 세 집중 실행은 최종 teardown 보완 binary SHA로 수행했다.
+- **해석(추론):** 전체 기능 실행 뒤 추가된 listener/client/mount 정리는
+  RTSP stop 수명에만 작용한다. 그 뒤 최종 binary로 strict 6회 reconnect,
+  H.265+audio와 bounded shutdown을 다시 통과했으므로 앞선 fps/decoder 측정의
+  데이터 경로 결론을 바꾸지 않는다고 판단한다.
+- **한계:** 시험은 15/30fps에서 phase당 약 20~65초인 bounded 검증이다. 수시간
+  memory plateau, 여러 channel 동시 장애와 실제 표시 화면의 복구 latency는
+  별도 장기 검증 대상이다.
+
+원시 자료는 다음 경로에 보존했다.
+
+- 전체 기능 phase(OFF/JSON/trace/stall/audio/fps/reconnect/decoder):
+  `tmp/target-192.168.214.4/rtsp_sync_final_fix_20260813_230702/`
+- 최종 binary bounded shutdown PASS:
+  `tmp/target-192.168.214.4/rtsp_sync_final_fix_20260813_234804/`
+- 최종 binary strict 6회 reconnect:
+  `tmp/target-192.168.214.4/rtsp_sync_final_fix_20260813_235111/`
+- 최종 binary H.265+audio:
+  `tmp/target-192.168.214.4/rtsp_sync_final_fix_20260813_235446/`
+
+마지막 실행 뒤 직접 확인한 원복 상태는 service `active`, 운영 file/process SHA
+`3bf7329ff5cd5f3a1fa536291bd3ec192d1c2cf113289c5488d31c0e27f7566b`,
+config SHA
+`e4787e7bfa8e41ce950e27a3b52ea30197eb512d40a0542f5b998c5ce92616c6`,
+명령 `gstApp -d 22 -m 4`, video FD 정확히 4개, 8554 listen, 수동 server/frame/
+decoder process 0, 임시 backup/원격 시험 artifact 0이다. 원복 뒤 운영 네
+channel Annex-B flow도 다시 확인했다.
 
 ## 4. 현재까지의 결론
 
@@ -2149,6 +2315,19 @@ binary를 삭제했다. 삭제 전 모든 raw log는 위 로컬 경로에 복사
     test-mode-only stall을 타겟에서 충족했다. 20초 trace에서는 세 summary
     범주와 channel별 callback만 조건부로 활성화됐고, ch2 10초 stall 뒤에도
     잘못된 Frame ID group 없이 공통 barrier가 재개됐다.
+35. bounded H.265 parser와 엄격 verdict를 적용한 client가 JSON ON 894 group 및
+    6회 반복 재접속 510 group을 missing/invalid/duplicate/backward/gap/mismatch
+    없이 검증했다.
+36. H.265 video 네 channel과 MPEG audio ch4를 함께 실행해 video SEI 1,200회,
+    ch4 MPEG flow, strict 공통 ID 823 group을 확인했고 ch4 SEI 접근은 0이었다.
+37. single encoder의 `frec/frtsp`를 30/15와 15/30으로 서로 다르게 설정해도
+    negotiated rate 기반 Frame ID는 각각 1,040/530 group에서 duplicate와
+    gap을 만들지 않았다.
+38. media별 trace generation은 reconnect에서 구분됐고 decoder는 주입한
+    4.042초 gap 뒤 IDR/decoded output까지 확인했다. 3600초 시험 stall은
+    SIGTERM 약 10ms 뒤 취소됐고 process는 100ms poll 네 번 안에 종료됐다.
+39. 최종 모든 타겟 실행 뒤 운영 binary/config/process SHA, 명령, video FD 4개,
+    RTSP port와 실제 네 channel flow를 원본 상태로 복구했다.
 
 아직 증명되지 않은 사항은 다음과 같다.
 
@@ -2158,7 +2337,8 @@ binary를 삭제했다. 삭제 전 모든 raw log는 위 로컬 경로에 복사
    제품 server/client 기능으로 적용할지 여부
 4. 장시간 정상망에서 드물게 한 frame을 넘은 도착 spread를 제품 client의
    buffering/timeout 정책으로 제한했을 때 화면 지연과 폐기율
-5. frame 폐기 후 실제 decoder 화면이 다음 IDR에서 정상화되는 시간
+5. 단일 주입 gap의 decoded-buffer 복구는 확인했지만, 여러 channel 동시 장애,
+   반복/장시간 장애와 실제 표시 화면이 다음 IDR에서 정상화되는 시간
 
 3번은 H.265 SEI prototype과 standalone client로 기술적 해결 가능성을 확인했다.
 제품 적용 여부, payload 식별자 할당, 장애/재접속 정책 및 H.264 지원 범위는

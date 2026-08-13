@@ -54,17 +54,26 @@ CXXFLAGS += $(ALL_CFLAGS) $(CPP_PERF_FLAGS)
 
 ALLFLAGS=$(ALL_CFLAGS) $(ALL_LDFLAGS) -lturbojpeg
 #OBJS = videoBin.o recordBin.o muxSinkBin.o rtspServerBin.o audioBin.o muxBin.o
-OBJS = videoBin.o recordBin.o muxSinkBin.o rtspServerBin.o testBin.o captureBin.o util.o parser.o cfgjson.o aes.o tcpServer.o audioBin.o ipc.o encoderBin.o
+OBJS = videoBin.o recordBin.o muxSinkBin.o rtspServerBin.o rtspSync.o testBin.o captureBin.o util.o parser.o cfgjson.o aes.o tcpServer.o audioBin.o ipc.o encoderBin.o
 
 $(OUTPUT)/gstApp : $(OBJS) main.cpp | $(OUTPUT) $(OBJ)
 	$(CXX) $(CPP_PERF_FLAGS) -o $@ $^ $(ALLFLAGS)
 	mv *.o $(OBJ)
 
-$(OUTPUT)/rtspFrameSyncClient : test/rtspFrameSyncClient.cpp | $(OUTPUT)
-	$(CXX) $(CPP_PERF_FLAGS) -o $@ $< $(ALLFLAGS)
+$(OUTPUT)/rtspFrameSyncClient : test/rtspFrameSyncClient.cpp test/rtspValidation.cpp test/rtspValidation.h rtspFrameId.h | $(OUTPUT)
+	$(CXX) $(CPP_PERF_FLAGS) -o $@ test/rtspFrameSyncClient.cpp test/rtspValidation.cpp $(ALLFLAGS)
 
-$(OUTPUT)/decoderRecoveryClient : test/decoderRecoveryClient.cpp | $(OUTPUT)
-	$(CXX) $(CPP_PERF_FLAGS) -o $@ $< $(ALLFLAGS)
+$(OUTPUT)/decoderRecoveryClient : test/decoderRecoveryClient.cpp test/rtspValidation.cpp test/rtspValidation.h rtspFrameId.h | $(OUTPUT)
+	$(CXX) $(CPP_PERF_FLAGS) -o $@ test/decoderRecoveryClient.cpp test/rtspValidation.cpp $(ALLFLAGS)
+
+$(OUTPUT)/testRtspSync : test/test_rtspSync.cpp rtspSync.cpp rtspSync.h | $(OUTPUT)
+	$(CXX) $(CPP_PERF_FLAGS) -o $@ test/test_rtspSync.cpp rtspSync.cpp $(ALLFLAGS)
+
+$(OUTPUT)/testRtspValidation : test/test_rtspValidation.cpp test/rtspValidation.cpp test/rtspValidation.h rtspFrameId.h | $(OUTPUT)
+	$(CXX) $(CPP_PERF_FLAGS) -o $@ test/test_rtspValidation.cpp test/rtspValidation.cpp $(ALLFLAGS)
+
+$(OUTPUT)/testCfgjson : test/test_cfgjson.cpp cfgjson.cpp cfgjson.h | $(OUTPUT)
+	$(CXX) $(CPP_PERF_FLAGS) -o $@ test/test_cfgjson.cpp cfgjson.cpp $(ALLFLAGS)
 
 $(OUTPUT) $(OBJ) :
 	mkdir -p $@
@@ -78,8 +87,11 @@ recordBin.o : recordBin.cpp recordBin.h
 muxSinkBin.o : muxSinkBin.cpp muxSinkBin.h
 	$(CXX) $(CXXFLAGS) -c muxSinkBin.cpp
 
-rtspServerBin.o : rtspServerBin.cpp rtspServerBin.h
+rtspServerBin.o : rtspServerBin.cpp rtspServerBin.h rtspFrameId.h rtspSync.h
 	$(CXX) $(CXXFLAGS) -c rtspServerBin.cpp
+
+rtspSync.o : rtspSync.cpp rtspSync.h util.h
+	$(CXX) $(CXXFLAGS) -c rtspSync.cpp
 
 #muxBin.o : muxBin.cpp muxBin.h
 #	$(CXX) $(CXXFLAGS) -c muxBin.cpp
