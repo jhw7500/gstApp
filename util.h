@@ -205,6 +205,13 @@ typedef struct _CmdArg
     gint rtsp_factory_queue_max_buffers;
     gint rtsp_bin_queue_max_time_ms;
     gint rtsp_appsrc_max_bytes;
+    gboolean rtsp_frame_id_sei;
+    gint v4l2_sync_trace_sec;
+    gint channel_sync_trace_sec;
+    gint rtsp_sync_trace_sec;
+    gint rtsp_test_stall_ch;
+    gint rtsp_test_stall_after_sec;
+    gint rtsp_test_stall_duration_sec;
 
     gint v4l_subdev_csi0;
     gint v4l_subdev_csi1;
