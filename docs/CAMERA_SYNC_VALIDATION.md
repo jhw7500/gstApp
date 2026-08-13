@@ -1902,6 +1902,169 @@ push failure는 0이었다. client 공통 group 2,545개에서도 gap과 불일�
   `3bf7329ff5cd5f3a1fa536291bd3ec192d1c2cf113289c5488d31c0e27f7566b`,
   `cam-operate.service=active`, video FD 4개, 시험 환경변수 0개로 복구했다.
 
+### 3.29 RTSP 동기화 설정 OFF/JSON/CLI/trace/stall 타겟 검증
+
+#### 목적, 환경 및 안전 절차
+
+2026-08-13 18:02~18:09 KST에 server `192.168.214.4`, 외부 client
+`192.168.214.8`에서 새 설정 경로의 기본 OFF, 잘못된 값 정규화, JSON/CLI
+우선순위, 조건부 trace와 시험 전용 stall을 순서대로 검증했다.
+
+- 운영 server file/process SHA-256:
+  `3bf7329ff5cd5f3a1fa536291bd3ec192d1c2cf113289c5488d31c0e27f7566b`
+- 시험 server SHA-256:
+  `341d29ff88d9a876722ed77cf4ced153a29225b93fda9cd8973dfff87eaf1e67`
+- Frame ID client SHA-256:
+  `99bbc589fc20d0a8e18ef16b0dd1401f94ee428c083b7b0cb1ef515b7dfd2515`
+- decoder client 로컬 검증 SHA-256:
+  `a7402bd87ecf745b6203ce2de85b75924e56b19431384422f4235abbe7938ad9`
+- 원본 `/root/shared_v/edgeconf_pim.json` SHA-256:
+  `e4787e7bfa8e41ce950e27a3b52ea30197eb512d40a0542f5b998c5ce92616c6`
+
+운영 `/usr/local/bin/gstApp`는 덮어쓰지 않았다. 시험 binary는 각각
+`/tmp/gstApp.sync-config-test`와
+`/tmp/rtspFrameSyncClient.sync-config-test`에만 복사하고 실행 전 로컬/원격
+SHA 일치를 확인했다. 운영 상태와 PID/start-time/process SHA/cmdline hash를
+기록한 뒤 EXIT trap을 설치하고 `cam-operate.service`를 중지했다. 각 수동
+process도 PID, start-time, executable SHA와 cmdline SHA를 기록해 그 identity가
+모두 일치할 때만 종료했다.
+
+주요 server 실행 명령은 다음과 같다. client는 필요한 단계마다
+`--host 192.168.214.4 --port 8554 --user user --password user`로 네 mount에
+동시에 접속했다.
+
+```bash
+/tmp/gstApp.sync-config-test -d 22 -m 4
+
+/tmp/gstApp.sync-config-test -d 22 -m 4 --enc=h264 \
+  --rtsp-frame-id-sei=1 \
+  --v4l2-sync-trace-sec=-1 \
+  --channel-sync-trace-sec=3601 \
+  --rtsp-sync-trace-sec=3601 \
+  --rtsp-test-stall-ch=4 \
+  --rtsp-test-stall-after-sec=0 \
+  --rtsp-test-stall-duration-sec=10
+
+/tmp/gstApp.sync-config-test -d 22 -m 4 \
+  --rtsp-frame-id-sei=0
+
+/tmp/gstApp.sync-config-test -d 22 -m 4 \
+  --v4l2-sync-trace-sec=20 \
+  --channel-sync-trace-sec=20 \
+  --rtsp-sync-trace-sec=20 \
+  --rtsp-frame-id-sei=1
+
+/tmp/gstApp.sync-config-test -d 22 -m 4 \
+  --rtsp-frame-id-sei=1 \
+  --rtsp-test-stall-ch=2 \
+  --rtsp-test-stall-after-sec=7 \
+  --rtsp-test-stall-duration-sec=10
+
+/tmp/gstApp.sync-config-test -d 22 -m 4 --test=1 \
+  --rtsp-frame-id-sei=1 \
+  --rtsp-test-stall-ch=2 \
+  --rtsp-test-stall-after-sec=7 \
+  --rtsp-test-stall-duration-sec=10
+```
+
+JSON은 run-ID 전용 backup을 만든 뒤 다음과 같이 atomic 교체했고 CLI OFF
+검증 직후 원본 SHA로 즉시 복구했다.
+
+```bash
+jq '.VHL_CAM.rtsp_tune.frame_id_sei="yes"' \
+  /root/shared_v/edgeconf_pim.json \
+  > /root/shared_v/edgeconf_pim.json.sync.tmp
+mv /root/shared_v/edgeconf_pim.json.sync.tmp \
+  /root/shared_v/edgeconf_pim.json
+
+jq '.VHL_CAM.rtsp_tune.frame_id_sei=true' \
+  /root/shared_v/edgeconf_pim.json \
+  > /root/shared_v/edgeconf_pim.json.sync.tmp
+mv /root/shared_v/edgeconf_pim.json.sync.tmp \
+  /root/shared_v/edgeconf_pim.json
+```
+
+#### 직접 측정한 사실
+
+1. **기본 OFF, 60초**
+   - effective log는 `frame_id_sei:0`, 세 trace 주기 0, stall channel -1과
+     시간 0이었다.
+   - 네 channel이 각각 압축 AU 663/661/663/661개를 수신했지만 Frame ID가
+     없어서 `barrier_ready=0`, group 0, client RC=2였다. 이는 OFF 조건의 예상
+     결과다.
+   - sync/SEI/stall probe 활성화 log, Frame ID barrier, `appsrc push failed`는
+     없었고 server PID, video FD 4개와 RTSP 8554 listener는 측정 끝까지
+     살아 있었다.
+
+2. **잘못된 CLI와 H.264 비호환 정규화**
+   - H.264+SEI, V4L2 trace -1, channel/RTSP trace 3601, 잘못된 stall 조합에
+     대해 각 범주별 warning이 정확히 1회씩 발생했다.
+   - effective 값은 SEI 0, 세 trace 0, stall `-1/0/0`이었다. trace/stall
+     probe와 callback은 설치되지 않았다.
+
+3. **잘못된 JSON, JSON ON, CLI OFF 우선순위**
+   - 문자열 `"yes"`에서는 `frame_id_sei must be boolean or integer 0/1`과
+     `1 config error(s)`가 각각 1회였고 effective SEI는 0이었다.
+   - JSON `true`에서는 60초 client가 barrier ID 3을 세우고 공통 ID
+     3..653의 **651 group**을 만들었다. 네 channel gap/duplicate/invalid
+     SEI, alignment drop 및 `group_mismatches`는 모두 0이었다.
+   - 같은 JSON `true`에서 CLI `--rtsp-frame-id-sei=0`을 주면 effective SEI가
+     0으로 바뀌었다. 60초 동안 네 channel이 압축 AU 653/656/655/654개를
+     받았지만 barrier와 group은 0이어서 CLI가 JSON보다 우선함을 확인했다.
+
+4. **20초 trace와 조건부 callback**
+   - V4L2 summary 2개, channel-stage summary 32개, RTSP bridge summary 4개가
+     생성됐다. V4L2 두 CSI는 각각 300 frame, lost/reset/backward 0이었다.
+   - 네 RTSP bridge는 channel당 300회의 push와 SEI 삽입을 모두 성공했고
+     `factory_queue_overrun`, `push_fail`, `frame_id_sei_failed`는 모두 0이었다.
+   - `rtsp_out_queue overrun callback connected`는 이 단계에서만 channel별
+     1회, 총 4회 보였다. 나머지 단계에서는 0회였다.
+   - client는 ID 3..426의 424 group을 만들었고 gap/duplicate/invalid SEI,
+     alignment drop과 group mismatch는 모두 0이었다.
+
+5. **시험 모드 전용 stall**
+   - `--test=1` 없이 동일 stall 인자를 주면 warning 1회 뒤 effective
+     stall이 `-1/0/0`으로 정규화됐다. 30초 client는 ID 4..215의 212 group,
+     모든 channel gap과 mismatch 0이었고 stall start/end log도 없었다.
+   - `--test=1`에서는 ch2에만 7초 뒤 10초 stall start/end가 각각 1회
+     발생했다. client는 ch2에서 ID 106..252의 gap 147개를 관찰했고 다른
+     channel의 자체 gap은 0이었다.
+   - 정체 해제 뒤 공통 group이 176개 더 생성되어 최종 ID 428까지
+     복구됐다. 전체 공통 group은 279개, `group_mismatches=0`이므로 서로 다른
+     Frame ID를 한 group으로 묶은 사례는 없었다.
+
+#### 해석과 판정 한계
+
+- **해석:** 기본값에서는 기존 RTSP 동작을 유지하며 모든 선택 probe가
+  비활성이다. 올바른 JSON boolean은 SEI를 켜고 명시적 CLI 0은 이를 끈다.
+- **해석:** trace가 켜진 경우에만 RTSP overrun callback이 연결되므로 기본
+  경로에 불필요한 signal hookup을 추가하지 않는다.
+- **해석:** 시험 stall은 test mode에 한정됐고 ch2의 의도적 147-frame 폐기 뒤
+  barrier가 최신 공통 ID로 계속 진행했다.
+- **한계:** 이 절은 4채널 FHD 15fps에서 최대 60초인 smoke 결과다. 장시간
+  memory plateau, 30fps/high-load margin 및 실제 화면의 decoder 복구 시간은
+  별도 장기 시험 범위다.
+
+#### 원시 자료와 원복
+
+- 원시 자료:
+  `tmp/target-192.168.214.4/rtsp_sync_config_20260813_180234/`
+- harness 자체 assertion 결과: `STATUS=PASS`, 여덟 단계 모두 완료
+- 원복 직후와 별도 재확인 결과:
+  - `cam-operate.service=active`
+  - 운영 PID `239348`
+  - 운영 file/process SHA가 모두
+    `3bf7329ff5cd5f3a1fa536291bd3ec192d1c2cf113289c5488d31c0e27f7566b`
+  - 명령 `gstApp -d 22 -m 4`
+  - video FD 4개, RTSP 8554 listening
+  - 수동 시험 process 0, 임시 config backup 0
+  - 원본 config SHA
+    `e4787e7bfa8e41ce950e27a3b52ea30197eb512d40a0542f5b998c5ce92616c6`
+  - server/client 시험 binary와 run-ID 원격 자료 0개
+
+운영 service를 복구하고 위 항목을 확인한 뒤에만 원격 원시 자료와 시험
+binary를 삭제했다. 삭제 전 모든 raw log는 위 로컬 경로에 복사했다.
+
 ## 4. 현재까지의 결론
 
 2026-08-13 현재 다음 사항은 측정으로 확인됐다.
@@ -1982,6 +2145,10 @@ push failure는 0이었다. client 공통 group 2,545개에서도 gap과 불일�
 33. 30분 외부 client에서 공통 ID 27,298개를 gap/duplicate/invalid/mismatch 없이
     생성했다. 평균 도착 spread는 12.589ms였으나 최대는 89.939ms로 한 frame을
     넘었다.
+34. 새 RTSP 동기화 설정은 기본 OFF, strict JSON boolean, CLI 우선순위와
+    test-mode-only stall을 타겟에서 충족했다. 20초 trace에서는 세 summary
+    범주와 channel별 callback만 조건부로 활성화됐고, ch2 10초 stall 뒤에도
+    잘못된 Frame ID group 없이 공통 barrier가 재개됐다.
 
 아직 증명되지 않은 사항은 다음과 같다.
 
