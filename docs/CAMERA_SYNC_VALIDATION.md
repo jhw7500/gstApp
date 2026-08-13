@@ -6,6 +6,11 @@
 진행하는 모든 시험은 이 문서에 시험 목적, 환경, 설정, 절차, 원시 로그 위치,
 결과, 해석 및 판정 한계를 추가한다.
 
+> **2026-08-13 설정 전환 주의:** 아래 시험 이력의 `GSTAPP_*` 명령과 환경변수는
+> 당시 측정 입력을 정확히 보존한 **과거 증거**다. 현재 바이너리의 동기화 설정은
+> JSON/CLI로 전달하며, 과거 측정값이나 당시 실행 조건을 새 인터페이스로 소급해
+> 고쳐 쓰지 않는다.
+
 검증은 영상 경로의 앞단부터 다음 순서로 진행한다.
 
 1. 센서 FSYNC와 센서 프레임 생성
@@ -64,6 +69,38 @@
 제품 사양은 4채널 FHD 15fps다. 사용자가 먼저 제공한 일부 로그는 임시 30fps
 시험에서 생성됐지만, 이 문서의 타겟 직접 측정은 별도 표기가 없으면 현재 설정인
 15fps로 수행했다.
+
+### 2.3 현재 동기화 설정 인터페이스
+
+현재 설정 우선순위는 `기본값 → JSON → CLI`이며, 뒤의 값이 앞의 값을
+덮어쓴다. 일곱 설정의 기본값은 모두 비활성이다. 제품 기능인 Frame ID SEI는
+`VHL_CAM.rtsp_tune.frame_id_sei` JSON boolean 또는 CLI로 설정할 수 있고,
+나머지 trace/stall 설정은 CLI 전용이다.
+
+| 과거 측정 입력(기록 보존용) | 현재 CLI | 용도 |
+| --- | --- | --- |
+| `GSTAPP_RTSP_FRAME_ID_SEI` | `--rtsp-frame-id-sei=0|1` | H.265 Frame ID SEI |
+| `GSTAPP_V4L2_SYNC_TRACE_SEC` | `--v4l2-sync-trace-sec=N` | V4L2 동기화 trace |
+| `GSTAPP_CHANNEL_SYNC_TRACE_SEC` | `--channel-sync-trace-sec=N` | 채널 경로 trace |
+| `GSTAPP_RTSP_SYNC_TRACE_SEC` | `--rtsp-sync-trace-sec=N` | RTSP bridge/media trace |
+| `GSTAPP_RTSP_TEST_STALL_CH` | `--rtsp-test-stall-ch=N` | 시험 정체 채널 |
+| `GSTAPP_RTSP_TEST_STALL_AFTER_SEC` | `--rtsp-test-stall-after-sec=N` | 시험 정체 시작 시각 |
+| `GSTAPP_RTSP_TEST_STALL_DURATION_SEC` | `--rtsp-test-stall-duration-sec=N` | 시험 정체 시간 |
+
+현재 수동 계측은 운영 바이너리를 교체하지 않는다. service를 중지하고 기존
+`gstApp`/`killcam` 종료를 확인한 뒤 `/root`에서 `/tmp` 시험 바이너리를 직접
+실행한다. 예를 들면 다음과 같다.
+
+```bash
+cd /root
+nohup /tmp/gstApp.sync-test -d 22 -m 4 \
+  --rtsp-sync-trace-sec=60 \
+  --rtsp-frame-id-sei=1 \
+  >/tmp/gstApp.sync-test.log 2>&1 &
+```
+
+정체 주입 세 옵션은 `--test=1` 실행에서만 유효하다. 일반 제품 실행에는
+사용하지 않는다.
 
 ## 3. 시험 및 결과
 
@@ -1993,12 +2030,13 @@ Windows client library 선택, 제품 server 변경점과 delay/resource 영향 
 후속 시험은 모두 다음 원칙으로 이 문서에 반영한다.
 
 1. **시험 및 결과** 아래에 번호가 있는 새 절을 추가한다.
-2. 타겟, 바이너리 checksum, 정확한 설정, 측정 시간, 활성 환경변수를 기록한다.
+2. 타겟, 바이너리 checksum, 정확한 JSON/CLI 설정과 측정 시간을 기록한다.
 3. 원시 로그를 `tmp/target-192.168.214.4/` 아래에 보존하고 문서에 경로를 남긴다.
 4. 직접 관찰한 사실과 해석을 분리하고 판정 한계를 명시한다.
 5. 제외한 시작/warm-up 표본 수와 제외 이유를 기록한다.
-6. 임시 측정 후 원래 바이너리와 환경을 복구하고 service, process,
-   video-device FD, 녹화 시작 marker를 확인한다.
+6. 임시 측정은 `/tmp` 바이너리를 수동 PID로 실행하고 종료한 뒤 운영 service를
+   재시작한다. 운영 process 명령이 `gstApp -d 22 -m 4`인지, 수동 PID가 남지
+   않았는지, video-device FD와 녹화 시작 marker가 정상인지 확인한다.
 7. **현재까지의 결론**과 **다음 검증 단계**를 함께 갱신한다.
-8. 문서는 한글로 작성하되 레지스터명, 환경변수, 코드 식별자 및 파일 경로는
-   정확성을 위해 원문 표기를 유지한다.
+8. 문서는 한글로 작성하되 레지스터명, 현재 CLI/JSON, 과거 측정 환경변수,
+   코드 식별자 및 파일 경로는 정확성을 위해 원문 표기를 유지한다.

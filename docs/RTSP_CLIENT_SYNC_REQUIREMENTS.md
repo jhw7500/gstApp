@@ -18,9 +18,50 @@
 - 기준 frame rate: 15fps
 - 동일 원본 프레임 식별자: H.265 SEI의 `GSTSYNC1` Frame ID
 - 각 RTSP session의 PTS와 RTP timestamp는 서로 독립적이다.
-- Frame ID SEI는 현재 시험용 계측 server에서만 활성화된다. 원본 운영
-  binary에는 해당 기능이 포함되지 않았으므로 제품 적용 전 server 기능을
-  정식 반영해야 한다.
+- 현재 소스의 Frame ID SEI는 기본 OFF이며 JSON/CLI로 명시적으로 활성화한다.
+  과거 측정 뒤 복구한 운영 target binary에는 이 기능이 없을 수 있으므로 배포
+  binary의 version/checksum과 시작 설정 log를 함께 확인한다.
+
+### 2.1 Server 동기화 설정
+
+설정 우선순위는 `기본값 → JSON → CLI`다. CLI가 같은 항목의 JSON 값을
+덮어쓰며, 모든 동기화/계측 설정의 기본값은 OFF(`0`, stall channel은 `-1`)다.
+
+제품 SEI 제어는 다음 두 인터페이스를 제공한다.
+
+```json
+{
+  "VHL_CAM": {
+    "rtsp_tune": {
+      "frame_id_sei": true
+    }
+  }
+}
+```
+
+```bash
+gstApp -d 22 -m 4 --rtsp-frame-id-sei=1
+```
+
+JSON이 `frame_id_sei: true`여도
+`--rtsp-frame-id-sei=0`을 지정하면 해당 실행에서는 SEI가 꺼진다. SEI는
+H.265에서만 활성화되며 H.264 실행에서는 요청값을 비활성화한다.
+
+세 trace는 CLI 전용이며 `0`은 probe/trace OFF, `1..3600`은 계측 초다.
+
+- `--v4l2-sync-trace-sec=N`
+- `--channel-sync-trace-sec=N`
+- `--rtsp-sync-trace-sec=N`
+
+정체 주입도 CLI 전용이다. `--rtsp-test-stall-ch`,
+`--rtsp-test-stall-after-sec`, `--rtsp-test-stall-duration-sec` 세 값을 유효하게
+지정하고 `--test=1`인 시험 mode에서만 동작한다. 제품 mode 또는 불완전/범위 밖
+설정에서는 세 값 모두 기본 비활성값으로 정규화된다.
+
+factory queue의 `overrun` callback은 `--rtsp-sync-trace-sec`로 RTSP trace가
+실제로 생성된 경우에만 연결된다. 따라서 trace OFF 상태의 callback counter를
+상시 제품 통계로 간주하면 안 된다. 제품에서 상시 overrun 관측이 필요하면 별도
+항상-on 통계 경로를 연결해야 한다.
 
 ## 3. 측정으로 확인된 특성
 
@@ -346,18 +387,22 @@ RTSP callback/thread에서는 packet 전달과 최소 검증만 수행한다. de
 
 ## 17. 제품 server 요구사항
 
-### 17.1 필수 변경
+### 17.1 설정과 필수 제품 반영
 
 정밀 동기화 mode는 server가 동일 원본 frame의 식별자를 제공해야 동작한다.
-현재 작업 트리에는 H.265 SEI prototype이 있지만 운영 target에 복구된 원본
-binary에는 포함되지 않았다.
+현재 소스의 H.265 SEI prototype은 기본 OFF이고
+`rtsp_tune.frame_id_sei` 또는 `--rtsp-frame-id-sei=1`로 활성화한다. CLI가 JSON을
+덮어쓴다. 배포 운영 target에 해당 소스가 반영됐는지는 binary version/checksum으로
+별도 확인한다.
 
 제품 server에는 다음 항목을 반영한다.
 
-1. `GSTAPP_RTSP_FRAME_ID_SEI=1` 시험 환경변수 의존성을 제품 설정으로 전환
+1. 제품 JSON의 `rtsp_tune.frame_id_sei`와 배포/운영 절차를 확정
 2. H.265 RTSP AU마다 `GSTSYNC1` payload 삽입
 3. `gstreamer-codecparsers-1.0` build/runtime 의존성 반영
-4. channel별 SEI 삽입 성공/실패와 RTSP queue drop을 상시 집계
+4. channel별 SEI 삽입 성공/실패와 RTSP queue drop을 상시 집계. 현재 factory
+   queue overrun callback은 RTSP trace 활성 때만 연결되므로 제품 상시 통계는
+   별도 hookup 필요
 5. 기능 활성 상태와 payload version을 시작 log에 기록
 6. server/pipeline 재시작을 구분할 `server_epoch` 또는 `generation` 추가
 
