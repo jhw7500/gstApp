@@ -13,6 +13,8 @@
 #include "rtspServerBin.h"
 #include <gst/app/gstappsink.h>
 #include <gst/app/gstappsrc.h>
+#define GST_USE_UNSTABLE_API
+#include <gst/codecparsers/gsth265parser.h>
 #include <gst/rtsp-server/rtsp-server.h>
 #include <gst/video/video.h>
 
@@ -41,6 +43,785 @@ static guint8 g_rtsp_appsrc_count = 0;
 /* 배열·count 보호 — media_configure/unprepared(RTSP 스레드)와 종료 경로 공유.
  * 정적 할당 GMutex는 별도 init 불필요 */
 static GMutex g_rtsp_appsrc_lock;
+
+#define RTSP_SYNC_TRACE_ENV "GSTAPP_RTSP_SYNC_TRACE_SEC"
+#define RTSP_FRAME_ID_SEI_ENV "GSTAPP_RTSP_FRAME_ID_SEI"
+#define RTSP_TEST_STALL_CH_ENV "GSTAPP_RTSP_TEST_STALL_CH"
+#define RTSP_TEST_STALL_AFTER_ENV "GSTAPP_RTSP_TEST_STALL_AFTER_SEC"
+#define RTSP_TEST_STALL_DURATION_ENV "GSTAPP_RTSP_TEST_STALL_DURATION_SEC"
+#define RTSP_SYNC_TRACE_MAX_SEC 3600
+#define RTSP_SYNC_FNV_OFFSET G_GUINT64_CONSTANT(1469598103934665603)
+#define RTSP_SYNC_FNV_PRIME G_GUINT64_CONSTANT(1099511628211)
+#define RTSP_VIDEO_CLOCK_RATE 90000
+#define RTSP_FRAME_ID_SEI_PAYLOAD_SIZE 28
+#define RTSP_FRAME_ID_SEI_COUNTRY_CODE 0xff
+#define RTSP_FRAME_ID_SEI_COUNTRY_EXTENSION 0xc1
+
+static const guint8 rtsp_frame_id_sei_magic[8] = {
+  'G', 'S', 'T', 'S', 'Y', 'N', 'C', '1'
+};
+
+typedef struct {
+  gboolean started;
+  gboolean complete;
+  guint64 frames;
+  guint64 invalid_pts;
+  guint64 pts_backwards;
+  guint64 missing_origin_meta;
+  guint64 pts_hash;
+  guint64 normalized_pts_hash;
+  guint64 origin_pts_hash;
+  guint64 origin_index_hash;
+  GstClockTime first_pts;
+  GstClockTime previous_pts;
+  GstClockTime last_pts;
+  GstClockTime first_origin_pts;
+  GstClockTime last_origin_pts;
+  GstClockTime delta_min;
+  GstClockTime delta_max;
+  guint64 delta_sum;
+} RtspSyncBufferStage;
+
+typedef struct {
+  guint8 ch;
+  guint duration_sec;
+  GstCaps *reference;
+  GMutex lock;
+  gboolean active;
+  gboolean bridge_started;
+  gboolean bridge_complete;
+  guint64 bridge_frames;
+  guint64 bridge_invalid_pts;
+  guint64 bridge_no_appsrc;
+  guint64 bridge_full_drop;
+  guint64 bridge_key_wait_drop;
+  guint64 factory_queue_overrun;
+  guint64 bridge_interrupted_drop;
+  guint64 bridge_copy_failure;
+  guint64 bridge_stripped_pts_valid;
+  guint64 bridge_meta_failure;
+  guint64 push_attempt;
+  guint64 push_ok;
+  guint64 push_failure;
+  guint64 frame_id_sei_inserted;
+  guint64 frame_id_sei_failed;
+  guint64 frame_id_sei_time_count;
+  guint64 frame_id_sei_time_sum_ns;
+  GstClockTime frame_id_sei_time_min_ns;
+  GstClockTime frame_id_sei_time_max_ns;
+  guint64 frame_id_sei_time_buckets[9];
+  guint64 upstream_pts_hash;
+  GstClockTime bridge_first_pts;
+  GstClockTime bridge_previous_pts;
+  GstClockTime bridge_last_pts;
+  guint64 bridge_pts_backwards;
+  RtspSyncBufferStage appsrc_stage;
+  RtspSyncBufferStage pay_stage;
+  gboolean rtp_started;
+  gboolean rtp_complete;
+  guint64 rtp_packets;
+  guint64 rtp_markers;
+  guint64 rtp_timestamps;
+  guint64 rtp_timestamp_backwards;
+  guint64 rtp_timestamp_hash;
+  guint64 rtp_delta_sum;
+  guint64 rtp_delta_min;
+  guint64 rtp_delta_max;
+  guint32 rtp_first_raw;
+  guint32 rtp_previous_raw;
+  guint32 rtp_last_raw;
+  guint64 rtp_wrap_base;
+  guint64 rtp_first_unwrapped;
+  guint64 rtp_previous_unwrapped;
+  guint64 rtp_last_unwrapped;
+} RtspSyncTrace;
+
+typedef enum {
+  RTSP_SYNC_STAGE_APPSRC,
+  RTSP_SYNC_STAGE_PAY
+} RtspSyncStageKind;
+
+typedef struct {
+  RtspSyncTrace *trace;
+  RtspSyncStageKind kind;
+} RtspSyncProbeCtx;
+
+typedef struct {
+  guint8 ch;
+  guint after_sec;
+  guint duration_sec;
+  gint64 first_buffer_us;
+  gboolean triggered;
+} RtspTestStallCtx;
+
+static gboolean rtsp_test_stall_config(guint8 ch, guint *after_sec,
+                                       guint *duration_sec) {
+  const gchar *ch_env = g_getenv(RTSP_TEST_STALL_CH_ENV);
+  const gchar *after_env = g_getenv(RTSP_TEST_STALL_AFTER_ENV);
+  const gchar *duration_env = g_getenv(RTSP_TEST_STALL_DURATION_ENV);
+  if (!ch_env || !after_env || !duration_env)
+    return FALSE;
+
+  gchar *end = NULL;
+  gint64 target_ch = g_ascii_strtoll(ch_env, &end, 10);
+  if (!end || *end != '\0' || target_ch != ch)
+    return FALSE;
+
+  gint64 after = g_ascii_strtoll(after_env, &end, 10);
+  if (!end || *end != '\0' || after <= 0 || after > 3600)
+    return FALSE;
+
+  gint64 duration = g_ascii_strtoll(duration_env, &end, 10);
+  if (!end || *end != '\0' || duration <= 0 || duration > 60)
+    return FALSE;
+
+  *after_sec = (guint)after;
+  *duration_sec = (guint)duration;
+  return TRUE;
+}
+
+static GstPadProbeReturn rtsp_test_stall_probe(GstPad *pad,
+                                               GstPadProbeInfo *probe_info,
+                                               gpointer user_data) {
+  (void)pad;
+  RtspTestStallCtx *ctx = (RtspTestStallCtx *)user_data;
+  if (!(GST_PAD_PROBE_INFO_TYPE(probe_info) &
+        (GST_PAD_PROBE_TYPE_BUFFER | GST_PAD_PROBE_TYPE_BUFFER_LIST)))
+    return GST_PAD_PROBE_OK;
+
+  gint64 now_us = g_get_monotonic_time();
+  if (ctx->first_buffer_us == 0)
+    ctx->first_buffer_us = now_us;
+
+  if (!ctx->triggered &&
+      now_us - ctx->first_buffer_us >=
+          (gint64)ctx->after_sec * G_USEC_PER_SEC) {
+    ctx->triggered = TRUE;
+    __LOG(LOG_WARNING,
+          "[RTSP_TEST_STALL][%s:%d] ch=%u start duration_sec=%u mono_ns=%" G_GINT64_FORMAT,
+          _FILE_, __LINE__, ctx->ch, ctx->duration_sec,
+          g_get_monotonic_time() * 1000);
+    g_usleep((gulong)ctx->duration_sec * G_USEC_PER_SEC);
+    __LOG(LOG_WARNING, "[RTSP_TEST_STALL][%s:%d] ch=%u end mono_ns=%" G_GINT64_FORMAT,
+          _FILE_, __LINE__, ctx->ch, g_get_monotonic_time() * 1000);
+  }
+
+  return GST_PAD_PROBE_OK;
+}
+
+static guint64 rtsp_sync_hash_u64(guint64 hash, guint64 value) {
+  for (guint i = 0; i < sizeof(value); i++) {
+    hash ^= (value >> (i * 8)) & 0xff;
+    hash *= RTSP_SYNC_FNV_PRIME;
+  }
+  return hash;
+}
+
+static guint rtsp_sync_trace_duration() {
+  static gboolean initialized = FALSE;
+  static guint duration_sec = 0;
+
+  if (initialized)
+    return duration_sec;
+
+  initialized = TRUE;
+  const gchar *env = g_getenv(RTSP_SYNC_TRACE_ENV);
+  if (!env || !*env)
+    return 0;
+
+  gchar *end = NULL;
+  gint64 value = g_ascii_strtoll(env, &end, 10);
+  if (!end || *end != '\0' || value <= 0 ||
+      value > RTSP_SYNC_TRACE_MAX_SEC) {
+    __LOG(LOG_WARNING,
+          "[RTSP_SYNC][%s:%d] ignoring invalid %s=%s (valid: 1..%d)",
+          _FILE_, __LINE__, RTSP_SYNC_TRACE_ENV, env,
+          RTSP_SYNC_TRACE_MAX_SEC);
+    return 0;
+  }
+
+  duration_sec = (guint)value;
+  return duration_sec;
+}
+
+static gboolean rtsp_frame_id_sei_enabled() {
+  static gboolean initialized = FALSE;
+  static gboolean enabled = FALSE;
+
+  if (!initialized) {
+    const gchar *env = g_getenv(RTSP_FRAME_ID_SEI_ENV);
+    enabled = env && g_strcmp0(env, "1") == 0;
+    initialized = TRUE;
+  }
+
+  return enabled;
+}
+
+static GstBuffer *rtsp_frame_id_sei_insert(RtspServerData *info,
+                                           GstBuffer *buffer,
+                                           GstClockTime origin_pts) {
+  if (!info || !buffer || !GST_CLOCK_TIME_IS_VALID(origin_pts) ||
+      g_strcmp0(cmdArg.enc, ENC_H265) != 0)
+    return NULL;
+
+  GstH265Parser *parser = (GstH265Parser *)info->frame_id_parser;
+  if (!parser) {
+    parser = gst_h265_parser_new();
+    if (!parser)
+      return NULL;
+    info->frame_id_parser = parser;
+  }
+
+  guint8 payload[RTSP_FRAME_ID_SEI_PAYLOAD_SIZE] = { 0 };
+  memcpy(payload, rtsp_frame_id_sei_magic,
+         sizeof(rtsp_frame_id_sei_magic));
+  payload[8] = 1;
+  payload[9] = info->ch;
+  guint fps = cmdArg.fps[STREAM_RTSP][info->ch];
+  guint64 frame_id = fps > 0
+                         ? gst_util_uint64_scale_round(
+                               origin_pts, fps, GST_SECOND)
+                         : 0;
+  GST_WRITE_UINT64_BE(payload + 12, frame_id);
+  GST_WRITE_UINT64_BE(payload + 20, origin_pts);
+
+  GstH265SEIMessage message = {};
+  message.payloadType = GST_H265_SEI_REGISTERED_USER_DATA;
+  message.payload.registered_user_data.country_code =
+      RTSP_FRAME_ID_SEI_COUNTRY_CODE;
+  message.payload.registered_user_data.country_code_extension =
+      RTSP_FRAME_ID_SEI_COUNTRY_EXTENSION;
+  message.payload.registered_user_data.data = payload;
+  message.payload.registered_user_data.size = sizeof(payload);
+
+  GArray *messages = g_array_sized_new(
+      FALSE, FALSE, sizeof(GstH265SEIMessage), 1);
+  g_array_append_val(messages, message);
+  GstMemory *sei = gst_h265_create_sei_memory(0, 1, 4, messages);
+  g_array_free(messages, TRUE);
+  if (!sei)
+    return NULL;
+
+  GstBuffer *result = gst_h265_parser_insert_sei(parser, buffer, sei);
+  gst_memory_unref(sei);
+  return result;
+}
+
+static RtspSyncTrace *rtsp_sync_trace_new(guint8 ch) {
+  guint duration_sec = rtsp_sync_trace_duration();
+  if (duration_sec == 0)
+    return NULL;
+
+  RtspSyncTrace *trace = g_new0(RtspSyncTrace, 1);
+  trace->ch = ch;
+  trace->duration_sec = duration_sec;
+  trace->reference = gst_caps_new_simple(
+      "timestamp/x-gstapp-rtsp-origin", "channel", G_TYPE_INT, (gint)ch,
+      NULL);
+  trace->upstream_pts_hash = RTSP_SYNC_FNV_OFFSET;
+  trace->appsrc_stage.pts_hash = RTSP_SYNC_FNV_OFFSET;
+  trace->appsrc_stage.normalized_pts_hash = RTSP_SYNC_FNV_OFFSET;
+  trace->appsrc_stage.origin_pts_hash = RTSP_SYNC_FNV_OFFSET;
+  trace->appsrc_stage.origin_index_hash = RTSP_SYNC_FNV_OFFSET;
+  trace->appsrc_stage.delta_min = GST_CLOCK_TIME_NONE;
+  trace->pay_stage.pts_hash = RTSP_SYNC_FNV_OFFSET;
+  trace->pay_stage.normalized_pts_hash = RTSP_SYNC_FNV_OFFSET;
+  trace->pay_stage.origin_pts_hash = RTSP_SYNC_FNV_OFFSET;
+  trace->pay_stage.origin_index_hash = RTSP_SYNC_FNV_OFFSET;
+  trace->pay_stage.delta_min = GST_CLOCK_TIME_NONE;
+  trace->rtp_timestamp_hash = RTSP_SYNC_FNV_OFFSET;
+  trace->rtp_delta_min = G_MAXUINT64;
+  trace->frame_id_sei_time_min_ns = GST_CLOCK_TIME_NONE;
+  g_mutex_init(&trace->lock);
+
+  __LOG(LOG_NOTICE,
+        "[RTSP_SYNC][%s:%d] ch=%u enabled duration_sec=%u",
+        _FILE_, __LINE__, ch, duration_sec);
+  return trace;
+}
+
+static void rtsp_sync_trace_free(RtspSyncTrace *trace) {
+  if (!trace)
+    return;
+  if (trace->reference)
+    gst_caps_unref(trace->reference);
+  g_mutex_clear(&trace->lock);
+  g_free(trace);
+}
+
+static gboolean rtsp_sync_bridge_input(RtspSyncTrace *trace,
+                                       GstBuffer *buffer,
+                                       gboolean has_appsrc,
+                                       gboolean drop_full,
+                                       gboolean drop_key_wait,
+                                       gboolean interrupted,
+                                       guint64 *origin_index) {
+  if (!trace || !buffer)
+    return FALSE;
+
+  GstClockTime pts = GST_BUFFER_PTS(buffer);
+  gboolean trace_buffer = FALSE;
+
+  g_mutex_lock(&trace->lock);
+  if (!trace->active || trace->bridge_complete)
+    goto bridge_input_out;
+
+  if (!GST_CLOCK_TIME_IS_VALID(pts)) {
+    trace->bridge_invalid_pts++;
+    goto bridge_input_out;
+  }
+
+  if (!trace->bridge_started) {
+    trace->bridge_started = TRUE;
+    trace->bridge_first_pts = pts;
+  } else if (pts >= trace->bridge_first_pts &&
+             pts - trace->bridge_first_pts >=
+                 (GstClockTime)trace->duration_sec * GST_SECOND) {
+    GstClockTime span = trace->bridge_last_pts - trace->bridge_first_pts;
+    trace->bridge_complete = TRUE;
+    __LOG(LOG_NOTICE,
+          "[RTSP_SYNC][%s:%d] ch=%u stage=bridge summary"
+          " duration_pts_ns=%" G_GUINT64_FORMAT " frames=%"
+          G_GUINT64_FORMAT " invalid_pts=%" G_GUINT64_FORMAT
+          " pts_backwards=%" G_GUINT64_FORMAT " first_pts_ns=%"
+          G_GUINT64_FORMAT " last_pts_ns=%" G_GUINT64_FORMAT
+          " upstream_pts_hash=%016" G_GINT64_MODIFIER
+          "x no_appsrc=%" G_GUINT64_FORMAT " full_drop=%"
+          G_GUINT64_FORMAT " key_wait_drop=%" G_GUINT64_FORMAT
+          " factory_queue_overrun=%" G_GUINT64_FORMAT
+          " interrupted_drop=%" G_GUINT64_FORMAT " copy_fail=%"
+          G_GUINT64_FORMAT " stripped_pts_valid=%" G_GUINT64_FORMAT
+          " meta_fail=%" G_GUINT64_FORMAT " push_attempt=%"
+          G_GUINT64_FORMAT " push_ok=%" G_GUINT64_FORMAT
+          " push_fail=%" G_GUINT64_FORMAT " frame_id_sei_inserted=%"
+          G_GUINT64_FORMAT " frame_id_sei_failed=%" G_GUINT64_FORMAT,
+          _FILE_, __LINE__, trace->ch, span, trace->bridge_frames,
+          trace->bridge_invalid_pts, trace->bridge_pts_backwards,
+          trace->bridge_first_pts, trace->bridge_last_pts,
+          trace->upstream_pts_hash, trace->bridge_no_appsrc,
+          trace->bridge_full_drop, trace->bridge_key_wait_drop,
+          trace->factory_queue_overrun,
+          trace->bridge_interrupted_drop, trace->bridge_copy_failure,
+          trace->bridge_stripped_pts_valid, trace->bridge_meta_failure,
+          trace->push_attempt, trace->push_ok, trace->push_failure,
+          trace->frame_id_sei_inserted, trace->frame_id_sei_failed);
+    if (trace->frame_id_sei_time_count > 0) {
+      __LOG(LOG_NOTICE,
+            "[RTSP_FRAME_ID][%s:%d] ch=%u timing summary count=%"
+            G_GUINT64_FORMAT " avg_ns=%" G_GUINT64_FORMAT " min_ns=%"
+            G_GUINT64_FORMAT " max_ns=%" G_GUINT64_FORMAT
+            " b_0_5us=%" G_GUINT64_FORMAT " b_5_10us=%"
+            G_GUINT64_FORMAT " b_10_25us=%" G_GUINT64_FORMAT
+            " b_25_50us=%" G_GUINT64_FORMAT " b_50_100us=%"
+            G_GUINT64_FORMAT " b_100_250us=%" G_GUINT64_FORMAT
+            " b_250_500us=%" G_GUINT64_FORMAT " b_500_1000us=%"
+            G_GUINT64_FORMAT " b_gt_1000us=%" G_GUINT64_FORMAT,
+            _FILE_, __LINE__, trace->ch, trace->frame_id_sei_time_count,
+            trace->frame_id_sei_time_sum_ns /
+                trace->frame_id_sei_time_count,
+            trace->frame_id_sei_time_min_ns,
+            trace->frame_id_sei_time_max_ns,
+            trace->frame_id_sei_time_buckets[0],
+            trace->frame_id_sei_time_buckets[1],
+            trace->frame_id_sei_time_buckets[2],
+            trace->frame_id_sei_time_buckets[3],
+            trace->frame_id_sei_time_buckets[4],
+            trace->frame_id_sei_time_buckets[5],
+            trace->frame_id_sei_time_buckets[6],
+            trace->frame_id_sei_time_buckets[7],
+            trace->frame_id_sei_time_buckets[8]);
+    }
+    goto bridge_input_out;
+  }
+
+  if (trace->bridge_frames > 0 && pts < trace->bridge_previous_pts)
+    trace->bridge_pts_backwards++;
+  trace->bridge_frames++;
+  trace->bridge_previous_pts = pts;
+  trace->bridge_last_pts = pts;
+  trace->upstream_pts_hash =
+      rtsp_sync_hash_u64(trace->upstream_pts_hash, pts);
+  *origin_index = trace->bridge_frames;
+  trace_buffer = TRUE;
+
+  if (!has_appsrc)
+    trace->bridge_no_appsrc++;
+  else if (drop_full)
+    trace->bridge_full_drop++;
+  else if (drop_key_wait)
+    trace->bridge_key_wait_drop++;
+  else if (interrupted)
+    trace->bridge_interrupted_drop++;
+
+bridge_input_out:
+  g_mutex_unlock(&trace->lock);
+  return trace_buffer;
+}
+
+static void rtsp_sync_record_copy(RtspSyncTrace *trace,
+                                  gboolean trace_buffer,
+                                  gboolean copy_ok,
+                                  gboolean stripped_pts_valid,
+                                  gboolean meta_ok) {
+  if (!trace || !trace_buffer)
+    return;
+
+  g_mutex_lock(&trace->lock);
+  if (!copy_ok)
+    trace->bridge_copy_failure++;
+  if (stripped_pts_valid)
+    trace->bridge_stripped_pts_valid++;
+  if (copy_ok && !meta_ok)
+    trace->bridge_meta_failure++;
+  g_mutex_unlock(&trace->lock);
+}
+
+static void rtsp_sync_record_push(RtspSyncTrace *trace,
+                                  gboolean trace_buffer,
+                                  GstFlowReturn result) {
+  if (!trace || !trace_buffer)
+    return;
+
+  g_mutex_lock(&trace->lock);
+  trace->push_attempt++;
+  if (result == GST_FLOW_OK)
+    trace->push_ok++;
+  else
+    trace->push_failure++;
+  g_mutex_unlock(&trace->lock);
+}
+
+static void rtsp_sync_record_frame_id_sei(RtspSyncTrace *trace,
+                                          gboolean trace_buffer,
+                                          gboolean inserted,
+                                          GstClockTime elapsed_ns) {
+  if (!trace || !trace_buffer)
+    return;
+
+  g_mutex_lock(&trace->lock);
+  if (inserted)
+    trace->frame_id_sei_inserted++;
+  else
+    trace->frame_id_sei_failed++;
+  if (GST_CLOCK_TIME_IS_VALID(elapsed_ns)) {
+    static const GstClockTime upper_ns[] = {
+      5 * GST_USECOND, 10 * GST_USECOND, 25 * GST_USECOND,
+      50 * GST_USECOND, 100 * GST_USECOND, 250 * GST_USECOND,
+      500 * GST_USECOND, GST_MSECOND, GST_CLOCK_TIME_NONE
+    };
+
+    trace->frame_id_sei_time_count++;
+    trace->frame_id_sei_time_sum_ns += elapsed_ns;
+    if (!GST_CLOCK_TIME_IS_VALID(trace->frame_id_sei_time_min_ns) ||
+        elapsed_ns < trace->frame_id_sei_time_min_ns)
+      trace->frame_id_sei_time_min_ns = elapsed_ns;
+    if (elapsed_ns > trace->frame_id_sei_time_max_ns)
+      trace->frame_id_sei_time_max_ns = elapsed_ns;
+
+    for (guint i = 0; i < G_N_ELEMENTS(upper_ns); i++) {
+      if (!GST_CLOCK_TIME_IS_VALID(upper_ns[i]) || elapsed_ns <= upper_ns[i]) {
+        trace->frame_id_sei_time_buckets[i]++;
+        break;
+      }
+    }
+  }
+  g_mutex_unlock(&trace->lock);
+}
+
+static GstPadProbeReturn rtsp_sync_buffer_probe(GstPad *pad,
+                                                GstPadProbeInfo *probe_info,
+                                                gpointer user_data) {
+  RtspSyncProbeCtx *ctx = (RtspSyncProbeCtx *)user_data;
+  GstBuffer *buffer = GST_PAD_PROBE_INFO_BUFFER(probe_info);
+  if (!ctx || !ctx->trace || !buffer)
+    return GST_PAD_PROBE_OK;
+
+  RtspSyncTrace *trace = ctx->trace;
+  GstClockTime pts = GST_BUFFER_PTS(buffer);
+  GstReferenceTimestampMeta *meta = gst_buffer_get_reference_timestamp_meta(
+      buffer, trace->reference);
+
+  g_mutex_lock(&trace->lock);
+  if (!trace->active) {
+    g_mutex_unlock(&trace->lock);
+    return GST_PAD_PROBE_OK;
+  }
+
+  RtspSyncBufferStage *stage =
+      ctx->kind == RTSP_SYNC_STAGE_APPSRC ? &trace->appsrc_stage
+                                         : &trace->pay_stage;
+  const gchar *stage_name =
+      ctx->kind == RTSP_SYNC_STAGE_APPSRC ? "appsrc_out" : "pay_in";
+
+  if (stage->complete) {
+    g_mutex_unlock(&trace->lock);
+    return GST_PAD_PROBE_OK;
+  }
+  if (!GST_CLOCK_TIME_IS_VALID(pts)) {
+    stage->invalid_pts++;
+    g_mutex_unlock(&trace->lock);
+    return GST_PAD_PROBE_OK;
+  }
+
+  if (!stage->started) {
+    stage->started = TRUE;
+    stage->first_pts = pts;
+  } else if (pts >= stage->first_pts &&
+             pts - stage->first_pts >=
+                 (GstClockTime)trace->duration_sec * GST_SECOND) {
+    GstClockTime span = stage->last_pts - stage->first_pts;
+    guint64 delta_count = stage->frames > 0 ? stage->frames - 1 : 0;
+    guint64 delta_avg =
+        delta_count > 0 ? stage->delta_sum / delta_count : 0;
+    stage->complete = TRUE;
+    __LOG(LOG_NOTICE,
+          "[RTSP_SYNC][%s:%d] ch=%u stage=%s summary"
+          " duration_pts_ns=%" G_GUINT64_FORMAT " frames=%"
+          G_GUINT64_FORMAT " invalid_pts=%" G_GUINT64_FORMAT
+          " pts_backwards=%" G_GUINT64_FORMAT " first_pts_ns=%"
+          G_GUINT64_FORMAT " last_pts_ns=%" G_GUINT64_FORMAT
+          " pts_hash=%016" G_GINT64_MODIFIER
+          "x normalized_pts_hash=%016" G_GINT64_MODIFIER
+          "x delta_min_ns=%" G_GUINT64_FORMAT " delta_max_ns=%"
+          G_GUINT64_FORMAT " delta_avg_ns=%" G_GUINT64_FORMAT
+          " missing_origin_meta=%" G_GUINT64_FORMAT
+          " first_origin_pts_ns=%" G_GUINT64_FORMAT
+          " last_origin_pts_ns=%" G_GUINT64_FORMAT
+          " origin_pts_hash=%016" G_GINT64_MODIFIER
+          "x origin_index_hash=%016" G_GINT64_MODIFIER "x",
+          _FILE_, __LINE__, trace->ch, stage_name, span, stage->frames,
+          stage->invalid_pts, stage->pts_backwards, stage->first_pts,
+          stage->last_pts, stage->pts_hash, stage->normalized_pts_hash,
+          stage->delta_min == GST_CLOCK_TIME_NONE ? 0 : stage->delta_min,
+          stage->delta_max, delta_avg, stage->missing_origin_meta,
+          stage->first_origin_pts, stage->last_origin_pts,
+          stage->origin_pts_hash, stage->origin_index_hash);
+    g_mutex_unlock(&trace->lock);
+    return GST_PAD_PROBE_OK;
+  }
+
+  if (stage->frames > 0) {
+    if (pts < stage->previous_pts) {
+      stage->pts_backwards++;
+    } else {
+      GstClockTime delta = pts - stage->previous_pts;
+      if (stage->delta_min == GST_CLOCK_TIME_NONE ||
+          delta < stage->delta_min)
+        stage->delta_min = delta;
+      if (delta > stage->delta_max)
+        stage->delta_max = delta;
+      stage->delta_sum += delta;
+    }
+  }
+
+  stage->frames++;
+  stage->previous_pts = pts;
+  stage->last_pts = pts;
+  stage->pts_hash = rtsp_sync_hash_u64(stage->pts_hash, pts);
+  stage->normalized_pts_hash =
+      rtsp_sync_hash_u64(stage->normalized_pts_hash, pts - stage->first_pts);
+
+  if (!meta) {
+    stage->missing_origin_meta++;
+  } else {
+    if (stage->frames == 1)
+      stage->first_origin_pts = meta->timestamp;
+    stage->last_origin_pts = meta->timestamp;
+    stage->origin_pts_hash =
+        rtsp_sync_hash_u64(stage->origin_pts_hash, meta->timestamp);
+    stage->origin_index_hash =
+        rtsp_sync_hash_u64(stage->origin_index_hash, meta->duration);
+  }
+
+  g_mutex_unlock(&trace->lock);
+  return GST_PAD_PROBE_OK;
+}
+
+static void rtsp_sync_process_rtp_buffer(RtspSyncTrace *trace,
+                                         GstBuffer *buffer) {
+  guint8 header[12];
+  if (!trace || !buffer ||
+      gst_buffer_extract(buffer, 0, header, sizeof(header)) != sizeof(header) ||
+      (header[0] >> 6) != 2)
+    return;
+
+  gboolean marker = (header[1] & 0x80) != 0;
+  guint32 timestamp = ((guint32)header[4] << 24) |
+                      ((guint32)header[5] << 16) |
+                      ((guint32)header[6] << 8) | (guint32)header[7];
+
+  g_mutex_lock(&trace->lock);
+  if (!trace->active || trace->rtp_complete) {
+    g_mutex_unlock(&trace->lock);
+    return;
+  }
+
+  guint64 unwrapped;
+  gboolean new_timestamp = !trace->rtp_started ||
+                           timestamp != trace->rtp_previous_raw;
+  if (!trace->rtp_started) {
+    trace->rtp_started = TRUE;
+    trace->rtp_first_raw = timestamp;
+    trace->rtp_first_unwrapped = timestamp;
+    trace->rtp_previous_unwrapped = timestamp;
+    trace->rtp_delta_min = G_MAXUINT64;
+  }
+
+  if (timestamp < trace->rtp_previous_raw &&
+      trace->rtp_previous_raw - timestamp > G_MAXUINT32 / 2)
+    trace->rtp_wrap_base += G_GUINT64_CONSTANT(1) << 32;
+  unwrapped = trace->rtp_wrap_base + timestamp;
+
+  if (new_timestamp && trace->rtp_timestamps > 0 &&
+      unwrapped < trace->rtp_previous_unwrapped) {
+    trace->rtp_timestamp_backwards++;
+  }
+
+  if (new_timestamp &&
+      unwrapped >= trace->rtp_first_unwrapped &&
+      unwrapped - trace->rtp_first_unwrapped >=
+          (guint64)trace->duration_sec * RTSP_VIDEO_CLOCK_RATE) {
+    guint64 delta_count =
+        trace->rtp_timestamps > 0 ? trace->rtp_timestamps - 1 : 0;
+    guint64 delta_avg =
+        delta_count > 0 ? trace->rtp_delta_sum / delta_count : 0;
+    trace->rtp_complete = TRUE;
+    __LOG(LOG_NOTICE,
+          "[RTSP_SYNC][%s:%d] ch=%u stage=rtp_out summary packets=%"
+          G_GUINT64_FORMAT " marker_frames=%" G_GUINT64_FORMAT
+          " distinct_timestamps=%" G_GUINT64_FORMAT
+          " timestamp_backwards=%" G_GUINT64_FORMAT
+          " first_timestamp=%u last_timestamp=%u span_ticks=%"
+          G_GUINT64_FORMAT " normalized_timestamp_hash=%016"
+          G_GINT64_MODIFIER "x delta_min_ticks=%" G_GUINT64_FORMAT
+          " delta_max_ticks=%" G_GUINT64_FORMAT " delta_avg_ticks=%"
+          G_GUINT64_FORMAT,
+          _FILE_, __LINE__, trace->ch, trace->rtp_packets,
+          trace->rtp_markers, trace->rtp_timestamps,
+          trace->rtp_timestamp_backwards, trace->rtp_first_raw,
+          trace->rtp_last_raw,
+          trace->rtp_last_unwrapped - trace->rtp_first_unwrapped,
+          trace->rtp_timestamp_hash,
+          trace->rtp_delta_min == G_MAXUINT64 ? 0 : trace->rtp_delta_min,
+          trace->rtp_delta_max, delta_avg);
+    g_mutex_unlock(&trace->lock);
+    return;
+  }
+
+  trace->rtp_packets++;
+  if (marker)
+    trace->rtp_markers++;
+  if (new_timestamp) {
+    if (trace->rtp_timestamps > 0 &&
+        unwrapped >= trace->rtp_previous_unwrapped) {
+      guint64 delta = unwrapped - trace->rtp_previous_unwrapped;
+      if (delta < trace->rtp_delta_min)
+        trace->rtp_delta_min = delta;
+      if (delta > trace->rtp_delta_max)
+        trace->rtp_delta_max = delta;
+      trace->rtp_delta_sum += delta;
+    }
+    trace->rtp_timestamps++;
+    trace->rtp_last_raw = timestamp;
+    trace->rtp_last_unwrapped = unwrapped;
+    trace->rtp_timestamp_hash = rtsp_sync_hash_u64(
+        trace->rtp_timestamp_hash, unwrapped - trace->rtp_first_unwrapped);
+    trace->rtp_previous_raw = timestamp;
+    trace->rtp_previous_unwrapped = unwrapped;
+  }
+
+  g_mutex_unlock(&trace->lock);
+}
+
+static GstPadProbeReturn rtsp_sync_rtp_probe(GstPad *pad,
+                                             GstPadProbeInfo *probe_info,
+                                             gpointer user_data) {
+  RtspSyncTrace *trace = (RtspSyncTrace *)user_data;
+  if (GST_PAD_PROBE_INFO_TYPE(probe_info) & GST_PAD_PROBE_TYPE_BUFFER) {
+    GstBuffer *buffer = GST_PAD_PROBE_INFO_BUFFER(probe_info);
+    rtsp_sync_process_rtp_buffer(trace, buffer);
+    return GST_PAD_PROBE_OK;
+  }
+
+  if (GST_PAD_PROBE_INFO_TYPE(probe_info) &
+      GST_PAD_PROBE_TYPE_BUFFER_LIST) {
+    GstBufferList *list = GST_PAD_PROBE_INFO_BUFFER_LIST(probe_info);
+    guint length = gst_buffer_list_length(list);
+    for (guint i = 0; i < length; i++)
+      rtsp_sync_process_rtp_buffer(trace, gst_buffer_list_get(list, i));
+  }
+
+  return GST_PAD_PROBE_OK;
+}
+
+static void rtsp_sync_install_media_probes(RtspServerData *info,
+                                           GstElement *element,
+                                           GstElement *appsrc) {
+  RtspSyncTrace *trace = (RtspSyncTrace *)info->sync_trace;
+  if (!trace)
+    return;
+
+  GstPad *pad = gst_element_get_static_pad(appsrc, "src");
+  if (pad) {
+    RtspSyncProbeCtx *ctx = g_new0(RtspSyncProbeCtx, 1);
+    ctx->trace = trace;
+    ctx->kind = RTSP_SYNC_STAGE_APPSRC;
+    gst_pad_add_probe(pad, GST_PAD_PROBE_TYPE_BUFFER,
+                      rtsp_sync_buffer_probe, ctx, g_free);
+    gst_object_unref(pad);
+  }
+
+  GstElement *pay =
+      gst_bin_get_by_name_recurse_up(GST_BIN(element), "pay0");
+  if (!pay) {
+    __LOG(LOG_ERR, "[RTSP_SYNC][%s:%d] ch=%u pay0 not found",
+          _FILE_, __LINE__, info->ch);
+    return;
+  }
+
+  pad = gst_element_get_static_pad(pay, "sink");
+  if (pad) {
+    RtspSyncProbeCtx *ctx = g_new0(RtspSyncProbeCtx, 1);
+    ctx->trace = trace;
+    ctx->kind = RTSP_SYNC_STAGE_PAY;
+    gst_pad_add_probe(pad, GST_PAD_PROBE_TYPE_BUFFER,
+                      rtsp_sync_buffer_probe, ctx, g_free);
+    gst_object_unref(pad);
+  }
+
+  pad = gst_element_get_static_pad(pay, "src");
+  if (pad) {
+    guint stall_after_sec = 0;
+    guint stall_duration_sec = 0;
+    if (rtsp_test_stall_config(info->ch, &stall_after_sec,
+                               &stall_duration_sec)) {
+      RtspTestStallCtx *stall_ctx = g_new0(RtspTestStallCtx, 1);
+      stall_ctx->ch = info->ch;
+      stall_ctx->after_sec = stall_after_sec;
+      stall_ctx->duration_sec = stall_duration_sec;
+      gst_pad_add_probe(pad,
+                        (GstPadProbeType)(GST_PAD_PROBE_TYPE_BUFFER |
+                                          GST_PAD_PROBE_TYPE_BUFFER_LIST),
+                        rtsp_test_stall_probe, stall_ctx, g_free);
+    }
+    gst_pad_add_probe(pad,
+                      (GstPadProbeType)(GST_PAD_PROBE_TYPE_BUFFER |
+                                        GST_PAD_PROBE_TYPE_BUFFER_LIST),
+                      rtsp_sync_rtp_probe, trace, NULL);
+    gst_object_unref(pad);
+  }
+  gst_object_unref(pay);
+}
+
+static void rtsp_sync_activate(RtspServerData *info) {
+  RtspSyncTrace *trace = (RtspSyncTrace *)info->sync_trace;
+  if (!trace)
+    return;
+
+  g_mutex_lock(&trace->lock);
+  trace->active = TRUE;
+  g_mutex_unlock(&trace->lock);
+}
 
 static gint clamp_int(gint value, gint min_value, gint max_value) {
   if (value < min_value)
@@ -157,6 +938,20 @@ static void need_data(GstElement *source, guint length, gpointer user_data) {
   g_mutex_unlock(&info->lock);
   if (want_key)
     request_keyframe(info);
+}
+
+static void rtsp_factory_queue_overrun(GstElement *queue,
+                                       gpointer user_data) {
+  (void)queue;
+  RtspServerData *info = (RtspServerData *)user_data;
+  RtspSyncTrace *trace = info ? (RtspSyncTrace *)info->sync_trace : NULL;
+  if (!trace)
+    return;
+
+  g_mutex_lock(&trace->lock);
+  if (trace->active && !trace->bridge_complete)
+    trace->factory_queue_overrun++;
+  g_mutex_unlock(&trace->lock);
 }
 
 static gboolean cleanRtspSession(GstRTSPServer *server) {
@@ -409,6 +1204,7 @@ static void media_configure(GstRTSPMediaFactory *factory, GstRTSPMedia *media,
   RtspServerData *info = (RtspServerData *)user_data;
   GstElement *element;
   GstElement *appsrc = NULL;
+  GstElement *out_queue = NULL;
   GstElement *old_appsrc = NULL;
   GstCaps *fallback_caps = NULL;
   // GstElement *queue;
@@ -446,11 +1242,25 @@ static void media_configure(GstRTSPMediaFactory *factory, GstRTSPMedia *media,
         use_h265 ? "video/x-h265,stream-format=byte-stream,alignment=au"
                  : "video/x-h264,stream-format=byte-stream,alignment=au");
   }
+  /* appsrc를 streaming thread에 게시하기 전에 probe를 먼저 설치해 첫 push부터
+   * 빠짐없이 측정한다. 환경변수가 없으면 이 함수는 즉시 반환한다. */
+  rtsp_sync_install_media_probes(info, element, appsrc);
+  out_queue =
+      gst_bin_get_by_name_recurse_up(GST_BIN(element), "rtsp_out_queue");
+  if (out_queue) {
+    g_signal_connect(out_queue, "overrun",
+                     (GCallback)rtsp_factory_queue_overrun, info);
+    gst_object_unref(out_queue);
+  } else {
+    __LOG(LOG_ERR, "[RTSP_SYNC][%s:%d] ch=%u rtsp_out_queue not found",
+          _FILE_, __LINE__, info->ch);
+  }
   /* appsrc 게시와 caps 적용을 한 임계구역에서 수행 — 스트리밍 스레드의
    * caps 갱신(g_object_set)과 전순서를 보장해 stale caps 덮어쓰기를 막는다 */
   g_mutex_lock(&info->lock);
   old_appsrc = info->appsrc;
   info->appsrc = appsrc;
+  rtsp_sync_activate(info);
   /* 새 appsrc는 빈 큐로 시작하므로 플로우 컨트롤 상태 리셋 */
   g_atomic_int_set(&info->appsrc_full, 0);
   info->wait_keyframe = FALSE;
@@ -585,6 +1395,12 @@ static GstFlowReturn new_sample_handler(GstElement *sink, gpointer userData) {
     return GST_FLOW_ERROR;
   }
   buffer = gst_sample_get_buffer(sample);
+  if (!buffer) {
+    __LOG(LOG_CRIT, "[RTSP][%s:%d] ch%d buffer cannot get from sample",
+          _FILE_, __LINE__, info->ch);
+    gst_sample_unref(sample);
+    return GST_FLOW_ERROR;
+  }
   // gst_sample_unref(sample);
 
   g_mutex_lock(&info->lock);
@@ -606,15 +1422,20 @@ static GstFlowReturn new_sample_handler(GstElement *sink, gpointer userData) {
    * 무제한으로 쌓여 재생 시작이 수 초 지연되는 것을 방지한다 */
   gboolean drop = FALSE;
   gboolean want_key = FALSE;
+  gboolean drop_full = FALSE;
+  gboolean drop_key_wait = FALSE;
+  gboolean has_appsrc = info->appsrc != NULL;
   if (g_atomic_int_get(&info->appsrc_full)) {
     info->wait_keyframe = TRUE;
     drop = TRUE;
+    drop_full = TRUE;
   } else if (info->wait_keyframe) {
     if (buffer && !GST_BUFFER_FLAG_IS_SET(buffer, GST_BUFFER_FLAG_DELTA_UNIT))
       info->wait_keyframe = FALSE;
     else {
       drop = TRUE;
       want_key = TRUE;
+      drop_key_wait = TRUE;
     }
   }
   /* lock 밖 push 동안 쓸 스냅샷 — appsrc는 media_unprepared_cb가 언제든
@@ -623,6 +1444,12 @@ static GstFlowReturn new_sample_handler(GstElement *sink, gpointer userData) {
                            ? (GstElement *)gst_object_ref(info->appsrc)
                            : NULL;
   g_mutex_unlock(&info->lock);
+
+  guint64 origin_index = 0;
+  RtspSyncTrace *sync_trace = (RtspSyncTrace *)info->sync_trace;
+  gboolean trace_buffer = rtsp_sync_bridge_input(
+      sync_trace, buffer, has_appsrc, drop_full, drop_key_wait,
+      is_interrupted, &origin_index);
 
   /* 스로틀로 유실된 IDR 요청의 지연 재시도 — 키프레임 대기 중이면 매 프레임
    * 재요청하되, request_keyframe 내부 스로틀이 실제 전송을 1회/초로 제한 */
@@ -647,14 +1474,6 @@ static GstFlowReturn new_sample_handler(GstElement *sink, gpointer userData) {
     return GST_FLOW_OK;
   }
 #endif
-
-  if (!buffer) {
-    __LOG(LOG_CRIT, "[RTSP][%s:%d] ch%d buffer cannot get from sample", _FILE_,
-          __LINE__, info->ch);
-    gst_object_unref(appsrc);
-    gst_sample_unref(sample);
-    return GST_FLOW_ERROR;
-  }
 
   if (info->debug) {
     GstClockTime pts = GST_BUFFER_PTS(buffer);
@@ -697,6 +1516,58 @@ static GstFlowReturn new_sample_handler(GstElement *sink, gpointer userData) {
   // (do-timestamp=1) avoiding sync issues.
   GstBuffer *out_buffer =
       gst_buffer_copy_region(buffer, GST_BUFFER_COPY_MEMORY, 0, -1);
+  gboolean stripped_pts_valid =
+      out_buffer && GST_BUFFER_PTS_IS_VALID(out_buffer);
+  gboolean meta_ok = TRUE;
+  if (out_buffer && trace_buffer && GST_BUFFER_PTS_IS_VALID(buffer)) {
+    meta_ok = gst_buffer_add_reference_timestamp_meta(
+                  out_buffer, sync_trace->reference, GST_BUFFER_PTS(buffer),
+                  origin_index) != NULL;
+  }
+  rtsp_sync_record_copy(sync_trace, trace_buffer, out_buffer != NULL,
+                        stripped_pts_valid, meta_ok);
+
+  if (!out_buffer) {
+    __LOG(LOG_ERR, "[RTSP_SYNC][%s:%d] ch%d buffer copy failed",
+          _FILE_, __LINE__, info->ch);
+    gst_object_unref(appsrc);
+    gst_sample_unref(sample);
+    return GST_FLOW_ERROR;
+  }
+
+  if (rtsp_frame_id_sei_enabled()) {
+    GstClockTime sei_start_ns = GST_CLOCK_TIME_NONE;
+    if (sync_trace && trace_buffer)
+      sei_start_ns = gst_util_get_timestamp();
+    GstBuffer *sei_buffer = rtsp_frame_id_sei_insert(
+        info, out_buffer, GST_BUFFER_PTS(buffer));
+    GstClockTime sei_elapsed_ns = GST_CLOCK_TIME_NONE;
+    if (GST_CLOCK_TIME_IS_VALID(sei_start_ns)) {
+      GstClockTime sei_end_ns = gst_util_get_timestamp();
+      if (sei_end_ns >= sei_start_ns)
+        sei_elapsed_ns = sei_end_ns - sei_start_ns;
+    }
+    rtsp_sync_record_frame_id_sei(
+        sync_trace, trace_buffer, sei_buffer != NULL, sei_elapsed_ns);
+    if (sei_buffer) {
+      gst_buffer_unref(out_buffer);
+      out_buffer = sei_buffer;
+      info->frame_id_sei_inserted++;
+      if (info->frame_id_sei_inserted == 1) {
+        __LOG(LOG_NOTICE,
+              "[RTSP_FRAME_ID][%s:%d] ch=%u H.265 SEI enabled"
+              " origin_pts_ns=%" G_GUINT64_FORMAT,
+              _FILE_, __LINE__, info->ch, GST_BUFFER_PTS(buffer));
+      }
+    } else {
+      info->frame_id_sei_failed++;
+      if (info->frame_id_sei_failed == 1) {
+        __LOG(LOG_ERR,
+              "[RTSP_FRAME_ID][%s:%d] ch=%u H.265 SEI insertion failed",
+              _FILE_, __LINE__, info->ch);
+      }
+    }
+  }
 
   /* NO_SHARE 메모리이거나 EXCLUSIVE lock 획득 실패 시 위 copy_region이 실제
    * memcpy로 동작하므로, 채널당 1회 메모리 공유 여부를 남겨 zero-copy를
@@ -718,6 +1589,7 @@ static GstFlowReturn new_sample_handler(GstElement *sink, gpointer userData) {
   // Push the buffer (takes ownership)
   GstFlowReturn push_ret =
       gst_app_src_push_buffer(GST_APP_SRC(appsrc), out_buffer);
+  rtsp_sync_record_push(sync_trace, trace_buffer, push_ret);
   if (push_ret != GST_FLOW_OK) {
     __LOG(LOG_WARNING, "[RTSP][%s:%d] ch%d appsrc push failed: %d", _FILE_,
           __LINE__, info->ch, push_ret);
@@ -1011,12 +1883,20 @@ RtspServerBin::RtspServerBin() {
   rtspServerData.last_enough_log_us = 0;
   rtspServerData.kick_sink = NULL;
   rtspServerData.last_kick_us = 0;
+  rtspServerData.sync_trace = NULL;
+  rtspServerData.frame_id_parser = NULL;
+  rtspServerData.frame_id_sei_inserted = 0;
+  rtspServerData.frame_id_sei_failed = 0;
   g_mutex_init(&rtspServerData.lock);
 }
 
 RtspServerBin::~RtspServerBin() {
   __LOG(LOG_INFO, "[GST][%s:%d] %s[%d]", _FILE_, __LINE__, __FUNCTION__,
         rtspServerData.ch);
+  rtsp_sync_trace_free((RtspSyncTrace *)rtspServerData.sync_trace);
+  if (rtspServerData.frame_id_parser)
+    gst_h265_parser_free(
+        (GstH265Parser *)rtspServerData.frame_id_parser);
   g_mutex_clear(&rtspServerData.lock);
 }
 
@@ -1305,6 +2185,8 @@ gboolean RtspServerBin::init(guint8 ch, gboolean crop_en) {
       use_h265 ? "video/x-h265" : "video/x-h264";
   const gchar *payloader_factory = use_h265 ? "rtph265pay" : "rtph264pay";
   rtspServerData.ch = ch;
+  if (!rtspServerData.sync_trace)
+    rtspServerData.sync_trace = rtsp_sync_trace_new(ch);
   // sinkPad = NULL;
   __LOG(LOG_INFO, "[GST][%s:%d] %s ch : %d, crop : %s", _FILE_, __LINE__,
         __FUNCTION__, rtspServerData.ch, crop_en ? "enable" : "disable");
@@ -1537,7 +2419,8 @@ gboolean RtspServerBin::init(guint8 ch, gboolean crop_en) {
       clamp_int(cmdArg.rtsp_appsrc_max_bytes, 16384, 2097152);
   gchar *launch_str = g_strdup_printf(
       "( appsrc name=%s do-timestamp=1 is-live=1 format=3 max-bytes=%d "
-      "! queue max-size-buffers=%d max-size-time=0 max-size-bytes=0 leaky=2 ! "
+      "! queue name=rtsp_out_queue max-size-buffers=%d max-size-time=0 "
+      "max-size-bytes=0 leaky=2 ! "
       "%s config-interval=-1 ! %s name=pay0 config-interval=-1 )",
       rtspServerData.appSrcName, appsrc_max_bytes, q_max_buffers,
       parser_factory, payloader_factory);

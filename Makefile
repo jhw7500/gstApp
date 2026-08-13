@@ -21,7 +21,7 @@ OBJ = obj
 #CFLAGS += -I/opt/desktop/build-desktop/tmp/sysroots-components/cortexa53-crypto-mx8mp/gstreamer1.0-plugins-base/usr/include/gstreamer-1.0
 #IFLAGS += -I$(ROOTFS)/usr/include
 #IDIR += $(SYSROOT)/usr/include #-I$(ROOTFS)/usr/include
-LIBS += gstreamer-1.0 gstreamer-rtsp-server-1.0 glib-2.0 gstreamer-plugins-base-1.0 gstreamer-app-1.0 check json-c openssl gstreamer-video-1.0
+LIBS += gstreamer-1.0 gstreamer-rtsp-server-1.0 glib-2.0 gstreamer-plugins-base-1.0 gstreamer-app-1.0 gstreamer-codecparsers-1.0 check json-c openssl gstreamer-video-1.0
 #LIBS += gstreamer-audio-1.0
 #LIBS += gstreamer-pbutils-1.0
 LDFLAGS+="-Wl,--copy-dt-needed-entries"
@@ -59,6 +59,12 @@ OBJS = videoBin.o recordBin.o muxSinkBin.o rtspServerBin.o testBin.o captureBin.
 $(OUTPUT)/gstApp : $(OBJS) main.cpp | $(OUTPUT) $(OBJ)
 	$(CXX) $(CPP_PERF_FLAGS) -o $@ $^ $(ALLFLAGS)
 	mv *.o $(OBJ)
+
+$(OUTPUT)/rtspFrameSyncClient : test/rtspFrameSyncClient.cpp | $(OUTPUT)
+	$(CXX) $(CPP_PERF_FLAGS) -o $@ $< $(ALLFLAGS)
+
+$(OUTPUT)/decoderRecoveryClient : test/decoderRecoveryClient.cpp | $(OUTPUT)
+	$(CXX) $(CPP_PERF_FLAGS) -o $@ $< $(ALLFLAGS)
 
 $(OUTPUT) $(OBJ) :
 	mkdir -p $@
