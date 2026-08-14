@@ -11,6 +11,7 @@
  */
 
 #include "encoderBin.h"
+#include "encoderStat.h"
 #include <gst/video/video.h>
 
 static GstPadProbeReturn
@@ -29,13 +30,8 @@ drop_no_pts_probe(GstPad *pad, GstPadProbeInfo *info, gpointer user_data)
  * 목적: 4채널 동시 운용의 상한이 VPU 처리량인지(H1) 큐 기아인지(H2) 구분. */
 typedef struct {
     GstElement *queue;
-    guint64 q_in;          /* 큐 sink 도착 프레임 */
-    guint64 q_out;         /* 큐 src 통과 프레임 (q_in - q_out = leaky 드롭) */
-    guint64 enc_out;       /* 인코더 출력 프레임 */
-    guint64 overrun;       /* 큐 포화 횟수 (leaky 여도 발생) */
-    guint lvl_buf_max;     /* current-level-buffers 워터마크 = 업스트림 풀 상한 단서 */
+    EncoderTelemetry telemetry;
     gint64 enc_last_us;    /* 직전 인코더 출력 시각 (monotonic) */
-    gint64 enc_gap_max_us; /* 인코더 출력 최대 간격 = VPU 스톨 지표 */
     gboolean active;
 } EncStat;
 
@@ -591,13 +587,12 @@ static GstPadProbeReturn
 enc_q_in_probe(GstPad *pad, GstPadProbeInfo *info, gpointer user_data)
 {
     EncStat *s = &g_encStat[GPOINTER_TO_INT(user_data)];
-    s->q_in++;
+    s->telemetry.recordQueueInput();
     /* 큐가 가장 찬 시점에 근접한 샘플 (삽입 직전이라 실제보다 1 작을 수 있음) */
     if (cmdArg.queue_enc_stat_sec > 0 && s->queue) {
         guint lvl = 0;
         g_object_get(s->queue, "current-level-buffers", &lvl, NULL);
-        if (lvl > s->lvl_buf_max)
-            s->lvl_buf_max = lvl;
+        s->telemetry.recordQueueLevel(lvl);
     }
     return GST_PAD_PROBE_OK;
 }
@@ -611,10 +606,17 @@ static gboolean enc_nodata_watch(gpointer user_data)
     static guint strike[MAX_CHANNEL];
     static gboolean warned[MAX_CHANNEL];
     static gboolean any_data_seen = FALSE;
+    guint64 q_in[MAX_CHANNEL];
+
+    for (gint i = 0; i < MAX_CHANNEL; i++) {
+        EncoderTelemetrySnapshot snapshot =
+            g_encStat[i].telemetry.snapshot(FALSE);
+        q_in[i] = snapshot.q_in;
+    }
 
     if (!any_data_seen) {
         for (gint i = 0; i < MAX_CHANNEL; i++) {
-            if (g_encStat[i].q_in > 0) {
+            if (q_in[i] > 0) {
                 any_data_seen = TRUE;
                 break;
             }
@@ -627,11 +629,11 @@ static gboolean enc_nodata_watch(gpointer user_data)
             continue;
         if ((g_link_disconnect_mask >> i) & 1) {  /* 링크 끊김은 별도 감시 대상 */
             strike[i] = 0;
-            prev[i] = s->q_in;
+            prev[i] = q_in[i];
             continue;
         }
 
-        guint64 cur = s->q_in;
+        guint64 cur = q_in[i];
         if (cur != prev[i]) {
             if (warned[i]) {
                 __LOG(LOG_NOTICE, "[GST][%s:%d] ch%d data resumed (in=%" G_GUINT64_FORMAT ")",
@@ -665,7 +667,7 @@ static gboolean enc_nodata_watch(gpointer user_data)
 static GstPadProbeReturn
 enc_q_out_probe(GstPad *pad, GstPadProbeInfo *info, gpointer user_data)
 {
-    g_encStat[GPOINTER_TO_INT(user_data)].q_out++;
+    g_encStat[GPOINTER_TO_INT(user_data)].telemetry.recordQueueOutput();
     return GST_PAD_PROBE_OK;
 }
 
@@ -674,19 +676,15 @@ enc_out_probe(GstPad *pad, GstPadProbeInfo *info, gpointer user_data)
 {
     EncStat *s = &g_encStat[GPOINTER_TO_INT(user_data)];
     gint64 now = g_get_monotonic_time();
-    s->enc_out++;
-    if (s->enc_last_us) {
-        gint64 gap = now - s->enc_last_us;
-        if (gap > s->enc_gap_max_us)
-            s->enc_gap_max_us = gap;
-    }
+    gint64 gap = s->enc_last_us ? now - s->enc_last_us : 0;
+    s->telemetry.recordEncoderOutput(gap);
     s->enc_last_us = now;
     return GST_PAD_PROBE_OK;
 }
 
 static void enc_queue_overrun_cb(GstElement *queue, gpointer user_data)
 {
-    g_encStat[GPOINTER_TO_INT(user_data)].overrun++;
+    g_encStat[GPOINTER_TO_INT(user_data)].telemetry.recordOverrun();
 }
 
 /* 주기 리포트: 직전 구간 증분과 누적 워터마크를 함께 찍는다. */
@@ -707,19 +705,20 @@ static gboolean enc_stat_report(gpointer user_data)
                      "current-level-bytes", &lvl_byte,
                      "max-size-bytes", &max_bytes, NULL);
 
-        guint64 d_in = s->q_in - prev_in[i];
-        guint64 d_out = s->q_out - prev_out[i];
-        guint64 d_enc = s->enc_out - prev_enc[i];
-        guint64 d_over = s->overrun - prev_over[i];
-        /* q_in/q_out 을 원자적으로 읽지 않으므로 그 사이에 버퍼가 통과하면
+        EncoderTelemetrySnapshot snapshot = s->telemetry.snapshot(TRUE);
+        guint64 d_in = snapshot.q_in - prev_in[i];
+        guint64 d_out = snapshot.q_out - prev_out[i];
+        guint64 d_enc = snapshot.enc_out - prev_enc[i];
+        guint64 d_over = snapshot.overrun - prev_over[i];
+        /* q_in/q_out 은 각각 원자적이지만 하나의 트랜잭션으로 읽히지는 않으므로
          * out 이 in 을 한 개 앞설 수 있다. 음수 leak 은 0 으로 본다. */
         gint64 d_leak = (gint64)d_in - (gint64)d_out;
         if (d_leak < 0)
             d_leak = 0;
-        prev_in[i] = s->q_in;
-        prev_out[i] = s->q_out;
-        prev_enc[i] = s->enc_out;
-        prev_over[i] = s->overrun;
+        prev_in[i] = snapshot.q_in;
+        prev_out[i] = snapshot.q_out;
+        prev_enc[i] = snapshot.enc_out;
+        prev_over[i] = snapshot.overrun;
 
         __LOG(LOG_NOTICE,
               "[GST][%s:%d] ch%d enc-stat[%ds] in=%" G_GUINT64_FORMAT "(%.1ffps)"
@@ -730,10 +729,8 @@ static gboolean enc_stat_report(gpointer user_data)
               d_in, (gdouble)d_in / period,
               d_out, d_leak,
               d_enc, (gdouble)d_enc / period,
-              d_over, lvl_buf, lvl_byte, s->lvl_buf_max, max_bytes,
-              s->enc_gap_max_us / 1000.0);
-
-        s->enc_gap_max_us = 0;  /* 구간별 최대값으로 재시작 */
+              d_over, lvl_buf, lvl_byte, snapshot.lvl_buf_max, max_bytes,
+              snapshot.enc_gap_max_us / 1000.0);
     }
     return G_SOURCE_CONTINUE;
 }

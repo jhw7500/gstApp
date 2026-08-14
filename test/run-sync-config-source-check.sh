@@ -18,6 +18,7 @@ sync = Path('rtspSync.cpp').read_text(encoding='utf-8')
 frame = Path('rtspFrameId.h').read_text(encoding='utf-8')
 main = Path('main.cpp').read_text(encoding='utf-8')
 audio = Path('audioBin.cpp').read_text(encoding='utf-8')
+encoder = Path('encoderBin.cpp').read_text(encoding='utf-8')
 
 required = {
     'generation-owned media state': 'g_object_set_data_full(G_OBJECT(media), "gstapp-rtsp-sync-generation"',
@@ -77,6 +78,60 @@ if 'return -1;' in audio[audio.index('gboolean AudioBin::init()'):]:
 if 'cmdArg.levelMode == MODE_TEST ? "audiotestsrc" : "alsasrc"' not in \
         ' '.join(audio.split()):
     raise SystemExit('test mode does not provide deterministic audio input')
+
+enc_stat = encoder[encoder.index('typedef struct {'):
+                   encoder.index('} EncStat;')]
+for field in ('q_in', 'q_out', 'enc_out', 'overrun', 'lvl_buf_max',
+              'enc_gap_max_us'):
+    if field in enc_stat:
+        raise SystemExit(f'raw shared encoder counter remains in EncStat: {field}')
+if 'EncoderTelemetry telemetry;' not in enc_stat:
+    raise SystemExit('EncStat does not own EncoderTelemetry')
+
+for callback, record_call in (
+        ('enc_q_in_probe', 's->telemetry.recordQueueInput()'),
+        ('enc_q_out_probe', 'telemetry.recordQueueOutput()'),
+        ('enc_out_probe', 's->telemetry.recordEncoderOutput('),
+        ('enc_queue_overrun_cb', 'telemetry.recordOverrun()')):
+    start = encoder.index(callback)
+    body = encoder[start:encoder.index('\n}', start)]
+    if record_call not in body:
+        raise SystemExit(f'{callback} does not use EncoderTelemetry')
+
+q_in = encoder[encoder.index('enc_q_in_probe'):
+               encoder.index('\n}', encoder.index('enc_q_in_probe'))]
+if 's->telemetry.recordQueueLevel(lvl)' not in q_in:
+    raise SystemExit('queue watermark does not use EncoderTelemetry')
+
+nodata = encoder[encoder.index('enc_nodata_watch'):
+                 encoder.index('\n}', encoder.index('enc_nodata_watch'))]
+if 'telemetry.snapshot(FALSE)' not in nodata:
+    raise SystemExit('no-data watch does not read an encoder telemetry snapshot')
+
+report = encoder[encoder.index('enc_stat_report'):
+                 encoder.index('\n}', encoder.index('enc_stat_report'))]
+if report.count('EncoderTelemetrySnapshot snapshot = ') != 1 or \
+        report.count('s->telemetry.snapshot(TRUE)') != 1:
+    raise SystemExit('encoder report must take one resetting local snapshot')
+previous = {
+    'q_in': 'prev_in',
+    'q_out': 'prev_out',
+    'enc_out': 'prev_enc',
+    'overrun': 'prev_over',
+}
+for field, prev in previous.items():
+    if f'snapshot.{field} - {prev}[i]' not in report or \
+            f'{prev}[i] = snapshot.{field}' not in report:
+        raise SystemExit(f'encoder report does not reuse snapshot for {field}')
+if 'snapshot.lvl_buf_max' not in report or \
+        'snapshot.enc_gap_max_us' not in report:
+    raise SystemExit('encoder report maxima do not come from the local snapshot')
+
+for field in ('q_in', 'q_out', 'enc_out', 'overrun', 'lvl_buf_max',
+              'enc_gap_max_us'):
+    if f's->{field}' in encoder:
+        raise SystemExit(f'raw EncStat counter access remains: {field}')
+
 constructor = s[s.index('RtspServerBin::RtspServerBin()'):
                 s.index('RtspServerBin::~RtspServerBin()')]
 if 'rtsp_sync_trace_new' in constructor:

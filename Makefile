@@ -54,7 +54,7 @@ CXXFLAGS += $(ALL_CFLAGS) $(CPP_PERF_FLAGS)
 
 ALLFLAGS=$(ALL_CFLAGS) $(ALL_LDFLAGS) -lturbojpeg
 #OBJS = videoBin.o recordBin.o muxSinkBin.o rtspServerBin.o audioBin.o muxBin.o
-OBJS = videoBin.o recordBin.o muxSinkBin.o rtspServerBin.o rtspSync.o testBin.o captureBin.o util.o parser.o cfgjson.o aes.o tcpServer.o audioBin.o ipc.o encoderBin.o
+OBJS = videoBin.o recordBin.o muxSinkBin.o rtspServerBin.o rtspSync.o testBin.o captureBin.o util.o parser.o cfgjson.o aes.o tcpServer.o audioBin.o ipc.o encoderBin.o encoderStat.o
 
 $(OUTPUT)/gstApp : $(OBJS) main.cpp | $(OUTPUT) $(OBJ)
 	$(CXX) $(CPP_PERF_FLAGS) -o $@ $^ $(ALLFLAGS)
@@ -126,8 +126,11 @@ audioBin.o : audioBin.cpp audioBin.h
 ipc.o : ipc.cpp ipc.h
 	$(CXX) $(CXXFLAGS) -c ipc.cpp
 
-encoderBin.o : encoderBin.cpp encoderBin.h
+encoderBin.o : encoderBin.cpp encoderBin.h encoderStat.h
 	$(CXX) $(CXXFLAGS) -c encoderBin.cpp
+
+encoderStat.o : encoderStat.cpp encoderStat.h
+	$(CXX) $(CXXFLAGS) -c encoderStat.cpp
 
 #json_c.o : json_c.cpp json_c.h
 #	$(CXX) $(ALLFLAGS) -c json_c.cpp
