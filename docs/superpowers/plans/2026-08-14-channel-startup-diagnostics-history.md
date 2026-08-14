@@ -111,7 +111,8 @@ rtk git diff --stat 91f3718
 rtk git diff --name-only 91f3718
 ```
 
-Expected: 변경 파일은 새 이력 문서, 이전 handoff 제거, PR #38 검증 문서와 이 계획 문서뿐이며 whitespace 오류가 없다.
+Expected: 추적 변경 파일은 새 이력 문서, PR #38 검증 문서와 이 계획 문서뿐이고,
+미추적이던 이전 handoff는 작업 트리에 남지 않으며 whitespace 오류가 없다.
 
 - [ ] **Step 7: 독립 읽기 전용 리뷰를 수행한다**
 
@@ -122,7 +123,7 @@ Expected: 변경 파일은 새 이력 문서, 이전 handoff 제거, PR #38 검�
 Run:
 
 ```bash
-rtk git add docs/CHANNEL_STARTUP_DIAGNOSTICS_HISTORY.md docs/gstapp-handoff-2026-08-11-channel-logging.md docs/PR38_REVIEW_FOLLOWUP_VALIDATION_20260814.md docs/superpowers/plans/2026-08-14-channel-startup-diagnostics-history.md
+rtk git add docs/CHANNEL_STARTUP_DIAGNOSTICS_HISTORY.md docs/PR38_REVIEW_FOLLOWUP_VALIDATION_20260814.md docs/superpowers/plans/2026-08-14-channel-startup-diagnostics-history.md
 rtk git diff --cached --check
 rtk git commit -m "docs: preserve channel startup diagnostics history"
 ```
