@@ -12,6 +12,7 @@ grep -q 'cmdArg.rtsp_sync_trace_sec' rtspServerBin.cpp
 grep -q 'cmdArg.rtsp_frame_id_sei' rtspServerBin.cpp
 grep -q 'cmdArg.rtsp_test_stall_ch' rtspServerBin.cpp
 python3 - <<'PY'
+import re
 from pathlib import Path
 s = Path('rtspServerBin.cpp').read_text(encoding='utf-8')
 sync = Path('rtspSync.cpp').read_text(encoding='utf-8')
@@ -32,8 +33,8 @@ for label, needle, source in (
          '#define DEFAULT_V4L2_SYNC_LOG_FRAMES FALSE', parser_h),
         ('V4L2 frame-log default assignment',
          'arg.v4l2_sync_log_frames = DEFAULT_V4L2_SYNC_LOG_FRAMES;', parser),
-        ('V4L2 frame-log CLI option',
-         '{"v4l2-sync-log-frames", 0, 0, G_OPTION_ARG_INT,', parser),
+        ('V4L2 frame-log CLI option name',
+         '{"v4l2-sync-log-frames"', parser),
         ('V4L2 trace frame-log state', 'gboolean log_frames;', video),
         ('V4L2 trace frame-log copy',
          'trace->log_frames = cmdArg.v4l2_sync_log_frames;', video),
@@ -44,6 +45,28 @@ for label, needle, source in (
 if missing_v4l2_frame_log:
     raise SystemExit('missing source contracts: ' +
                      ', '.join(missing_v4l2_frame_log))
+
+option_marker = '{"v4l2-sync-log-frames"'
+if parser.count(option_marker) != 1:
+    raise SystemExit('V4L2 frame-log GOption entry must be unique')
+option_start = parser.index(option_marker)
+option_end = parser.index('},', option_start) + 2
+option_entry = parser[option_start:option_end]
+if not re.fullmatch(
+        r'\{"v4l2-sync-log-frames"\s*,\s*0\s*,\s*0\s*,\s*'
+        r'G_OPTION_ARG_INT\s*,\s*&arg\.v4l2_sync_log_frames\s*,\s*'
+        r'"[^"]*"\s*,\s*"INT"\s*\},', option_entry, re.DOTALL):
+    raise SystemExit(
+        'V4L2 frame-log GOption must use G_OPTION_ARG_INT and '
+        '&arg.v4l2_sync_log_frames')
+
+frame_log_assignments = re.findall(
+    r'\btrace->log_frames\s*=(?!=)\s*[^;]+;', video)
+if len(frame_log_assignments) != 1 or \
+        frame_log_assignments[0].strip() != \
+        'trace->log_frames = cmdArg.v4l2_sync_log_frames;':
+    raise SystemExit(
+        'V4L2 trace log_frames must have exactly one normalized CmdArg copy')
 
 trace_normalize = parser.index(
     'sync_trace_sanity(&arg.v4l2_sync_trace_sec, "v4l2_sync_trace_sec")')

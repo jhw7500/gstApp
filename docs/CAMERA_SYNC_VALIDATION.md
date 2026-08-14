@@ -73,7 +73,7 @@
 ### 2.3 현재 동기화 설정 인터페이스
 
 현재 설정 우선순위는 `기본값 → JSON → CLI`이며, 뒤의 값이 앞의 값을
-덮어쓴다. 일곱 설정의 기본값은 모두 비활성이다. 제품 기능인 Frame ID SEI는
+덮어쓴다. 여덟 설정의 기본값은 모두 비활성이다. 제품 기능인 Frame ID SEI는
 `VHL_CAM.rtsp_tune.frame_id_sei` JSON boolean 또는 CLI로 설정할 수 있고,
 나머지 trace/stall 설정은 CLI 전용이다.
 
