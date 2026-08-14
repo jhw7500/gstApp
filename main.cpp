@@ -825,7 +825,7 @@ gint main(gint argc, gchar *argv[]) {
   if (parser->json_parser(DEFAULT_JSON_PATH, JSON_CAM_OBJ_NAME) < 0)
     return -1;
 
-  if (parser->arg_parser(&argc, &argv) < 0)
+  if (parser->arg_parser(&argc, &argv) <= 0)
     return -1;
 
   getPasswdWithAES(&parser->arg);

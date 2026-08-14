@@ -53,6 +53,13 @@ if '#include "max9296Prepare.h"' not in main:
 if 'gint apply_camera_sysfs();' not in parser_header:
     fail('ParserClass does not declare apply_camera_sysfs')
 
+arg_failure_gate = re.search(
+    r'if\s*\(\s*parser->arg_parser\(\s*&argc\s*,\s*&argv\s*\)'
+    r'\s*<=\s*0\s*\)\s*return\s+(?:-1|EXIT_FAILURE)\s*;',
+    main_body)
+if not arg_failure_gate:
+    fail('FALSE arg_parser result must exit nonzero before owner lock/sysfs')
+
 for forbidden in ('safe_write_file', 'DEFAULT_ENABLE_PATH_',
                   'DEFAULT_ROTATE_PATH_'):
     if forbidden in arg_parser:
