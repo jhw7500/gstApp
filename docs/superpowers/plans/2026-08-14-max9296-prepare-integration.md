@@ -508,8 +508,11 @@ exactly once and finish with `exit(app_exit_code)`.
 
 - [ ] **Step 4: Invoke prepare after post-init channel mutation**
 
-Immediately after pipeline setup/bus-watch construction and before line 1193's
-first possible state transition, rebuild the input from current `cmdArg`:
+Declare and initialize `prepare_input` before the first existing
+`goto main_end`, because C++ forbids a forward goto that bypasses a same-scope
+initialized local. Immediately after pipeline setup/bus-watch construction and
+before line 1193's first possible state transition, re-copy the post-init enable
+mask and put the report/call locals in a nested scope:
 
 ```cpp
 /* prepare_input was preflighted before sysfs apply. Re-copy only channel
@@ -517,12 +520,14 @@ first possible state transition, rebuild the input from current `cmdArg`:
 for (unsigned ch = 0; ch < 4; ++ch)
   prepare_input.channel_enabled[ch] = cmdArg.cam[ch].enable ? 1 : 0;
 
-Max9296PrepareReport prepare_report = {};
-gint prepare_ret =
-    max9296_prepare_all(&prepare_input, &prepare_report, NULL);
-if (prepare_ret < 0) {
-  app_exit_code = EXIT_FAILURE;
-  goto main_end;
+{
+  Max9296PrepareReport prepare_report = {};
+  gint prepare_ret =
+      max9296_prepare_all(&prepare_input, &prepare_report, NULL);
+  if (prepare_ret < 0) {
+    app_exit_code = EXIT_FAILURE;
+    goto main_end;
+  }
 }
 ```
 
