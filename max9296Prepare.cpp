@@ -2,9 +2,12 @@
 
 #include <ctype.h>
 #include <errno.h>
+#include <fcntl.h>
 #include <limits.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/file.h>
+#include <unistd.h>
 
 namespace {
 
@@ -159,6 +162,17 @@ static bool parse_state(const char *source, size_t length,
     return true;
 }
 
+static bool has_current_fingerprint(const Max9296PrepareTarget *target,
+                                    const Max9296PrepareStatus *status)
+{
+    return target->mode && target->table &&
+           strcmp(status->mode, target->mode) == 0 &&
+           strcmp(status->table, target->table) == 0 &&
+           status->width == target->width && status->height == target->height &&
+           status->fps == target->fps && status->code == 0x2006 &&
+           status->enable == target->enable;
+}
+
 }  // namespace
 
 const char *max9296_prepare_path(unsigned csi)
@@ -297,5 +311,65 @@ int max9296_prepare_parse_status(const char *line, size_t length,
         if (!seen[field])
             return -EINVAL;
     *status = parsed;
+    return 0;
+}
+
+int max9296_prepare_acquire_owner_lock(const char *path)
+{
+    const int fd = open(path, O_RDWR | O_CREAT | O_CLOEXEC, 0644);
+    if (fd < 0)
+        return -errno;
+    if (flock(fd, LOCK_EX | LOCK_NB) != 0) {
+        const int result = -errno;
+        close(fd);
+        return result;
+    }
+    return fd;
+}
+
+void max9296_prepare_release_owner_lock(int fd)
+{
+    if (fd >= 0)
+        close(fd);
+}
+
+int max9296_prepare_classify(const Max9296PrepareTarget *target,
+                             const Max9296PrepareStatus *status,
+                             Max9296PrepareDisposition *disposition)
+{
+    if (!target || !status || !disposition)
+        return -EINVAL;
+
+    *disposition = MAX9296_DISPOSITION_FAIL;
+    if (status->state == MAX9296_STATE_PREPARING)
+        return -EBUSY;
+    if (status->lease != 0) {
+        if (status->state != MAX9296_STATE_READY)
+            return -EPROTO;
+        if (status->match != 0 && status->worker_errno == 0 &&
+            has_current_fingerprint(target, status))
+            *disposition = MAX9296_DISPOSITION_REFRESH_READY;
+        return 0;
+    }
+
+    if (status->state == MAX9296_STATE_CONSUMED) {
+        if (status->worker_errno != 0)
+            return 0;
+        if (status->match != 0 && status->generation != 0 &&
+            status->epoch != 0 && has_current_fingerprint(target, status))
+            *disposition = MAX9296_DISPOSITION_WARM;
+        else
+            *disposition = MAX9296_DISPOSITION_NEW_PREPARE;
+        return 0;
+    }
+
+    if (status->state == MAX9296_STATE_READY)
+        return 0;
+    if (status->worker_errno == 0 &&
+        (status->state == MAX9296_STATE_IDLE ||
+         status->state == MAX9296_STATE_FAILED ||
+         status->state == MAX9296_STATE_EXPIRED ||
+         status->state == MAX9296_STATE_STALE))
+        *disposition = MAX9296_DISPOSITION_NEW_PREPARE;
     return 0;
 }

@@ -1,9 +1,11 @@
 #include "../max9296Prepare.h"
 
 #include <errno.h>
+#include <stdlib.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <string.h>
+#include <unistd.h>
 
 static int failures = 0;
 static int checks = 0;
@@ -231,6 +233,153 @@ static void test_rejects_malformed_status_samples(void)
         "lease=1 match=1");
 }
 
+static Max9296PrepareTarget classification_target(void)
+{
+    Max9296PrepareTarget target = {};
+    target.active = true;
+    target.csi = 0;
+    target.path = "/prepare";
+    target.width = 3840;
+    target.height = 1080;
+    target.fps = 15;
+    target.enable = 3;
+    target.mode = "fhd";
+    target.table = "dual";
+    return target;
+}
+
+static Max9296PrepareStatus current_status(Max9296PrepareState state)
+{
+    Max9296PrepareStatus status = {};
+    status.state = state;
+    status.generation = 77;
+    status.epoch = 9;
+    strcpy(status.mode, "fhd");
+    strcpy(status.table, "dual");
+    status.width = 3840;
+    status.height = 1080;
+    status.fps = 15;
+    status.code = 0x2006;
+    status.enable = 3;
+    status.lease = 0;
+    status.match = 1;
+    return status;
+}
+
+static void test_owner_lock_is_exclusive_until_released(void)
+{
+    char path[] = "/tmp/max9296-prepare-lock-XXXXXX";
+    const int seed = mkstemp(path);
+    CHECK(seed >= 0);
+    if (seed < 0)
+        return;
+    CHECK(close(seed) == 0);
+    CHECK(unlink(path) == 0);
+
+    const int first = max9296_prepare_acquire_owner_lock(path);
+    CHECK(first >= 0);
+    CHECK(max9296_prepare_acquire_owner_lock(path) == -EWOULDBLOCK);
+    max9296_prepare_release_owner_lock(first);
+
+    const int third = max9296_prepare_acquire_owner_lock(path);
+    CHECK(third >= 0);
+    max9296_prepare_release_owner_lock(third);
+    CHECK(unlink(path) == 0);
+}
+
+struct ClassificationCase {
+    const char *name;
+    Max9296PrepareStatus status;
+    int expected_result;
+    Max9296PrepareDisposition expected_disposition;
+};
+
+static void test_classifies_prepare_status_truth_table(void)
+{
+    Max9296PrepareStatus consumed = current_status(MAX9296_STATE_CONSUMED);
+    Max9296PrepareStatus consumed_mismatch = consumed;
+    consumed_mismatch.width = 1920;
+    Max9296PrepareStatus consumed_not_matched = consumed;
+    consumed_not_matched.match = 0;
+    Max9296PrepareStatus consumed_worker_error = consumed;
+    consumed_worker_error.worker_errno = -EIO;
+
+    Max9296PrepareStatus ready = current_status(MAX9296_STATE_READY);
+    ready.lease = 1;
+    ready.last_errno = -ESTALE;
+    Max9296PrepareStatus ready_mismatch = ready;
+    strcpy(ready_mismatch.mode, "hd");
+    Max9296PrepareStatus ready_not_matched = ready;
+    ready_not_matched.match = 0;
+    Max9296PrepareStatus ready_worker_error = ready;
+    ready_worker_error.worker_errno = -EIO;
+    Max9296PrepareStatus ready_unleased = ready;
+    ready_unleased.lease = 0;
+
+    Max9296PrepareStatus stale_leased = current_status(MAX9296_STATE_STALE);
+    stale_leased.lease = 1;
+    Max9296PrepareStatus idle = current_status(MAX9296_STATE_IDLE);
+    idle.generation = 0;
+    idle.epoch = 0;
+    strcpy(idle.mode, "none");
+    strcpy(idle.table, "none");
+    idle.width = 0;
+    idle.height = 0;
+    idle.fps = 0;
+    idle.code = 0;
+    idle.enable = 0;
+    idle.match = 0;
+    Max9296PrepareStatus failed = idle;
+    failed.state = MAX9296_STATE_FAILED;
+    Max9296PrepareStatus expired = idle;
+    expired.state = MAX9296_STATE_EXPIRED;
+    Max9296PrepareStatus stale = idle;
+    stale.state = MAX9296_STATE_STALE;
+    Max9296PrepareStatus preparing = current_status(MAX9296_STATE_PREPARING);
+
+    const ClassificationCase cases[] = {
+        {"consumed matching fingerprint is warm", consumed, 0,
+         MAX9296_DISPOSITION_WARM},
+        {"consumed fingerprint mismatch needs prepare", consumed_mismatch, 0,
+         MAX9296_DISPOSITION_NEW_PREPARE},
+        {"consumed match flag clear needs prepare", consumed_not_matched, 0,
+         MAX9296_DISPOSITION_NEW_PREPARE},
+        {"consumed worker failure is terminal", consumed_worker_error, 0,
+         MAX9296_DISPOSITION_FAIL},
+        {"ready matching lease refreshes despite stale errno", ready, 0,
+         MAX9296_DISPOSITION_REFRESH_READY},
+        {"ready fingerprint mismatch fails", ready_mismatch, 0,
+         MAX9296_DISPOSITION_FAIL},
+        {"ready match flag clear fails", ready_not_matched, 0,
+         MAX9296_DISPOSITION_FAIL},
+        {"ready worker failure fails", ready_worker_error, 0,
+         MAX9296_DISPOSITION_FAIL},
+        {"ready without lease fails", ready_unleased, 0,
+         MAX9296_DISPOSITION_FAIL},
+        {"stale lease violates protocol", stale_leased, -EPROTO,
+         MAX9296_DISPOSITION_FAIL},
+        {"idle needs new prepare", idle, 0, MAX9296_DISPOSITION_NEW_PREPARE},
+        {"failed needs new prepare", failed, 0,
+         MAX9296_DISPOSITION_NEW_PREPARE},
+        {"expired needs new prepare", expired, 0,
+         MAX9296_DISPOSITION_NEW_PREPARE},
+        {"stale needs new prepare", stale, 0,
+         MAX9296_DISPOSITION_NEW_PREPARE},
+        {"preparing is busy", preparing, -EBUSY, MAX9296_DISPOSITION_FAIL},
+    };
+    const Max9296PrepareTarget target = classification_target();
+
+    for (size_t i = 0; i < sizeof(cases) / sizeof(cases[0]); ++i) {
+        Max9296PrepareDisposition disposition = MAX9296_DISPOSITION_WARM;
+        const int result = max9296_prepare_classify(&target, &cases[i].status,
+                                                    &disposition);
+        CHECK(result == cases[i].expected_result);
+        CHECK(disposition == cases[i].expected_disposition);
+        if (result != cases[i].expected_result)
+            fprintf(stderr, "classification case failed: %s\n", cases[i].name);
+    }
+}
+
 int main(void)
 {
     test_builds_dual_and_single_targets();
@@ -241,6 +390,8 @@ int main(void)
     test_parses_ready_and_consumed_samples();
     test_parses_reordered_future_and_idle_samples();
     test_rejects_malformed_status_samples();
+    test_owner_lock_is_exclusive_until_released();
+    test_classifies_prepare_status_truth_table();
     printf("max9296 prepare test: %d checks, %d failures -> %s\n", checks,
            failures, failures ? "FAILED" : "PASSED");
     return failures ? 1 : 0;

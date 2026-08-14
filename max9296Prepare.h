@@ -4,6 +4,8 @@
 #include <stddef.h>
 #include <stdint.h>
 
+#define MAX9296_PREPARE_OWNER_LOCK "/run/lock/gstapp-camera.lock"
+
 enum Max9296PrepareState {
     MAX9296_STATE_IDLE,
     MAX9296_STATE_PREPARING,
@@ -21,6 +23,13 @@ enum Max9296PrepareAction {
     MAX9296_ACTION_READY_REFRESHED,
     MAX9296_ACTION_COLD_PREPARED,
     MAX9296_ACTION_FAILED
+};
+
+enum Max9296PrepareDisposition {
+    MAX9296_DISPOSITION_WARM,
+    MAX9296_DISPOSITION_REFRESH_READY,
+    MAX9296_DISPOSITION_NEW_PREPARE,
+    MAX9296_DISPOSITION_FAIL
 };
 
 struct Max9296PrepareInput {
@@ -65,5 +74,10 @@ int max9296_prepare_build_targets(const Max9296PrepareInput *input,
 int max9296_prepare_parse_status(const char *line, size_t length,
                                  Max9296PrepareStatus *status);
 const char *max9296_prepare_path(unsigned csi);
+int max9296_prepare_acquire_owner_lock(const char *path);
+void max9296_prepare_release_owner_lock(int fd);
+int max9296_prepare_classify(const Max9296PrepareTarget *target,
+                             const Max9296PrepareStatus *status,
+                             Max9296PrepareDisposition *disposition);
 
 #endif
