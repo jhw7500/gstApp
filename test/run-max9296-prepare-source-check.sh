@@ -40,6 +40,7 @@ main_source = Path('main.cpp').read_text(encoding='utf-8')
 parser_source = Path('parser.cpp').read_text(encoding='utf-8')
 parser_header = Path('parser.h').read_text(encoding='utf-8')
 makefile = Path('Makefile').read_text(encoding='utf-8')
+util_source = Path('util.cpp').read_text(encoding='utf-8')
 
 main = without_comments(main_source)
 main_body = function_body(main, 'gint main(')
@@ -47,6 +48,8 @@ arg_parser = function_body(without_comments(parser_source),
                            'gint ParserClass::arg_parser(')
 apply_sysfs = function_body(without_comments(parser_source),
                             'gint ParserClass::apply_camera_sysfs(')
+safe_write = function_body(without_comments(util_source),
+                           'int safe_write_file(')
 
 if '#include "max9296Prepare.h"' not in main:
     fail('main.cpp does not include max9296Prepare.h')
@@ -78,6 +81,14 @@ for path in paths:
         fail(f'apply_camera_sysfs must log and write {path} exactly once')
 if len(re.findall(r'if\s*\(\s*ret\s*<\s*0\s*\)', apply_sysfs)) != 4:
     fail('all four apply_camera_sysfs writes must be checked')
+if 'fflush(fp)' not in safe_write:
+    fail('safe_write_file must flush buffered sysfs writes explicitly')
+if not re.search(r'if\s*\(\s*fclose\(fp\)\s*!=\s*0\s*\)', safe_write):
+    fail('safe_write_file must propagate fclose failure')
+if safe_write.count('fclose(fp)') != 1:
+    fail('safe_write_file must close its stream exactly once')
+if 'errno = first_errno;' not in safe_write:
+    fail('safe_write_file must preserve the first write/close errno')
 
 json_pos = main_body.find('parser->json_parser(')
 arg_pos = main_body.find('parser->arg_parser(')

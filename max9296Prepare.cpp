@@ -423,7 +423,6 @@ int max9296_prepare_build_targets(const Max9296PrepareInput *input,
         if (input->channel_enabled[channel] > 1)
             return -EINVAL;
 
-    const char *const mode = input->width == 1280 ? "hd" : "fhd";
     for (unsigned csi = 0; csi < 2; ++csi) {
         const uint32_t enable = input->channel_enabled[csi * 2] |
                                 (input->channel_enabled[csi * 2 + 1] << 1);
@@ -435,8 +434,12 @@ int max9296_prepare_build_targets(const Max9296PrepareInput *input,
         target.height = input->height;
         target.fps = input->fps[csi];
         target.enable = enable;
-        target.mode = mode;
-        target.table = enable == 3 ? "dual" : "single";
+        target.mode = enable == 3 ? "dual-wide"
+                                  : (enable == 0 ? "none" : "single");
+        target.table = enable == 3 ? "dual"
+                                   : (enable == 1 ? "left"
+                                                  : (enable == 2 ? "right"
+                                                                 : "none"));
         if (target.active && (target.fps == 0 || target.fps > 120))
             return -EINVAL;
     }
@@ -578,6 +581,7 @@ int max9296_prepare_classify(const Max9296PrepareTarget *target,
         if (status->state != MAX9296_STATE_READY)
             return -EPROTO;
         if (status->match != 0 && status->worker_errno == 0 &&
+            status->generation != 0 && status->epoch != 0 &&
             has_current_fingerprint(target, status))
             *disposition = MAX9296_DISPOSITION_REFRESH_READY;
         return 0;

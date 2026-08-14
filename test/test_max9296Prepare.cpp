@@ -63,7 +63,7 @@ static void test_builds_dual_and_single_targets(void)
     CHECK(target[0].enable == 3);
     CHECK(strcmp(target[0].path,
                  "/sys/bus/i2c/devices/2-0048/prepare") == 0);
-    CHECK(strcmp(target[0].mode, "fhd") == 0);
+    CHECK(strcmp(target[0].mode, "dual-wide") == 0);
     CHECK(strcmp(target[0].table, "dual") == 0);
     CHECK(target[1].active);
     CHECK(target[1].csi == 1);
@@ -71,8 +71,8 @@ static void test_builds_dual_and_single_targets(void)
     CHECK(target[1].enable == 2);
     CHECK(strcmp(target[1].path,
                  "/sys/bus/i2c/devices/1-0048/prepare") == 0);
-    CHECK(strcmp(target[1].mode, "fhd") == 0);
-    CHECK(strcmp(target[1].table, "single") == 0);
+    CHECK(strcmp(target[1].mode, "single") == 0);
+    CHECK(strcmp(target[1].table, "right") == 0);
 }
 
 static void test_builds_hd_dual_target(void)
@@ -89,7 +89,7 @@ static void test_builds_hd_dual_target(void)
     CHECK(target[1].active);
     CHECK(target[1].width == 2560 && target[1].height == 720);
     CHECK(target[1].enable == 3);
-    CHECK(strcmp(target[1].mode, "hd") == 0);
+    CHECK(strcmp(target[1].mode, "dual-wide") == 0);
     CHECK(strcmp(target[1].table, "dual") == 0);
 }
 
@@ -105,7 +105,9 @@ static void test_builds_left_and_right_single_targets(void)
             CHECK(target[csi].active);
             CHECK(target[csi].enable == (1U << side));
             CHECK(target[csi].width == 1920 && target[csi].height == 1080);
-            CHECK(strcmp(target[csi].table, "single") == 0);
+            CHECK(strcmp(target[csi].mode, "single") == 0);
+            CHECK(strcmp(target[csi].table, side == 0 ? "left" : "right") ==
+                  0);
             CHECK(!target[1 - csi].active);
         }
     }
@@ -159,7 +161,7 @@ static void test_rejects_invalid_request_tuples(void)
 }
 
 static const char ready_sample[] =
-    "state=READY generation=77 epoch=9 mode=fhd table=dual width=3840 "
+    "state=READY generation=77 epoch=9 mode=dual-wide table=dual width=3840 "
     "height=1080 fps=15 code=0x2006 enable=3 errno=0 worker_errno=0 "
     "lease=1 match=1\n";
 
@@ -169,7 +171,7 @@ static void test_parses_ready_and_consumed_samples(void)
     check_parse_ok(ready_sample, &status);
     CHECK(status.state == MAX9296_STATE_READY);
     CHECK(status.generation == 77 && status.epoch == 9);
-    CHECK(strcmp(status.mode, "fhd") == 0);
+    CHECK(strcmp(status.mode, "dual-wide") == 0);
     CHECK(strcmp(status.table, "dual") == 0);
     CHECK(status.width == 3840 && status.height == 1080 && status.fps == 15);
     CHECK(status.code == 0x2006 && status.enable == 3);
@@ -177,10 +179,12 @@ static void test_parses_ready_and_consumed_samples(void)
     CHECK(status.lease == 1 && status.match == 1);
 
     check_parse_ok(
-        "state=CONSUMED generation=77 epoch=10 mode=fhd table=single "
+        "state=CONSUMED generation=77 epoch=10 mode=single table=right "
         "width=1920 height=1080 fps=15 code=0x2006 enable=2 errno=-116 "
         "worker_errno=-5 lease=0 match=1", &status);
     CHECK(status.state == MAX9296_STATE_CONSUMED);
+    CHECK(strcmp(status.mode, "single") == 0);
+    CHECK(strcmp(status.table, "right") == 0);
     CHECK(status.last_errno == -116 && status.worker_errno == -5);
     CHECK(status.lease == 0 && status.match == 1);
 }
@@ -190,10 +194,12 @@ static void test_parses_reordered_future_and_idle_samples(void)
     Max9296PrepareStatus status = {};
     check_parse_ok(
         "future=v2 match=0 worker_errno=0 enable=1 code=8198 fps=15 "
-        "height=720 table=single epoch=1 mode=hd errno=0 width=1280 "
+        "height=720 table=future-table epoch=1 mode=future-mode errno=0 width=1280 "
         "generation=4 lease=0 state=STALE", &status);
     CHECK(status.state == MAX9296_STATE_STALE);
     CHECK(status.code == 8198 && status.width == 1280 && status.height == 720);
+    CHECK(strcmp(status.mode, "future-mode") == 0);
+    CHECK(strcmp(status.table, "future-table") == 0);
 
     check_parse_ok(
         "state=IDLE generation=0 epoch=0 mode=none table=none width=0 "
@@ -210,31 +216,31 @@ static void test_rejects_malformed_status_samples(void)
     CHECK(max9296_prepare_parse_status(ready_sample, strlen(ready_sample), NULL) ==
           -EINVAL);
     check_parse_bad(
-        "state=READY generation=1 epoch=1 mode=fhd table=dual width=1 "
+        "state=READY generation=1 epoch=1 mode=opaque table=opaque width=1 "
         "height=1 fps=1 code=0x2006 enable=3 errno=0 worker_errno=0 "
         "lease=1");
     check_parse_bad(
-        "state=READY state=READY generation=1 epoch=1 mode=fhd table=dual "
+        "state=READY state=READY generation=1 epoch=1 mode=opaque table=opaque "
         "width=1 height=1 fps=1 code=0x2006 enable=3 errno=0 "
         "worker_errno=0 lease=1 match=1");
     check_parse_bad(
-        "state=READY generation=18446744073709551616 epoch=1 mode=fhd "
-        "table=dual width=1 height=1 fps=1 code=0x2006 enable=3 errno=0 "
+        "state=READY generation=18446744073709551616 epoch=1 mode=opaque "
+        "table=opaque width=1 height=1 fps=1 code=0x2006 enable=3 errno=0 "
         "worker_errno=0 lease=1 match=1");
     check_parse_bad(
-        "state=READY generation=1 epoch=1 mode=fhd table=dual width=1 "
+        "state=READY generation=1 epoch=1 mode=opaque table=opaque width=1 "
         "height=1 fps=1 code=0x2006 enable=3 errno=--1 worker_errno=0 "
         "lease=1 match=1");
     check_parse_bad(
-        "state=READY generation=1 epoch=1 mode=fhd table=dual width=1 "
+        "state=READY generation=1 epoch=1 mode=opaque table=opaque width=1 "
         "height=1 fps=1 code=0x2006 enable=3 errno=0 worker_errno=0 "
         "lease=2 match=1");
     check_parse_bad(
-        "state=READY generation=1 epoch=1 mode=fhd table=dual width=1 "
+        "state=READY generation=1 epoch=1 mode=opaque table=opaque width=1 "
         "height=1 fps=1 code=0x2006 enable=3 errno=0 worker_errno=0 "
         "lease=1 match=2");
     check_parse_bad(
-        "state=UNKNOWN generation=1 epoch=1 mode=fhd table=dual width=1 "
+        "state=UNKNOWN generation=1 epoch=1 mode=opaque table=opaque width=1 "
         "height=1 fps=1 code=0x2006 enable=3 errno=0 worker_errno=0 "
         "lease=1 match=1");
 }
@@ -249,7 +255,7 @@ static Max9296PrepareTarget classification_target(void)
     target.height = 1080;
     target.fps = 15;
     target.enable = 3;
-    target.mode = "fhd";
+    target.mode = "dual-wide";
     target.table = "dual";
     return target;
 }
@@ -260,7 +266,7 @@ static Max9296PrepareStatus current_status(Max9296PrepareState state)
     status.state = state;
     status.generation = 77;
     status.epoch = 9;
-    strcpy(status.mode, "fhd");
+    strcpy(status.mode, "dual-wide");
     strcpy(status.table, "dual");
     status.width = 3840;
     status.height = 1080;
@@ -314,13 +320,17 @@ static void test_classifies_prepare_status_truth_table(void)
     ready.lease = 1;
     ready.last_errno = -ESTALE;
     Max9296PrepareStatus ready_mismatch = ready;
-    strcpy(ready_mismatch.mode, "hd");
+    strcpy(ready_mismatch.mode, "single");
     Max9296PrepareStatus ready_not_matched = ready;
     ready_not_matched.match = 0;
     Max9296PrepareStatus ready_worker_error = ready;
     ready_worker_error.worker_errno = -EIO;
     Max9296PrepareStatus ready_unleased = ready;
     ready_unleased.lease = 0;
+    Max9296PrepareStatus ready_zero_generation = ready;
+    ready_zero_generation.generation = 0;
+    Max9296PrepareStatus ready_zero_epoch = ready;
+    ready_zero_epoch.epoch = 0;
 
     Max9296PrepareStatus stale_leased = current_status(MAX9296_STATE_STALE);
     stale_leased.lease = 1;
@@ -361,6 +371,10 @@ static void test_classifies_prepare_status_truth_table(void)
         {"ready worker failure fails", ready_worker_error, 0,
          MAX9296_DISPOSITION_FAIL},
         {"ready without lease fails", ready_unleased, 0,
+         MAX9296_DISPOSITION_FAIL},
+        {"ready lease with zero generation fails", ready_zero_generation, 0,
+         MAX9296_DISPOSITION_FAIL},
+        {"ready lease with zero epoch fails", ready_zero_epoch, 0,
          MAX9296_DISPOSITION_FAIL},
         {"stale lease violates protocol", stale_leased, -EPROTO,
          MAX9296_DISPOSITION_FAIL},
@@ -711,21 +725,29 @@ static std::string dual_ready(uint64_t generation, uint64_t epoch,
                               int last_errno = 0, int worker_errno = 0,
                               uint32_t lease = 1, uint32_t match = 1)
 {
-    return status_text("READY", generation, epoch, "fhd", "dual", 3840,
+    return status_text("READY", generation, epoch, "dual-wide", "dual", 3840,
                        1080, 15, 3, last_errno, worker_errno, lease, match);
 }
 
-static std::string single_ready(uint64_t generation, uint64_t epoch)
+static std::string hd_dual_ready(uint64_t generation, uint64_t epoch)
 {
-    return status_text("READY", generation, epoch, "fhd", "single", 1920,
-                       1080, 15, 1, 0, 0, 1, 1);
+    return status_text("READY", generation, epoch, "dual-wide", "dual", 2560,
+                       720, 15, 3, 0, 0, 1, 1);
+}
+
+static std::string single_ready(uint64_t generation, uint64_t epoch,
+                                uint32_t enable = 1)
+{
+    return status_text("READY", generation, epoch, "single",
+                       enable == 1 ? "left" : "right", 1920, 1080, 15,
+                       enable, 0, 0, 1, 1);
 }
 
 static std::string dual_consumed(uint64_t generation, uint64_t epoch,
                                  uint32_t width = 3840)
 {
-    return status_text("CONSUMED", generation, epoch, "fhd", "dual", width,
-                       1080, 15, 3, 0, 0, 0, 1);
+    return status_text("CONSUMED", generation, epoch, "dual-wide", "dual",
+                       width, 1080, 15, 3, 0, 0, 0, 1);
 }
 
 static void test_cold_domains_write_in_parallel_with_one_generation(void)
@@ -746,7 +768,8 @@ static void test_cold_domains_write_in_parallel_with_one_generation(void)
     CHECK(fake.max_barrier_entered == 2);
     for (unsigned i = 0; i < 2; ++i) {
         CHECK(fake.domain[i].writes.size() == 1);
-        CHECK(fake.domain[i].writes[0] == "1 77 3840 1080 15 3\n");
+        if (!fake.domain[i].writes.empty())
+            CHECK(fake.domain[i].writes[0] == "1 77 3840 1080 15 3\n");
         CHECK(report.domain[i].action == MAX9296_ACTION_COLD_PREPARED);
         CHECK(report.domain[i].rollback_owned);
         CHECK(report.domain[i].elapsed_ns > 0);
@@ -755,18 +778,41 @@ static void test_cold_domains_write_in_parallel_with_one_generation(void)
 
 static void test_one_active_domain_creates_one_worker(void)
 {
+    for (unsigned side = 0; side < 2; ++side) {
+        FakeIo fake;
+        const uint32_t enable = 1U << side;
+        fake_add_read(&fake, 0, idle_status());
+        fake_add_read(&fake, 0, single_ready(77, 4, enable));
+        Max9296PrepareInput input = base_input();
+        input.channel_enabled[side] = 1;
+        Max9296PrepareReport report = {};
+        const Max9296PrepareIo io = fake_io(&fake);
+
+        CHECK(max9296_prepare_all(&input, &report, &io) == 0);
+        CHECK(fake.create_calls == 1 && fake.join_calls == 1);
+        CHECK(fake.domain[1].reads.empty() && fake.domain[1].writes.empty());
+        CHECK(report.domain[1].action == MAX9296_ACTION_SKIPPED);
+    }
+}
+
+static void test_hd_dual_coordinator_uses_driver_fingerprint(void)
+{
     FakeIo fake;
-    fake_add_read(&fake, 0, idle_status());
-    fake_add_read(&fake, 0, single_ready(77, 4));
+    fake_add_read(&fake, 1, idle_status());
+    fake_add_read(&fake, 1, hd_dual_ready(77, 4));
     Max9296PrepareInput input = base_input();
-    input.channel_enabled[0] = 1;
+    input.width = 1280;
+    input.height = 720;
+    input.channel_enabled[2] = 1;
+    input.channel_enabled[3] = 1;
     Max9296PrepareReport report = {};
     const Max9296PrepareIo io = fake_io(&fake);
 
     CHECK(max9296_prepare_all(&input, &report, &io) == 0);
-    CHECK(fake.create_calls == 1 && fake.join_calls == 1);
-    CHECK(fake.domain[1].reads.empty() && fake.domain[1].writes.empty());
-    CHECK(report.domain[1].action == MAX9296_ACTION_SKIPPED);
+    CHECK(fake.domain[1].writes.size() == 1);
+    if (!fake.domain[1].writes.empty())
+        CHECK(fake.domain[1].writes[0] == "1 77 2560 720 15 3\n");
+    CHECK(report.domain[1].action == MAX9296_ACTION_COLD_PREPARED);
 }
 
 static void test_legacy_requires_all_active_paths_missing(void)
@@ -804,7 +850,7 @@ static void test_warm_consumed_is_reread_without_a_worker(void)
 {
     FakeIo fake;
     const std::string warm = status_text(
-        "CONSUMED", 45, 8, "fhd", "dual", 3840, 1080, 15, 3,
+        "CONSUMED", 45, 8, "dual-wide", "dual", 3840, 1080, 15, 3,
         -ESTALE, 0, 0, 1);
     fake_add_read(&fake, 0, warm);
     fake_add_read(&fake, 0, warm);
@@ -853,7 +899,8 @@ static void test_ready_refresh_keeps_generation_and_not_rollback_ownership(void)
 
     CHECK(max9296_prepare_all(&input, &report, &io) == 0);
     CHECK(fake.domain[0].writes.size() == 1);
-    CHECK(fake.domain[0].writes[0] == "1 45 3840 1080 15 3\n");
+    if (!fake.domain[0].writes.empty())
+        CHECK(fake.domain[0].writes[0] == "1 45 3840 1080 15 3\n");
     CHECK(report.domain[0].action == MAX9296_ACTION_READY_REFRESHED);
     CHECK(!report.domain[0].rollback_owned);
     CHECK(report.domain[0].after.last_errno == 0);
@@ -874,7 +921,8 @@ static void test_peer_failure_rolls_back_only_newly_published_lease(void)
     CHECK(max9296_prepare_all(&input, &report, &io) == -EIO);
     CHECK(fake.join_calls == 2);
     CHECK(fake.domain[0].writes.size() == 2);
-    CHECK(fake.domain[0].writes[1] == "0\n");
+    if (fake.domain[0].writes.size() >= 2)
+        CHECK(fake.domain[0].writes[1] == "0\n");
     CHECK(fake.domain[1].writes.size() == 1);
     CHECK(report.domain[0].rollback_owned);
     CHECK(!report.domain[1].rollback_owned);
@@ -896,19 +944,20 @@ static void test_final_read_failure_cancels_and_preserves_first_error(void)
     CHECK(report.domain[0].error == -EIO);
     CHECK(report.domain[0].rollback_error == -EROFS);
     CHECK(fake.domain[0].writes.size() == 2);
-    CHECK(fake.domain[0].writes[1] == "0\n");
+    if (fake.domain[0].writes.size() >= 2)
+        CHECK(fake.domain[0].writes[1] == "0\n");
 }
 
 static void test_final_status_mismatches_fail_and_cancel(void)
 {
     const std::string bad[] = {
         dual_ready(76, 9),
-        status_text("READY", 77, 9, "fhd", "dual", 1920, 1080, 15, 3,
+        status_text("READY", 77, 9, "dual-wide", "dual", 1920, 1080, 15,
+                    3, 0, 0, 1, 1),
+        status_text("READY", 77, 9, "single", "dual", 3840, 1080, 15, 3,
                     0, 0, 1, 1),
-        status_text("READY", 77, 9, "hd", "dual", 3840, 1080, 15, 3, 0,
-                    0, 1, 1),
-        status_text("READY", 77, 9, "fhd", "single", 3840, 1080, 15, 3,
-                    0, 0, 1, 1),
+        status_text("READY", 77, 9, "dual-wide", "left", 3840, 1080, 15,
+                    3, 0, 0, 1, 1),
         dual_ready(77, 9, 0, -EIO),
         dual_ready(77, 9, 0, 0, 0, 1),
         dual_ready(77, 9, 0, 0, 1, 0),
@@ -924,7 +973,8 @@ static void test_final_status_mismatches_fail_and_cancel(void)
         CHECK(max9296_prepare_all(&input, &report, &io) < 0);
         CHECK(report.error < 0 && report.domain[0].error < 0);
         CHECK(fake.domain[0].writes.size() == 2);
-        CHECK(fake.domain[0].writes[1] == "0\n");
+        if (fake.domain[0].writes.size() >= 2)
+            CHECK(fake.domain[0].writes[1] == "0\n");
     }
 }
 
@@ -941,8 +991,12 @@ static void test_final_epoch_must_be_nonzero_and_shared(void)
         Max9296PrepareReport report = {};
         const Max9296PrepareIo io = fake_io(&fake);
         CHECK(max9296_prepare_all(&input, &report, &io) < 0);
-        CHECK(fake.domain[0].writes.back() == "0\n");
-        CHECK(fake.domain[1].writes.back() == "0\n");
+        CHECK(!fake.domain[0].writes.empty());
+        CHECK(!fake.domain[1].writes.empty());
+        if (!fake.domain[0].writes.empty())
+            CHECK(fake.domain[0].writes.back() == "0\n");
+        if (!fake.domain[1].writes.empty())
+            CHECK(fake.domain[1].writes.back() == "0\n");
     }
 }
 
@@ -1001,7 +1055,8 @@ static void test_second_create_failure_joins_first_and_rolls_it_back(void)
     CHECK(max9296_prepare_all(&input, &report, &io) == -EAGAIN);
     CHECK(fake.create_calls == 2 && fake.join_calls == 1);
     CHECK(fake.domain[0].writes.size() == 2);
-    CHECK(fake.domain[0].writes[1] == "0\n");
+    if (fake.domain[0].writes.size() >= 2)
+        CHECK(fake.domain[0].writes[1] == "0\n");
     CHECK(fake.domain[1].writes.empty());
 }
 
@@ -1025,7 +1080,8 @@ static void test_join_failure_retries_until_worker_is_quiescent(void)
     CHECK(!fake.read_before_quiescence);
     CHECK(fake.active_prepare_writes == 0);
     CHECK(fake.domain[0].writes.size() == 2);
-    CHECK(fake.domain[0].writes[1] == "0\n");
+    if (fake.domain[0].writes.size() >= 2)
+        CHECK(fake.domain[0].writes[1] == "0\n");
 
     if (fake.last_created_valid && !fake.last_created_joined) {
         CHECK(pthread_join(fake.last_created_thread, NULL) == 0);
@@ -1040,7 +1096,7 @@ static void test_nonwarm_final_ready_requires_zero_errno(void)
         fake_add_read(&fake, 0, idle_status());
         fake_add_read(&fake, 0, single_ready(77, 9));
         fake.domain[0].reads[1].text = status_text(
-            "READY", 77, 9, "fhd", "single", 1920, 1080, 15, 1,
+            "READY", 77, 9, "single", "left", 1920, 1080, 15, 1,
             -ESTALE, 0, 1, 1);
         Max9296PrepareInput input = base_input();
         input.channel_enabled[0] = 1;
@@ -1117,6 +1173,7 @@ int main(void)
     test_classifies_prepare_status_truth_table();
     test_cold_domains_write_in_parallel_with_one_generation();
     test_one_active_domain_creates_one_worker();
+    test_hd_dual_coordinator_uses_driver_fingerprint();
     test_legacy_requires_all_active_paths_missing();
     test_warm_consumed_is_reread_without_a_worker();
     test_nonwarm_consumed_write_results_propagate();

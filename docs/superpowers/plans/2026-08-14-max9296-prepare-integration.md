@@ -30,6 +30,9 @@ source-contract tests.
   `/sys/bus/i2c/devices/1-0048/prepare` for ch2/ch3.
 - Dual-wide is one indivisible CSI request: 2560x720 or 3840x1080 with
   `enable=3`. Single is 1280x720 or 1920x1080 with `enable=1|2`.
+- Match the driver's resolution-independent status vocabulary exactly:
+  `enable=3` is `mode=dual-wide table=dual`, `enable=1` is
+  `mode=single table=left`, and `enable=2` is `mode=single table=right`.
 - Use `cmdArg.main_fps[csi]`, exactly matching VideoBin caps. If both CSI
   domains are active, their FPS must match and be in `1..120`.
 - The status parser requires each v1 field exactly once, accepts reordered and
@@ -37,6 +40,9 @@ source-contract tests.
 - Split `ParserClass::arg_parser()` into pure parsing and one explicit
   `apply_camera_sysfs()` call. Tuple/FPS validation and the lifetime gstApp
   flock must precede every MAX9296 enable/rotate/prepare write.
+- Every enable/rotate stdio store must explicitly flush and propagate both
+  buffered-write and close failure; a successful `fprintf` alone is not proof
+  that a sysfs store committed.
 - Exact CONSUMED warm reuse is permitted only while the lifetime gstApp flock
   is held. `EBUSY` is never success.
 - A complete new-lease write owns rollback immediately; a refreshed

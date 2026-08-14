@@ -64,6 +64,20 @@ fps    = cmdArg.main_fps[csi]
 code   = 0x2006 (driver UYVY contract)
 ```
 
+The driver's status fingerprint names stream topology, not resolution. The
+exact v1 strings are:
+
+| Enable mask | Mode | Table |
+| --- | --- | --- |
+| `3` | `dual-wide` | `dual` |
+| `1` | `single` | `left` |
+| `2` | `single` | `right` |
+
+HD and FHD therefore use the same mode/table strings; their dimensions remain
+distinct tuple fields. The parser remains forward-compatible and accepts
+arbitrary mode/table tokens, while classification compares present known-state
+tokens against this exact target fingerprint.
+
 The two domains share one physical FSYNC. If both are active, their FPS must
 match before any sysfs write occurs. Width, height, and channel mask remain
 per-domain.
@@ -158,7 +172,7 @@ the first transition.
 6. An exact, valid pre-existing `READY/lease=1` domain is refreshed with its
    original non-zero generation. It is marked as pre-existing ownership and is
    never cancelled by this transaction. A READY state with a mismatched tuple,
-   invalid generation, `match=0`, or non-zero worker error fails closed.
+   zero generation or epoch, `match=0`, or non-zero worker error fails closed.
 7. `IDLE`, `FAILED`, `EXPIRED`, `STALE`, and the worker-clean non-warm
    `CONSUMED` states from step 5 without a lease are prepared with the same new,
    non-zero orchestration generation. A non-zero worker error fails closed

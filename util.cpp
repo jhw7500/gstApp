@@ -543,15 +543,30 @@ int safe_write_file(const char *path, const char *content)
 {
     FILE *fp = fopen(path, "w");
     if (fp == NULL) {
+        const int open_errno = errno;
         __LOG(LOG_ERR, "[UTIL][%s:%d] Cannot open file for writing: %s", _FILE_, __LINE__, path);
+        errno = open_errno;
         return -1;
     }
+
+    int first_errno = 0;
+    const char *failed_operation = "write to";
     if (fprintf(fp, "%s", content) < 0) {
-        __LOG(LOG_ERR, "[UTIL][%s:%d] Failed to write to file: %s", _FILE_, __LINE__, path);
-        fclose(fp);
+        first_errno = errno != 0 ? errno : EIO;
+    } else if (fflush(fp) != 0) {
+        first_errno = errno != 0 ? errno : EIO;
+    }
+    if (fclose(fp) != 0) {
+        if (first_errno == 0) {
+            first_errno = errno != 0 ? errno : EIO;
+            failed_operation = "close";
+        }
+    }
+    if (first_errno != 0) {
+        __LOG(LOG_ERR, "[UTIL][%s:%d] Failed to %s file: %s", _FILE_, __LINE__, failed_operation, path);
+        errno = first_errno;
         return -1;
     }
-    fclose(fp);
     return 0;
 }
 
