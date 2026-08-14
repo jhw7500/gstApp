@@ -16,6 +16,7 @@
 #include "encoderBin.h"
 #include "healthProducer.h"
 #include "ipc.h"
+#include "max9296Prepare.h"
 #include "muxSinkBin.h"
 #include "parser.h"
 #include "recordBin.h"
@@ -26,6 +27,7 @@
 #include "videoBin.h"
 #include <errno.h>
 #include <fcntl.h>
+#include <inttypes.h>
 #include <unistd.h>
 #include <execinfo.h> // For backtrace
 
@@ -843,6 +845,41 @@ gint main(gint argc, gchar *argv[]) {
   // clamped/validated values. cap_instant_enabled()'s strict check stays as defense-in-depth.
   cmdArg = parser->arg;
 
+  Max9296PrepareInput prepare_input = {};
+  prepare_input.width = static_cast<uint32_t>(cmdArg.width);
+  prepare_input.height = static_cast<uint32_t>(cmdArg.height);
+  for (unsigned csi = 0; csi < 2; ++csi)
+    prepare_input.fps[csi] = static_cast<uint32_t>(cmdArg.main_fps[csi]);
+  for (unsigned ch = 0; ch < 4; ++ch)
+    prepare_input.channel_enabled[ch] = cmdArg.cam[ch].enable ? 1 : 0;
+  prepare_input.generation = max9296_prepare_generate_generation();
+
+  Max9296PrepareTarget prepare_targets[2] = {};
+  if (max9296_prepare_build_targets(&prepare_input, prepare_targets) < 0) {
+    __LOG(LOG_CRIT,
+          "[MAX9296_PREPARE] invalid request generation=%" PRIu64
+          " tuple=%ux%u fps=%u,%u enable=%u,%u,%u,%u",
+          prepare_input.generation, prepare_input.width, prepare_input.height,
+          prepare_input.fps[0], prepare_input.fps[1],
+          prepare_input.channel_enabled[0], prepare_input.channel_enabled[1],
+          prepare_input.channel_enabled[2], prepare_input.channel_enabled[3]);
+    return EXIT_FAILURE;
+  }
+
+  gint app_exit_code = EXIT_SUCCESS;
+  gint max9296_owner_fd =
+      max9296_prepare_acquire_owner_lock(MAX9296_PREPARE_OWNER_LOCK);
+  if (max9296_owner_fd < 0) {
+    __LOG(LOG_CRIT, "[MAX9296_PREPARE] owner lock failed: %d",
+          max9296_owner_fd);
+    return EXIT_FAILURE;
+  }
+
+  if (parser->apply_camera_sysfs() < 0) {
+    max9296_prepare_release_owner_lock(max9296_owner_fd);
+    return EXIT_FAILURE;
+  }
+
   // MuxBin* muxBin = MuxBin::getInstance();
   GstBus *bus;
   VideoBin videoBin[MAX_VIDEO_SRC];
@@ -1193,6 +1230,46 @@ gint main(gint argc, gchar *argv[]) {
 
   gst_object_unref(bus);
 
+  /* prepare_input was preflighted before sysfs apply. Re-copy only channel
+   * enables because VideoBin::init failure may disable a CSI domain. */
+  for (unsigned ch = 0; ch < 4; ++ch)
+    prepare_input.channel_enabled[ch] = cmdArg.cam[ch].enable ? 1 : 0;
+
+  {
+    Max9296PrepareReport prepare_report = {};
+    gint prepare_ret =
+        max9296_prepare_all(&prepare_input, &prepare_report, NULL);
+    const gint prepare_log_level =
+        (prepare_ret < 0 || prepare_report.legacy_fallback) ? LOG_CRIT
+                                                           : LOG_NOTICE;
+
+    for (unsigned csi = 0; csi < 2; ++csi) {
+      const uint32_t enable = prepare_input.channel_enabled[csi * 2] |
+                              (prepare_input.channel_enabled[csi * 2 + 1] << 1);
+      const uint32_t tuple_width =
+          enable == 3 ? prepare_input.width * 2 : prepare_input.width;
+      const Max9296PrepareDomainReport &domain = prepare_report.domain[csi];
+      __LOG(prepare_log_level,
+            "[MAX9296_PREPARE] generation=%" PRIu64
+            " CSI%u path=%s tuple=%ux%u@%u enable=%u action=%d"
+            " elapsed_ms=%" PRIu64
+            " primary_errno=%d rollback_errno=%d before_state=%d"
+            " after_state=%d%s",
+            prepare_input.generation, csi, max9296_prepare_path(csi),
+            tuple_width, prepare_input.height, prepare_input.fps[csi], enable,
+            static_cast<int>(domain.action), domain.elapsed_ns / 1000000ULL,
+            domain.error, domain.rollback_error,
+            static_cast<int>(domain.before.state),
+            static_cast<int>(domain.after.state),
+            prepare_report.legacy_fallback ? " LEGACY_NO_ABI" : "");
+    }
+
+    if (prepare_ret < 0) {
+      app_exit_code = EXIT_FAILURE;
+      goto main_end;
+    }
+  }
+
   if (cmdArg.play_delay) {
     ret = gst_element_set_state(pipeline, GST_STATE_PAUSED);
 
@@ -1356,6 +1433,8 @@ main_end:
 
   removeSignalHandler();
 
+  max9296_prepare_release_owner_lock(max9296_owner_fd);
+
   //__LOG(LOG_NOTICE, "[GST][%s:%d] exit", _FILE_, __LINE__);
-  exit(0);
+  exit(app_exit_code);
 }

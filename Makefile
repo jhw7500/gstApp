@@ -54,7 +54,7 @@ CXXFLAGS += $(ALL_CFLAGS) $(CPP_PERF_FLAGS)
 
 ALLFLAGS=$(ALL_CFLAGS) $(ALL_LDFLAGS) -lturbojpeg
 #OBJS = videoBin.o recordBin.o muxSinkBin.o rtspServerBin.o audioBin.o muxBin.o
-OBJS = videoBin.o recordBin.o muxSinkBin.o rtspServerBin.o rtspSync.o testBin.o captureBin.o util.o parser.o cfgjson.o aes.o tcpServer.o audioBin.o ipc.o encoderBin.o encoderStat.o healthProducer.o
+OBJS = videoBin.o recordBin.o muxSinkBin.o rtspServerBin.o rtspSync.o testBin.o captureBin.o util.o parser.o cfgjson.o aes.o tcpServer.o audioBin.o ipc.o encoderBin.o encoderStat.o healthProducer.o max9296Prepare.o
 
 $(OUTPUT)/gstApp : $(OBJS) main.cpp | $(OUTPUT) $(OBJ)
 	$(CXX) $(CPP_PERF_FLAGS) -o $@ $^ $(ALLFLAGS)
@@ -83,6 +83,11 @@ $(OUTPUT)/testEncoderStat : test/test_encoderStat.cpp encoderStat.cpp encoderSta
 # 하므로 로직을 시험 쪽에 복제하지 않는다.
 $(OUTPUT)/testHealthProducer : test/test_healthProducer.cpp healthProducer.cpp healthProducer.h | $(OUTPUT)
 	$(CXX) $(CPP_PERF_FLAGS) -o $@ test/test_healthProducer.cpp healthProducer.cpp $(ALLFLAGS)
+
+$(OUTPUT)/testMax9296Prepare : test/test_max9296Prepare.cpp \
+                              max9296Prepare.cpp max9296Prepare.h | $(OUTPUT)
+	$(CXX) -Wall -Wextra $(CPP_PERF_FLAGS) -pthread -o $@ \
+	  test/test_max9296Prepare.cpp max9296Prepare.cpp
 
 $(OUTPUT) $(OBJ) :
 	mkdir -p $@
@@ -137,6 +142,9 @@ encoderBin.o : encoderBin.cpp encoderBin.h encoderStat.h
 
 encoderStat.o : encoderStat.cpp encoderStat.h
 	$(CXX) $(CXXFLAGS) -c encoderStat.cpp
+
+max9296Prepare.o : max9296Prepare.cpp max9296Prepare.h
+	$(CXX) $(CXXFLAGS) -c max9296Prepare.cpp
 
 #json_c.o : json_c.cpp json_c.h
 #	$(CXX) $(ALLFLAGS) -c json_c.cpp
