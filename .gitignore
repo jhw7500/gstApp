@@ -9,3 +9,5 @@ rnnoise/
 .jhw/
 tmp/
 .omx/
+.superpowers/
+.worktrees/

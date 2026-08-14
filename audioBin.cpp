@@ -61,7 +61,9 @@ gboolean AudioBin::init()
 
     __LOG(LOG_INFO, "[GST][%s:%d] %s", _FILE_, __LINE__, __FUNCTION__);
 
-    be.src = gst_element_factory_make("alsasrc", "audiosrc");
+    const gchar *source_factory =
+        cmdArg.levelMode == MODE_TEST ? "audiotestsrc" : "alsasrc";
+    be.src = gst_element_factory_make(source_factory, "audiosrc");
     be.convert = gst_element_factory_make("audioconvert", "audioconvert");
     be.resample = gst_element_factory_make("audioresample", "audioresample");
     be.enc = gst_element_factory_make("lamemp3enc", "audioencoder");
@@ -74,7 +76,13 @@ gboolean AudioBin::init()
     //be.filter = gst_element_factory_make("webrtcdsp", "webrtcdsp");
     //be.jitter = gst_element_factory_make("audiolatency", "jitter");
 
-    g_object_set(be.src, "device", "plughw:0,0", NULL);
+    if (cmdArg.levelMode == MODE_TEST) {
+        g_object_set(be.src, "is-live", TRUE, NULL);
+        __LOG(LOG_NOTICE, "[GST][%s:%d] test audio source : %s", _FILE_,
+              __LINE__, source_factory);
+    } else {
+        g_object_set(be.src, "device", "plughw:0,0", NULL);
+    }
     //g_object_set(be.src, "provide-clock", TRUE, NULL);
     //g_object_set(be.src, "latency-time", 200000, NULL);
     //g_object_set(be.src, "slave-method", 0, NULL);
@@ -93,6 +101,7 @@ gboolean AudioBin::init()
 
     if(!be.bin || !be.src || !be.convert || !be.resample || !be.enc || !be.queue || !be.capsfilter || !be.parse || !be.tee || !be.rate || !be.queue2) {
         __LOG(LOG_CRIT, "[GST][%s:%d] element create error", _FILE_, __LINE__);
+        gst_caps_unref(audio_caps);
         return ret;
     }
 
@@ -112,17 +121,21 @@ gboolean AudioBin::init()
     gst_caps_unref(audioresample_caps);
 #endif
     if(!gst_element_link_filtered(be.src, be.convert, audio_caps) ||
-        !gst_element_link_many(be.convert, be.queue, be.resample, be.capsfilter, be.rate, be.enc, be.queue2, be.tee, NULL))
+        !gst_element_link_many(be.convert, be.queue, be.resample,
+                               be.capsfilter, be.rate, be.enc, be.parse,
+                               be.queue2, be.tee, NULL))
         //!gst_element_link_many(be.convert, be.rate, be.queue, be.enc, be.tee, NULL))
         //!gst_element_link_many(be.convert, be.queue, be.rate, be.enc, be.tee, NULL))
     {
         __LOG(LOG_CRIT, "[GST][%s:%d] link error", _FILE_, __LINE__);
-        return -1;
+        gst_caps_unref(audio_caps);
+        return FALSE;
     }
 
     ret =gst_bin_add(GST_BIN(pipeline), be.bin);
     if(!ret) {
         __LOG(LOG_CRIT, "[GST][%s:%d] bin add error in pipeline", _FILE_, __LINE__);
+        gst_caps_unref(audio_caps);
         return ret;
     }
 

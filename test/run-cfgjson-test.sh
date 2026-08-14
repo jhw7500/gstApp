@@ -1,29 +1,39 @@
 #!/bin/bash
-# cfgjson 단위테스트: aarch64 크로스컴파일 → 보드 전송(base64) → 실행.
-# 의존: SDK(/shared/fsl-imx-xwayland), sshpass. 보드 런타임: libjson-c, libglib (gstApp가 사용 → 존재).
-set -eo pipefail
+# cfgjson 단위테스트: make-for-imx8 크로스 빌드 → SHA 검증 배포 → 실행.
+set -Eeuo pipefail
 cd "$(dirname "$0")/.."
 
-SDK_LOC=${SDK_LOC:-/shared/fsl-imx-xwayland/5.10-hardknott}
-SDK_NAME=${SDK_NAME:-cortexa53-crypto-poky-linux}
 BOARD=${BOARD:-192.168.0.200}
 BOARD_PW=${BOARD_PW:-root}
-OUT=${OUT:-/tmp/test_cfgjson}
+OUT=${OUT:-bin/testCfgjson}
+REMOTE=${REMOTE:-/tmp/test_cfgjson.$$}
+SSH_OPTS=(-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+          -o ConnectTimeout=8)
+deployed=0
 
-[ -e "${SDK_LOC}/environment-setup-${SDK_NAME}" ] || {
-  echo "SDK env 없음: ${SDK_LOC}/environment-setup-${SDK_NAME}"; exit 1; }
-# shellcheck disable=SC1090
-. "${SDK_LOC}/environment-setup-${SDK_NAME}"
+cleanup()
+{
+  local status=$?
+  trap - EXIT
+  if [ "$deployed" -eq 1 ]; then
+    sshpass -p "$BOARD_PW" ssh "${SSH_OPTS[@]}" root@"$BOARD" \
+      "rm -f '$REMOTE'" >/dev/null 2>&1 || status=120
+  fi
+  exit "$status"
+}
+trap cleanup EXIT
 
 echo "[build] cross-compile (aarch64) ..."
-# shellcheck disable=SC2086
-$CXX cfgjson.cpp test/test_cfgjson.cpp -o "$OUT" \
-  $(pkg-config --cflags --libs json-c glib-2.0)
+./make-for-imx8 "$OUT"
+LOCAL_SHA=$(sha256sum "$OUT" | cut -d' ' -f1)
 
-SSH_OPTS="-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ConnectTimeout=8"
-echo "[deploy] -> ${BOARD}:/tmp/test_cfgjson"
-base64 "$OUT" | sshpass -p "$BOARD_PW" ssh $SSH_OPTS root@"$BOARD" \
-  "base64 -d > /tmp/test_cfgjson && chmod +x /tmp/test_cfgjson"
+echo "[deploy] -> ${BOARD}:${REMOTE}"
+deployed=1
+base64 "$OUT" | sshpass -p "$BOARD_PW" ssh "${SSH_OPTS[@]}" root@"$BOARD" \
+  "base64 -d > '$REMOTE' && chmod +x '$REMOTE'"
+REMOTE_SHA=$(sshpass -p "$BOARD_PW" ssh "${SSH_OPTS[@]}" root@"$BOARD" \
+  "sha256sum '$REMOTE' | cut -d' ' -f1")
+[ "$REMOTE_SHA" = "$LOCAL_SHA" ]
 
 echo "[run] on board:"
-sshpass -p "$BOARD_PW" ssh $SSH_OPTS root@"$BOARD" "/tmp/test_cfgjson"
+sshpass -p "$BOARD_PW" ssh "${SSH_OPTS[@]}" root@"$BOARD" "$REMOTE"

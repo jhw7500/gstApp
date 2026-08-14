@@ -47,6 +47,137 @@
 #define V4L2_CID_MCP4018_POWER_CH0 (V4L2_CID_USER_BASE + 0x1020)
 #define V4L2_CID_MCP4018_POWER_CH1 (V4L2_CID_USER_BASE + 0x1021)
 
+typedef struct {
+  guint8 csi;
+  guint duration_sec;
+  gboolean log_frames;
+  gint64 start_us;
+  guint64 warmup_count;
+  guint64 frame_count;
+  guint64 lost_count;
+  guint64 sequence_reset_count;
+  guint64 pts_backward_count;
+  guint64 previous_sequence;
+  GstClockTime previous_pts;
+  gboolean previous_sequence_valid;
+  gboolean previous_pts_valid;
+} V4l2SyncTrace;
+
+static GstPadProbeReturn v4l2_sync_trace_probe(GstPad *pad,
+                                                GstPadProbeInfo *info,
+                                                gpointer user_data) {
+  V4l2SyncTrace *trace = (V4l2SyncTrace *)user_data;
+  GstBuffer *buffer = GST_PAD_PROBE_INFO_BUFFER(info);
+  gint64 now_us = g_get_monotonic_time();
+
+  if (!trace || !buffer)
+    return GST_PAD_PROBE_OK;
+
+  guint64 sequence = GST_BUFFER_OFFSET(buffer);
+  GstClockTime pts = GST_BUFFER_PTS(buffer);
+  gboolean sequence_valid = GST_BUFFER_OFFSET_IS_VALID(buffer);
+  gboolean pts_valid = GST_BUFFER_PTS_IS_VALID(buffer);
+
+  /* v4l2src can emit a few zero-PTS buffers while its timestamp and sequence
+   * bases are being established. A later sequence rebase in that startup
+   * window is not a frame loss, so start counting at the first non-zero PTS. */
+  if (trace->start_us == 0) {
+    if (!pts_valid || pts == 0) {
+      trace->warmup_count++;
+      return GST_PAD_PROBE_OK;
+    }
+    trace->start_us = now_us;
+  }
+
+  if (now_us - trace->start_us >=
+      (gint64)trace->duration_sec * G_USEC_PER_SEC) {
+    __LOG(LOG_NOTICE,
+          "[V4L2_SYNC][%s:%d] csi=%u summary duration_us=%" G_GINT64_FORMAT
+          " warmup_skipped=%" G_GUINT64_FORMAT " frames=%"
+          G_GUINT64_FORMAT " lost=%" G_GUINT64_FORMAT
+          " sequence_resets=%" G_GUINT64_FORMAT " pts_backwards=%"
+          G_GUINT64_FORMAT,
+          _FILE_, __LINE__, trace->csi, now_us - trace->start_us,
+          trace->warmup_count, trace->frame_count, trace->lost_count,
+          trace->sequence_reset_count, trace->pts_backward_count);
+    return GST_PAD_PROBE_REMOVE;
+  }
+
+  gint64 sequence_delta = -1;
+  gint64 pts_delta_ns = -1;
+
+  if (sequence_valid && trace->previous_sequence_valid) {
+    if (sequence >= trace->previous_sequence) {
+      sequence_delta = (gint64)(sequence - trace->previous_sequence);
+      if (sequence_delta > 1)
+        trace->lost_count += (guint64)(sequence_delta - 1);
+    } else {
+      trace->sequence_reset_count++;
+    }
+  }
+
+  if (pts_valid && trace->previous_pts_valid) {
+    pts_delta_ns = GST_CLOCK_DIFF(trace->previous_pts, pts);
+    if (pts_delta_ns < 0)
+      trace->pts_backward_count++;
+  }
+
+  trace->frame_count++;
+  if (trace->log_frames) {
+    __LOG(LOG_NOTICE,
+          "[V4L2_SYNC][%s:%d] csi=%u sample=%" G_GUINT64_FORMAT
+          " mono_ns=%" G_GINT64_FORMAT " seq_valid=%d seq=%"
+          G_GUINT64_FORMAT " seq_delta=%" G_GINT64_FORMAT
+          " pts_valid=%d pts_ns=%" G_GUINT64_FORMAT " pts_delta_ns=%"
+          G_GINT64_FORMAT " lost_total=%" G_GUINT64_FORMAT,
+          _FILE_, __LINE__, trace->csi, trace->frame_count, now_us * 1000,
+          sequence_valid, sequence, sequence_delta, pts_valid, pts,
+          pts_delta_ns, trace->lost_count);
+  }
+
+  trace->previous_sequence = sequence;
+  trace->previous_pts = pts;
+  trace->previous_sequence_valid = sequence_valid;
+  trace->previous_pts_valid = pts_valid;
+
+  return GST_PAD_PROBE_OK;
+}
+
+static void install_v4l2_sync_trace(GstElement *src, guint8 csi) {
+  guint duration_sec = (guint)cmdArg.v4l2_sync_trace_sec;
+  if (duration_sec == 0)
+    return;
+
+  GstPad *src_pad = gst_element_get_static_pad(src, "src");
+  if (!src_pad) {
+    __LOG(LOG_ERR, "[V4L2_SYNC][%s:%d] csi=%u v4l2src pad is NULL",
+          _FILE_, __LINE__, csi);
+    return;
+  }
+
+  V4l2SyncTrace *trace = g_new0(V4l2SyncTrace, 1);
+  trace->csi = csi;
+  trace->duration_sec = duration_sec;
+  trace->log_frames = cmdArg.v4l2_sync_log_frames;
+
+  gulong probe_id = gst_pad_add_probe(
+      src_pad, GST_PAD_PROBE_TYPE_BUFFER, v4l2_sync_trace_probe, trace,
+      (GDestroyNotify)g_free);
+  gst_object_unref(src_pad);
+
+  if (probe_id == 0) {
+    g_free(trace);
+    __LOG(LOG_ERR, "[V4L2_SYNC][%s:%d] csi=%u failed to install probe",
+          _FILE_, __LINE__, csi);
+    return;
+  }
+
+  __LOG(LOG_NOTICE,
+        "[V4L2_SYNC][%s:%d] csi=%u enabled duration_sec=%u frame_log=%d "
+        "source=v4l2src",
+        _FILE_, __LINE__, csi, trace->duration_sec, trace->log_frames);
+}
+
 static void prepare_format(GstElement *object, gint arg0, GstCaps *caps,
                            gpointer data) {
   guint8 *csi = (guint8 *)data;
@@ -698,6 +829,8 @@ gboolean VideoBin::init(guint8 csiNum) {
           video_dev);
     g_object_set(be.src, "device", video_dev, NULL);
   }
+
+  install_v4l2_sync_trace(be.src, csiNum);
 
   if (crop_en) {
     caps = gst_caps_new_simple("video/x-raw",

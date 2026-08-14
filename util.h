@@ -205,6 +205,14 @@ typedef struct _CmdArg
     gint rtsp_factory_queue_max_buffers;
     gint rtsp_bin_queue_max_time_ms;
     gint rtsp_appsrc_max_bytes;
+    gboolean rtsp_frame_id_sei;
+    gint v4l2_sync_trace_sec;
+    gboolean v4l2_sync_log_frames;
+    gint channel_sync_trace_sec;
+    gint rtsp_sync_trace_sec;
+    gint rtsp_test_stall_ch;
+    gint rtsp_test_stall_after_sec;
+    gint rtsp_test_stall_duration_sec;
 
     gint v4l_subdev_csi0;
     gint v4l_subdev_csi1;
@@ -221,7 +229,17 @@ typedef struct _CmdArg
     gint queue_enc_src_time_ms;
     gint queue_rec_sink_time_ms;
     gint queue_cap_src_time_ms;
+    /* enc 큐를 '프레임 수' 기준으로 동적 사이징한다 (0 = 미사용, 현행 유지).
+     * 실제 negotiated caps 의 프레임 크기에서 바이트로 환산하므로
+     * 해상도/포맷/fps 를 코드가 가정하지 않는다. */
+    gint queue_enc_src_frames;
+    gint queue_enc_budget_mb;   /* enc 큐 전체 메모리 상한 (0 = 무제한) */
+    gint queue_enc_stat_sec;    /* enc 큐/인코더 계측 리포트 주기 (0 = 계측 끔) */
 } CmdArg;
+
+/* 동적 사이징 시 프레임 수 clamp 범위 (encoderBin.cpp 에서 사용) */
+#define QUEUE_ENC_FRAMES_MIN 1
+#define QUEUE_ENC_FRAMES_MAX 16
 
 #pragma pack(pop)
 

@@ -101,6 +101,16 @@
 #define DEFAULT_RTSP_BIN_QUEUE_MAX_TIME_MS 200
 /* video appsrc 백로그 상한 — IDR(실측 최대 ~140KB) + 여유. 16K~2M로 클램프 */
 #define DEFAULT_RTSP_APPSRC_MAX_BYTES (192 * 1024)
+#define DEFAULT_RTSP_FRAME_ID_SEI FALSE
+#define DEFAULT_V4L2_SYNC_TRACE_SEC 0
+#define DEFAULT_V4L2_SYNC_LOG_FRAMES FALSE
+#define DEFAULT_CHANNEL_SYNC_TRACE_SEC 0
+#define DEFAULT_RTSP_SYNC_TRACE_SEC 0
+#define SYNC_TRACE_MAX_SEC 3600
+#define DEFAULT_RTSP_TEST_STALL_CH (-1)
+#define DEFAULT_RTSP_TEST_STALL_AFTER_SEC 0
+#define DEFAULT_RTSP_TEST_STALL_DURATION_SEC 0
+#define RTSP_TEST_STALL_MAX_SEC 3600
 
 // Platform device mapping defaults
 // Target mapping (confirmed via sysfs):
@@ -137,6 +147,13 @@
 #define DEFAULT_QUEUE_ENC_SRC_TIME_MS  100
 #define DEFAULT_QUEUE_REC_SINK_TIME_MS 300
 #define DEFAULT_QUEUE_CAP_SRC_TIME_MS  500
+/* enc 큐 깊이를 프레임 수로 지정한다 (0 = 미사용, queue 기본 10MB 가 그대로 구속).
+ * 실측 근거: 4채널 HD60 에서 큐가 실제로 필요로 한 최대 점유는 2 버퍼였고,
+ * 기본 10MB 는 dual HD 에서 1.42 프레임 / dual FHD 에서 0.63 프레임밖에 안 되어
+ * 두 번째 버퍼를 받지 못해 드롭이 발생했다. 3 = 실측 필요량 2 + 마진 1. */
+#define DEFAULT_QUEUE_ENC_SRC_FRAMES   3
+#define DEFAULT_QUEUE_ENC_BUDGET_MB    0
+#define DEFAULT_QUEUE_ENC_STAT_SEC     0
 
 #define DEFAULT_START_VIDEO_TIME_PATH   "/tmp/start_video_time"
 #define DEFAULT_DOT_PATH    "/tmp"

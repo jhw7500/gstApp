@@ -78,6 +78,72 @@ int main(void) {
     json_object_put(o);
   }
 
+  /* 7. JSON true → OK + TRUE */
+  {
+    json_object *o = J("{\"frame_id_sei\":true}");
+    gboolean out = FALSE;
+    CHECK(cfg_get_bool(o, "frame_id_sei", &out) == CFG_BOOL_OK);
+    CHECK(out == TRUE);
+    json_object_put(o);
+  }
+  /* 8. JSON false → OK + FALSE */
+  {
+    json_object *o = J("{\"frame_id_sei\":false}");
+    gboolean out = TRUE;
+    CHECK(cfg_get_bool(o, "frame_id_sei", &out) == CFG_BOOL_OK);
+    CHECK(out == FALSE);
+    json_object_put(o);
+  }
+  /* 9. Integer 1 → OK + TRUE */
+  {
+    json_object *o = J("{\"frame_id_sei\":1}");
+    gboolean out = FALSE;
+    CHECK(cfg_get_bool(o, "frame_id_sei", &out) == CFG_BOOL_OK);
+    CHECK(out == TRUE);
+    json_object_put(o);
+  }
+  /* 10. Integer 0 → OK + FALSE */
+  {
+    json_object *o = J("{\"frame_id_sei\":0}");
+    gboolean out = TRUE;
+    CHECK(cfg_get_bool(o, "frame_id_sei", &out) == CFG_BOOL_OK);
+    CHECK(out == FALSE);
+    json_object_put(o);
+  }
+  /* 11. Missing key → MISSING + sentinel unchanged */
+  {
+    json_object *o = J("{}");
+    gboolean out = TRUE;
+    CHECK(cfg_get_bool(o, "frame_id_sei", &out) == CFG_BOOL_MISSING);
+    CHECK(out == TRUE);
+    json_object_put(o);
+  }
+  /* 12. Integer outside {0,1} → BAD_VALUE + sentinel unchanged */
+  {
+    json_object *o = J("{\"frame_id_sei\":2}");
+    gboolean out = TRUE;
+    CHECK(cfg_get_bool(o, "frame_id_sei", &out) == CFG_BOOL_BAD_VALUE);
+    CHECK(out == TRUE);
+    json_object_put(o);
+  }
+  /* 13. String value → BAD_TYPE + sentinel unchanged */
+  {
+    json_object *o = J("{\"frame_id_sei\":\"yes\"}");
+    gboolean out = TRUE;
+    CHECK(cfg_get_bool(o, "frame_id_sei", &out) == CFG_BOOL_BAD_TYPE);
+    CHECK(out == TRUE);
+    json_object_put(o);
+  }
+
+  /* 14. Explicit JSON null is present, not missing → BAD_TYPE + unchanged */
+  {
+    json_object *o = J("{\"frame_id_sei\":null}");
+    gboolean out = TRUE;
+    CHECK(cfg_get_bool(o, "frame_id_sei", &out) == CFG_BOOL_BAD_TYPE);
+    CHECK(out == TRUE);
+    json_object_put(o);
+  }
+
   printf("\ncfgjson test: %d checks, %d failures -> %s\n", g_checks, g_failures,
          g_failures ? "FAILED" : "PASSED");
   return g_failures ? 1 : 0;

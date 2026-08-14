@@ -42,6 +42,11 @@ typedef struct _RtspServerData
     gint64 last_enough_log_us;
     GstElement *kick_sink;   /* 강제 키프레임 이벤트 주입용 appsink (borrowed, init 시 1회 설정) */
     gint64 last_kick_us;     /* 강제 키프레임 요청 스로틀 (lock 보호) */
+    gpointer sync_generation; /* lock 보호: 현재 RTSP media generation */
+    guint64 sync_generation_serial;
+    gpointer frame_id_parser; /* H.265 frame ID SEI 삽입용 parser */
+    guint64 frame_id_sei_inserted;
+    guint64 frame_id_sei_failed;
 } RtspServerData;
 
 typedef struct _RtspServerElement

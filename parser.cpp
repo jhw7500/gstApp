@@ -109,6 +109,21 @@ static void json_get_uint32(json_object *obj, const gchar *name, guint32 *out) {
  */
 static int g_cfg_errors = 0;
 
+static void json_object_get_bool_optional(json_object *obj,
+                                          const gchar *name,
+                                          gboolean *out) {
+  CfgBoolStatus status = cfg_get_bool(obj, name, out);
+  if (status == CFG_BOOL_OK) {
+    __LOG(LOG_INFO, "[CFG][%s:%d] %s : %s", _FILE_, __LINE__, name,
+          *out ? "true" : "false");
+  } else if (status != CFG_BOOL_MISSING) {
+    __LOG(LOG_ERR,
+          "[CFG][%s:%d] %s must be boolean or integer 0/1; keep default %s",
+          _FILE_, __LINE__, name, *out ? "true" : "false");
+    g_cfg_errors++;
+  }
+}
+
 /* Wrapper over cfg_get_int_array (cfgjson.cpp): preserves the original logging
  * and counts config errors so the parser can emit a loud post-parse summary.
  * Silent keep-defaults hides real edgeconf mistakes — e.g. a bps array length
@@ -184,6 +199,15 @@ static gint enc_gop_rescale(gint gop, gint prev_fps, gint new_fps) {
 /* gop 0 means "one GOP per second": resolve it against the stream's own fps so
  * the keyframe interval follows fps. 0 must not reach the encoder — see the
  * DEFAULT_GOP_SIZE comment in parser.h. */
+static void sync_trace_sanity(gint *value, const gchar *name) {
+  if (*value >= 0 && *value <= SYNC_TRACE_MAX_SEC)
+    return;
+  __LOG(LOG_WARNING,
+        "[CFG][%s:%d] invalid %s=%d (valid 0..%d), disabling",
+        _FILE_, __LINE__, name, *value, SYNC_TRACE_MAX_SEC);
+  *value = 0;
+}
+
 static void enc_gop_resolve(gint *slot, gint fps, const gchar *stream, gint ch) {
   if (*slot != GOP_SIZE_FOLLOW_FPS)
     return;
@@ -260,11 +284,22 @@ void ParserClass::init_arg(gchar *argv) {
   arg.rtsp_factory_queue_max_buffers = DEFAULT_RTSP_FACTORY_QUEUE_MAX_BUFFERS;
   arg.rtsp_bin_queue_max_time_ms = DEFAULT_RTSP_BIN_QUEUE_MAX_TIME_MS;
   arg.rtsp_appsrc_max_bytes = DEFAULT_RTSP_APPSRC_MAX_BYTES;
+  arg.rtsp_frame_id_sei = DEFAULT_RTSP_FRAME_ID_SEI;
+  arg.v4l2_sync_trace_sec = DEFAULT_V4L2_SYNC_TRACE_SEC;
+  arg.v4l2_sync_log_frames = DEFAULT_V4L2_SYNC_LOG_FRAMES;
+  arg.channel_sync_trace_sec = DEFAULT_CHANNEL_SYNC_TRACE_SEC;
+  arg.rtsp_sync_trace_sec = DEFAULT_RTSP_SYNC_TRACE_SEC;
+  arg.rtsp_test_stall_ch = DEFAULT_RTSP_TEST_STALL_CH;
+  arg.rtsp_test_stall_after_sec = DEFAULT_RTSP_TEST_STALL_AFTER_SEC;
+  arg.rtsp_test_stall_duration_sec = DEFAULT_RTSP_TEST_STALL_DURATION_SEC;
 
   arg.queue_main_src_time_ms = DEFAULT_QUEUE_MAIN_SRC_TIME_MS;
   arg.queue_enc_src_time_ms = DEFAULT_QUEUE_ENC_SRC_TIME_MS;
   arg.queue_rec_sink_time_ms = DEFAULT_QUEUE_REC_SINK_TIME_MS;
   arg.queue_cap_src_time_ms = DEFAULT_QUEUE_CAP_SRC_TIME_MS;
+  arg.queue_enc_src_frames = DEFAULT_QUEUE_ENC_SRC_FRAMES;
+  arg.queue_enc_budget_mb = DEFAULT_QUEUE_ENC_BUDGET_MB;
+  arg.queue_enc_stat_sec = DEFAULT_QUEUE_ENC_STAT_SEC;
 
   arg.v4l_subdev_csi0 = DEFAULT_V4L_SUBDEV_CSI0;
   arg.v4l_subdev_csi1 = DEFAULT_V4L_SUBDEV_CSI1;
@@ -502,6 +537,7 @@ gint ParserClass::json_parser(const gchar *path, const gchar *header) {
   json_object *vobj = NULL;
   // const gchar* ptr;
 
+  g_cfg_errors = 0;
   arg.json_file = search_file(path, JSON_NAME_PREFIX, JSON_NAME_SUFFIX);
   __LOG(LOG_INFO, "[%s][%s:%d] json file name : %s", LOG_KEY, _FILE_, __LINE__,
         arg.json_file);
@@ -619,6 +655,8 @@ gint ParserClass::json_parser(const gchar *path, const gchar *header) {
                                    &arg.rtsp_bin_queue_max_time_ms);
       json_object_get_int_optional(tune_obj, "rtsp_appsrc_max_bytes",
                                    &arg.rtsp_appsrc_max_bytes);
+      json_object_get_bool_optional(tune_obj, "frame_id_sei",
+                                    &arg.rtsp_frame_id_sei);
     }
 
     // [Queue Tuning] Common/Record/Capture pipeline settings
@@ -631,6 +669,9 @@ gint ParserClass::json_parser(const gchar *path, const gchar *header) {
       json_object_get_int_optional(target_obj, "enc_src_time_ms", &arg.queue_enc_src_time_ms);
       json_object_get_int_optional(target_obj, "rec_sink_time_ms", &arg.queue_rec_sink_time_ms);
       json_object_get_int_optional(target_obj, "cap_src_time_ms", &arg.queue_cap_src_time_ms);
+      json_object_get_int_optional(target_obj, "enc_src_frames", &arg.queue_enc_src_frames);
+      json_object_get_int_optional(target_obj, "enc_budget_mb", &arg.queue_enc_budget_mb);
+      json_object_get_int_optional(target_obj, "enc_stat_sec", &arg.queue_enc_stat_sec);
     }
 
     // Optional platform device mapping overrides.
@@ -654,7 +695,6 @@ gint ParserClass::json_parser(const gchar *path, const gchar *header) {
      */
     arg.ch_enable = 0;
     arg.ch_rotate = 0;
-    g_cfg_errors = 0;
 
     for (guint8 i = 0; i < MAX_CHANNEL; i++) {
       gchar *i2c_key = g_strdup_printf("i2c%d", i / 2 ? 1 : 2);
@@ -830,6 +870,29 @@ gint ParserClass::arg_parser(int *argc, char **argv[]) {
        "terminal input enable, default(FALSE)", "INT"},
       {"rport", 'P', 0, G_OPTION_ARG_STRING, &arg.rtsp_port,
        "rtsp port number, default(8554)", "STRING"},
+      {"rtsp-frame-id-sei", 0, 0, G_OPTION_ARG_INT, &arg.rtsp_frame_id_sei,
+       "RTSP Frame ID SEI: 0=off, 1=on", "INT"},
+      {"v4l2-sync-trace-sec", 0, 0, G_OPTION_ARG_INT,
+       &arg.v4l2_sync_trace_sec,
+       "V4L2 sync trace: 0=off, 1..3600=seconds", "INT"},
+      {"v4l2-sync-log-frames", 0, 0, G_OPTION_ARG_INT,
+       &arg.v4l2_sync_log_frames,
+       "V4L2 per-frame sync log: 0=off, 1=on; requires trace", "INT"},
+      {"channel-sync-trace-sec", 0, 0, G_OPTION_ARG_INT,
+       &arg.channel_sync_trace_sec,
+       "Channel sync trace: 0=off, 1..3600=seconds", "INT"},
+      {"rtsp-sync-trace-sec", 0, 0, G_OPTION_ARG_INT,
+       &arg.rtsp_sync_trace_sec,
+       "RTSP sync trace: 0=off, 1..3600=seconds", "INT"},
+      {"rtsp-test-stall-ch", 0, 0, G_OPTION_ARG_INT,
+       &arg.rtsp_test_stall_ch,
+       "RTSP test stall channel; requires --test=1", "INT"},
+      {"rtsp-test-stall-after-sec", 0, 0, G_OPTION_ARG_INT,
+       &arg.rtsp_test_stall_after_sec,
+       "RTSP test stall start delay; requires --test=1", "INT"},
+      {"rtsp-test-stall-duration-sec", 0, 0, G_OPTION_ARG_INT,
+       &arg.rtsp_test_stall_duration_sec,
+       "RTSP test stall duration; requires --test=1", "INT"},
       {"id", 'u', 0, G_OPTION_ARG_STRING, &arg.rtsp_id,
        "rtsp id, default(user)", "STRING"},
       {"passwd", 'p', 0, G_OPTION_ARG_STRING, &arg.rtsp_passwd,
@@ -1035,6 +1098,65 @@ gint ParserClass::check_arg() {
   const gint profile_min = use_h265 ? MIN_H265_PROFILE : MIN_H264_PROFILE;
   const gint profile_max = use_h265 ? MAX_H265_PROFILE : MAX_H264_PROFILE;
 
+  if (arg.rtsp_frame_id_sei != FALSE && arg.rtsp_frame_id_sei != TRUE) {
+    __LOG(LOG_WARNING,
+          "[CFG][%s:%d] invalid rtsp_frame_id_sei=%d, disabling",
+          _FILE_, __LINE__, arg.rtsp_frame_id_sei);
+    arg.rtsp_frame_id_sei = FALSE;
+  }
+  if (arg.rtsp_frame_id_sei && !use_h265) {
+    __LOG(LOG_WARNING,
+          "[CFG][%s:%d] RTSP Frame ID SEI requires H.265, disabling",
+          _FILE_, __LINE__);
+    arg.rtsp_frame_id_sei = FALSE;
+  }
+  sync_trace_sanity(&arg.v4l2_sync_trace_sec, "v4l2_sync_trace_sec");
+  if (arg.v4l2_sync_log_frames != FALSE &&
+      arg.v4l2_sync_log_frames != TRUE) {
+    __LOG(LOG_WARNING,
+          "[CFG][%s:%d] invalid v4l2_sync_log_frames=%d, disabling",
+          _FILE_, __LINE__, arg.v4l2_sync_log_frames);
+    arg.v4l2_sync_log_frames = FALSE;
+  }
+  if (arg.v4l2_sync_log_frames && arg.v4l2_sync_trace_sec == 0) {
+    __LOG(LOG_WARNING,
+          "[CFG][%s:%d] V4L2 frame log requires sync trace, disabling",
+          _FILE_, __LINE__);
+    arg.v4l2_sync_log_frames = FALSE;
+  }
+  sync_trace_sanity(&arg.channel_sync_trace_sec, "channel_sync_trace_sec");
+  sync_trace_sanity(&arg.rtsp_sync_trace_sec, "rtsp_sync_trace_sec");
+
+  const gboolean stall_requested =
+      arg.rtsp_test_stall_ch != DEFAULT_RTSP_TEST_STALL_CH ||
+      arg.rtsp_test_stall_after_sec != DEFAULT_RTSP_TEST_STALL_AFTER_SEC ||
+      arg.rtsp_test_stall_duration_sec != DEFAULT_RTSP_TEST_STALL_DURATION_SEC;
+  if (stall_requested &&
+      !(arg.levelMode == MODE_TEST && arg.rtsp_test_stall_ch >= 0 &&
+        arg.rtsp_test_stall_ch < MAX_CHANNEL &&
+        (arg.ch_enable & (1 << arg.rtsp_test_stall_ch)) != 0 &&
+        arg.rtsp_test_stall_after_sec >= 0 &&
+        arg.rtsp_test_stall_after_sec <= RTSP_TEST_STALL_MAX_SEC &&
+        arg.rtsp_test_stall_duration_sec >= 1 &&
+        arg.rtsp_test_stall_duration_sec <= RTSP_TEST_STALL_MAX_SEC)) {
+    __LOG(LOG_WARNING,
+          "[CFG][%s:%d] invalid RTSP test stall request, disabling",
+          _FILE_, __LINE__);
+    arg.rtsp_test_stall_ch = DEFAULT_RTSP_TEST_STALL_CH;
+    arg.rtsp_test_stall_after_sec = DEFAULT_RTSP_TEST_STALL_AFTER_SEC;
+    arg.rtsp_test_stall_duration_sec = DEFAULT_RTSP_TEST_STALL_DURATION_SEC;
+  }
+
+  __LOG(LOG_NOTICE,
+        "[CFG][%s:%d] sync_config v4l2_trace_sec:%d v4l2_log_frames:%d "
+        "channel_trace_sec:%d rtsp_trace_sec:%d stall_ch:%d stall_after_sec:%d "
+        "stall_duration_sec:%d",
+        _FILE_, __LINE__, arg.v4l2_sync_trace_sec,
+        arg.v4l2_sync_log_frames, arg.channel_sync_trace_sec,
+        arg.rtsp_sync_trace_sec,
+        arg.rtsp_test_stall_ch, arg.rtsp_test_stall_after_sec,
+        arg.rtsp_test_stall_duration_sec);
+
   __LOG(LOG_NOTICE, "[%s][%s:%d] enc:%s", LOG_KEY, _FILE_, __LINE__,
         arg.enc);
   //__LOG(LOG_NOTICE, "[RTSP][%s:%d] 0 : %s, 1 : %s, 2 : %s", _FILE_, __LINE__,
@@ -1218,16 +1340,19 @@ gint ParserClass::check_arg() {
     __LOG(LOG_NOTICE,
           "[%s][%s:%d] rtsp_tune factory_latency_ms:%d appsink_max_buffers:%d "
           "factory_queue_max_buffers:%d bin_queue_max_time_ms:%d "
-          "appsrc_max_bytes:%d",
+          "appsrc_max_bytes:%d frame_id_sei:%d",
           LOG_KEY, _FILE_, __LINE__, arg.rtsp_factory_latency_ms,
           arg.rtsp_appsink_max_buffers, arg.rtsp_factory_queue_max_buffers,
-          arg.rtsp_bin_queue_max_time_ms, arg.rtsp_appsrc_max_bytes);
+          arg.rtsp_bin_queue_max_time_ms, arg.rtsp_appsrc_max_bytes,
+          arg.rtsp_frame_id_sei);
   }
   __LOG(LOG_NOTICE,
-        "[%s][%s:%d] queue_tune main_src:%dms enc_src:%dms rec_sink:%dms cap_src:%dms",
+        "[%s][%s:%d] queue_tune main_src:%dms enc_src:%dms rec_sink:%dms cap_src:%dms"
+        " | enc_frames:%d enc_budget:%dMB enc_stat:%ds",
         LOG_KEY, _FILE_, __LINE__, arg.queue_main_src_time_ms,
         arg.queue_enc_src_time_ms, arg.queue_rec_sink_time_ms,
-        arg.queue_cap_src_time_ms);
+        arg.queue_cap_src_time_ms, arg.queue_enc_src_frames,
+        arg.queue_enc_budget_mb, arg.queue_enc_stat_sec);
 
   if (arg.stream_en[STREAM_CAP]) {
     if (arg.cap.queue_size <= 0) {

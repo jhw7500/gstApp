@@ -47,6 +47,8 @@ static GMutex sessions_mutex;
 // 파일명 및 타임스탬프 문자열 캐시 (B항목 최적화)
 static GMutex timestamp_cache_mutex;
 static gint64 last_cache_unix_sec = -1;
+/* 이번 세션(분)의 마커를 이미 기록했는지. timestamp_cache_mutex 로 보호한다. */
+static gint64 last_marked_epoch = -1;
 static gchar cached_date_str[32];      // YYYYMMDD_HHMM00
 static gchar cached_timestamp_str[32]; // YYYYMMDD_HHMM
 G_LOCK_DEFINE_STATIC(split_target_lock);
@@ -502,25 +504,11 @@ gchararray format_location(GstElement *sink, guint arg0, gpointer data) {
   gchar *date_str_ptr = NULL;
   gchar *ts_str_ptr = NULL;
   
-  // [I/O 최적화] 마커 파일을 기록할 대표 채널 선정
-  // disconnect 시 활성 채널로 재선정
-  static gint marker_channel = -1;
-  if (marker_channel == -1 || ((g_link_disconnect_mask >> marker_channel) & 1)) {
-    gint new_marker = -1;
-    for (int i = 0; i < MAX_CHANNEL; i++) {
-      if (cmdArg.cam[i].enable && !((g_link_disconnect_mask >> i) & 1)) {
-        new_marker = i;
-        break;
-      }
-    }
-    if (new_marker != -1 && new_marker != marker_channel) {
-      __LOG(LOG_NOTICE, "[GST][%s:%d] marker_channel changed: ch%d -> ch%d (disconnect_mask=0x%x)",
-            _FILE_, __LINE__, marker_channel, new_marker, g_link_disconnect_mask);
-      marker_channel = new_marker;
-    } else if (new_marker == -1 && marker_channel == -1) {
-      marker_channel = 0;  // 모든 채널 disconnect 시 fallback
-    }
-  }
+  /* 마커는 '대표 채널' 이 아니라 '세션' 을 기준으로 한 번만 기록한다.
+   * 채널을 지명하면 그 채널이 죽었을 때 마커가 영구히 멎는데, disconnect_mask 는
+   * 런타임 중 갱신되지 않아 재선정이 걸리지 않는다. 세션 기준이면 이번 분의
+   * 마커를 아직 아무도 안 썼을 때 지금 파일을 여는 채널이 맡으므로,
+   * 한 채널만 살아 있어도 마커가 계속 기록된다. (아래 marker_claim 참조) */
 
   info->split_msec = sec * 1000 + usec / 1000;
 
@@ -564,6 +552,11 @@ gchararray format_location(GstElement *sink, guint arg0, gpointer data) {
     g_free(tmp_ts);
     g_date_time_unref(round_time);
   }
+  /* 이번 세션의 마커를 아직 아무도 기록하지 않았으면 이 채널이 맡는다.
+   * 같은 락 안에서 판정+선점하므로 채널이 동시에 진입해도 정확히 1회만 참이 된다. */
+  gboolean marker_claim = (naming_epoch_sec != last_marked_epoch);
+  if (marker_claim)
+    last_marked_epoch = naming_epoch_sec;
   g_strlcpy(local_date_str, cached_date_str, sizeof(local_date_str));
   g_strlcpy(local_ts_str, cached_timestamp_str, sizeof(local_ts_str));
   g_mutex_unlock(&timestamp_cache_mutex);
@@ -587,8 +580,15 @@ gchararray format_location(GstElement *sink, guint arg0, gpointer data) {
   if (info->last_timestamp) g_free(info->last_timestamp);
   info->last_timestamp = g_strdup(local_ts_str);
 
-  // 시작 시간 기록 (chk_cam_operate.sh용 - 대표 채널에서만 수행)
-  if (info->ch == marker_channel) {
+  // 시작 시간 기록 (chk_cam_operate.sh용 - 세션당 1회, 먼저 여는 채널이 수행)
+  if (marker_claim) {
+    // 어느 채널이 세션 마커를 썼는지 바뀔 때만 남긴다 (매 분 찍으면 소음).
+    static gint last_marker_ch = -1;
+    if (info->ch != last_marker_ch) {
+      __LOG(LOG_NOTICE, "[GST][%s:%d] session marker writer: ch%d -> ch%d",
+            _FILE_, __LINE__, last_marker_ch, info->ch);
+      last_marker_ch = info->ch;
+    }
     // 파일명에 쓰인 세션(분)을 별도로 남긴다. 벽시계 분과 어긋날 수 있어
     // (경계 직전 호출 시 naming 이 다음 분으로 올림) 검사 측이 이 값으로
     // 대조해야 한다. 트리거인 start_video_time_chk 보다 먼저 기록한다.

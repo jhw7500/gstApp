@@ -11,8 +11,12 @@
  */
 
 #include "rtspServerBin.h"
+#include "rtspFrameId.h"
+#include "rtspSync.h"
 #include <gst/app/gstappsink.h>
 #include <gst/app/gstappsrc.h>
+#define GST_USE_UNSTABLE_API
+#include <gst/codecparsers/gsth265parser.h>
 #include <gst/rtsp-server/rtsp-server.h>
 #include <gst/video/video.h>
 
@@ -31,6 +35,7 @@ drop_no_pts_probe_rtsp(GstPad *pad, GstPadProbeInfo *info, gpointer user_data)
 
 GstRTSPMountPoints *rtspMounts = NULL;
 GstRTSPServer *rtspServer = NULL;
+guint rtspServerSource_id = 0;
 guint cleanSesson_id = 0;
 guint removeSesson_id = 0;
 
@@ -42,6 +47,1019 @@ static guint8 g_rtsp_appsrc_count = 0;
  * 정적 할당 GMutex는 별도 init 불필요 */
 static GMutex g_rtsp_appsrc_lock;
 
+#define RTSP_SYNC_FNV_OFFSET G_GUINT64_CONSTANT(1469598103934665603)
+#define RTSP_SYNC_FNV_PRIME G_GUINT64_CONSTANT(1099511628211)
+#define RTSP_VIDEO_CLOCK_RATE 90000
+typedef struct {
+  gboolean started;
+  gboolean complete;
+  guint64 frames;
+  guint64 invalid_pts;
+  guint64 pts_backwards;
+  guint64 missing_origin_meta;
+  guint64 pts_hash;
+  guint64 normalized_pts_hash;
+  guint64 origin_pts_hash;
+  GstClockTime first_pts;
+  GstClockTime previous_pts;
+  GstClockTime last_pts;
+  GstClockTime first_origin_pts;
+  GstClockTime last_origin_pts;
+  GstClockTime delta_min;
+  GstClockTime delta_max;
+  guint64 delta_sum;
+} RtspSyncBufferStage;
+
+typedef struct {
+  guint8 ch;
+  guint64 generation;
+  guint duration_sec;
+  GstCaps *reference;
+  GMutex lock;
+  gboolean active;
+  gboolean bridge_started;
+  gboolean bridge_complete;
+  guint64 bridge_frames;
+  guint64 bridge_invalid_pts;
+  guint64 bridge_no_appsrc;
+  guint64 bridge_full_drop;
+  guint64 bridge_key_wait_drop;
+  guint64 factory_queue_overrun;
+  guint64 bridge_interrupted_drop;
+  guint64 bridge_copy_failure;
+  guint64 bridge_stripped_pts_valid;
+  guint64 bridge_meta_failure;
+  guint64 push_attempt;
+  guint64 push_ok;
+  guint64 push_failure;
+  guint64 frame_id_sei_inserted;
+  guint64 frame_id_sei_failed;
+  guint64 frame_id_sei_time_count;
+  guint64 frame_id_sei_time_sum_ns;
+  GstClockTime frame_id_sei_time_min_ns;
+  GstClockTime frame_id_sei_time_max_ns;
+  guint64 frame_id_sei_time_buckets[9];
+  guint64 upstream_pts_hash;
+  GstClockTime bridge_first_pts;
+  GstClockTime bridge_previous_pts;
+  GstClockTime bridge_last_pts;
+  guint64 bridge_pts_backwards;
+  RtspSyncBufferStage appsrc_stage;
+  RtspSyncBufferStage pay_stage;
+  gboolean rtp_started;
+  gboolean rtp_complete;
+  guint64 rtp_packets;
+  guint64 rtp_markers;
+  guint64 rtp_timestamps;
+  guint64 rtp_timestamp_backwards;
+  guint64 rtp_timestamp_hash;
+  guint64 rtp_delta_sum;
+  guint64 rtp_delta_min;
+  guint64 rtp_delta_max;
+  guint32 rtp_first_raw;
+  guint32 rtp_previous_raw;
+  guint32 rtp_last_raw;
+  guint64 rtp_wrap_base;
+  guint64 rtp_first_unwrapped;
+  guint64 rtp_previous_unwrapped;
+  guint64 rtp_last_unwrapped;
+} RtspSyncTrace;
+
+typedef enum {
+  RTSP_SYNC_STAGE_APPSRC,
+  RTSP_SYNC_STAGE_PAY
+} RtspSyncStageKind;
+
+typedef struct {
+  RtspSyncGeneration *generation;
+  RtspSyncStageKind kind;
+} RtspSyncProbeCtx;
+
+typedef struct {
+  RtspSyncGeneration *generation;
+  guint8 ch;
+  guint after_sec;
+  guint duration_sec;
+  gint64 first_buffer_us;
+  gboolean triggered;
+} RtspTestStallCtx;
+
+typedef struct {
+  GMutex lock;
+  guint64 id;
+  RtspServerData *info;
+  RtspSyncTrace *trace;
+  GstElement *appsrc;
+  gulong enough_handler_id;
+  gulong need_handler_id;
+  GstPad *appsrc_pad;
+  gulong appsrc_probe_id;
+  GstPad *pay_sink_pad;
+  gulong pay_sink_probe_id;
+  GstPad *pay_src_pad;
+  gulong rtp_probe_id;
+  gulong stall_probe_id;
+  GstPad *debug_pay_src_pad;
+  gulong debug_pay_probe_id;
+  GstElement *out_queue;
+  gulong overrun_handler_id;
+} RtspMediaGenerationData;
+
+static void rtsp_media_generation_data_free(gpointer data);
+
+static gboolean rtsp_application_interrupted(gpointer user_data) {
+  (void)user_data;
+  return is_interrupted != 0;
+}
+
+static gboolean rtsp_test_stall_config(guint8 ch, guint *after_sec,
+                                       guint *duration_sec) {
+  if (cmdArg.rtsp_test_stall_ch != ch ||
+      cmdArg.rtsp_test_stall_duration_sec <= 0)
+    return FALSE;
+
+  *after_sec = (guint)cmdArg.rtsp_test_stall_after_sec;
+  *duration_sec = (guint)cmdArg.rtsp_test_stall_duration_sec;
+  return TRUE;
+}
+
+static GstPadProbeReturn rtsp_test_stall_probe(GstPad *pad,
+                                               GstPadProbeInfo *probe_info,
+                                               gpointer user_data) {
+  (void)pad;
+  RtspTestStallCtx *ctx = (RtspTestStallCtx *)user_data;
+  if (!ctx || !rtsp_sync_generation_is_active(ctx->generation))
+    return GST_PAD_PROBE_REMOVE;
+  if (!(GST_PAD_PROBE_INFO_TYPE(probe_info) &
+        (GST_PAD_PROBE_TYPE_BUFFER | GST_PAD_PROBE_TYPE_BUFFER_LIST)))
+    return GST_PAD_PROBE_OK;
+
+  gint64 now_us = g_get_monotonic_time();
+  if (ctx->first_buffer_us == 0)
+    ctx->first_buffer_us = now_us;
+
+  if (!ctx->triggered &&
+      now_us - ctx->first_buffer_us >=
+          (gint64)ctx->after_sec * G_USEC_PER_SEC) {
+    ctx->triggered = TRUE;
+    __LOG(LOG_WARNING,
+          "[RTSP_TEST_STALL][%s:%d] ch=%u generation=%" G_GUINT64_FORMAT
+          " start duration_sec=%u mono_ns=%" G_GINT64_FORMAT,
+          _FILE_, __LINE__, ctx->ch,
+          rtsp_sync_generation_id(ctx->generation), ctx->duration_sec,
+          g_get_monotonic_time() * 1000);
+    gboolean completed = rtsp_sync_generation_wait(
+        ctx->generation, (gint64)ctx->duration_sec * G_USEC_PER_SEC,
+        20 * 1000, rtsp_application_interrupted, NULL);
+    __LOG(completed ? LOG_WARNING : LOG_NOTICE,
+          "[RTSP_TEST_STALL][%s:%d] ch=%u generation=%" G_GUINT64_FORMAT
+          " %s mono_ns=%" G_GINT64_FORMAT,
+          _FILE_, __LINE__, ctx->ch,
+          rtsp_sync_generation_id(ctx->generation),
+          completed ? "end" : "cancelled",
+          g_get_monotonic_time() * 1000);
+    return GST_PAD_PROBE_REMOVE;
+  }
+
+  return GST_PAD_PROBE_OK;
+}
+
+static guint64 rtsp_sync_hash_u64(guint64 hash, guint64 value) {
+  for (guint i = 0; i < sizeof(value); i++) {
+    hash ^= (value >> (i * 8)) & 0xff;
+    hash *= RTSP_SYNC_FNV_PRIME;
+  }
+  return hash;
+}
+
+static guint rtsp_sync_trace_duration() {
+  return cmdArg.rtsp_sync_trace_sec > 0
+             ? (guint)cmdArg.rtsp_sync_trace_sec
+             : 0;
+}
+
+static gboolean rtsp_frame_id_sei_enabled() {
+  return cmdArg.rtsp_frame_id_sei;
+}
+
+static GstBuffer *rtsp_frame_id_sei_insert(RtspServerData *info,
+                                           GstBuffer *buffer,
+                                           GstClockTime origin_pts,
+                                           const GstCaps *caps) {
+  if (!info || !buffer || !GST_CLOCK_TIME_IS_VALID(origin_pts) ||
+      !rtsp_frame_id_insertion_allowed(&cmdArg, info->ch, caps) ||
+      !rtsp_h265_annex_b_au_buffer(buffer))
+    return NULL;
+
+  GstH265Parser *parser = (GstH265Parser *)info->frame_id_parser;
+  if (!parser) {
+    parser = gst_h265_parser_new();
+    if (!parser)
+      return NULL;
+    info->frame_id_parser = parser;
+  }
+
+  guint8 payload[RTSP_FRAME_ID_DATA_SIZE] = { 0 };
+  memcpy(payload, RTSP_FRAME_ID_MAGIC, RTSP_FRAME_ID_MAGIC_SIZE);
+  payload[8] = RTSP_FRAME_ID_VERSION;
+  payload[9] = info->ch;
+  guint64 frame_id = 0;
+  if (!rtsp_frame_id_from_caps_pts(caps, origin_pts, &frame_id))
+    return NULL;
+  GST_WRITE_UINT64_BE(payload + 12, frame_id);
+  GST_WRITE_UINT64_BE(payload + 20, origin_pts);
+
+  GstH265SEIMessage message = {};
+  message.payloadType = GST_H265_SEI_REGISTERED_USER_DATA;
+  message.payload.registered_user_data.country_code =
+      RTSP_FRAME_ID_COUNTRY_CODE;
+  message.payload.registered_user_data.country_code_extension =
+      RTSP_FRAME_ID_COUNTRY_EXTENSION;
+  message.payload.registered_user_data.data = payload;
+  message.payload.registered_user_data.size = sizeof(payload);
+
+  GArray *messages = g_array_sized_new(
+      FALSE, FALSE, sizeof(GstH265SEIMessage), 1);
+  g_array_append_val(messages, message);
+  GstMemory *sei = gst_h265_create_sei_memory(0, 1, 4, messages);
+  g_array_free(messages, TRUE);
+  if (!sei)
+    return NULL;
+
+  GstBuffer *result = gst_h265_parser_insert_sei(parser, buffer, sei);
+  gst_memory_unref(sei);
+  return result;
+}
+
+static RtspSyncTrace *rtsp_sync_trace_new(guint8 ch, guint64 generation) {
+  guint duration_sec = rtsp_sync_trace_duration();
+  if (duration_sec == 0)
+    return NULL;
+
+  RtspSyncTrace *trace = g_new0(RtspSyncTrace, 1);
+  trace->ch = ch;
+  trace->generation = generation;
+  trace->duration_sec = duration_sec;
+  trace->reference = gst_caps_new_simple(
+      "timestamp/x-gstapp-rtsp-origin", "channel", G_TYPE_INT, (gint)ch,
+      NULL);
+  trace->upstream_pts_hash = RTSP_SYNC_FNV_OFFSET;
+  trace->appsrc_stage.pts_hash = RTSP_SYNC_FNV_OFFSET;
+  trace->appsrc_stage.normalized_pts_hash = RTSP_SYNC_FNV_OFFSET;
+  trace->appsrc_stage.origin_pts_hash = RTSP_SYNC_FNV_OFFSET;
+  trace->appsrc_stage.delta_min = GST_CLOCK_TIME_NONE;
+  trace->pay_stage.pts_hash = RTSP_SYNC_FNV_OFFSET;
+  trace->pay_stage.normalized_pts_hash = RTSP_SYNC_FNV_OFFSET;
+  trace->pay_stage.origin_pts_hash = RTSP_SYNC_FNV_OFFSET;
+  trace->pay_stage.delta_min = GST_CLOCK_TIME_NONE;
+  trace->rtp_timestamp_hash = RTSP_SYNC_FNV_OFFSET;
+  trace->rtp_delta_min = G_MAXUINT64;
+  trace->frame_id_sei_time_min_ns = GST_CLOCK_TIME_NONE;
+  g_mutex_init(&trace->lock);
+
+  __LOG(LOG_NOTICE,
+        "[RTSP_SYNC][%s:%d] ch=%u generation=%" G_GUINT64_FORMAT
+        " enabled duration_sec=%u",
+        _FILE_, __LINE__, ch, generation, duration_sec);
+  return trace;
+}
+
+static void rtsp_sync_trace_free(RtspSyncTrace *trace) {
+  if (!trace)
+    return;
+  if (trace->reference)
+    gst_caps_unref(trace->reference);
+  g_mutex_clear(&trace->lock);
+  g_free(trace);
+}
+
+static RtspMediaGenerationData *rtsp_media_generation_data(
+    RtspSyncGeneration *generation) {
+  return (RtspMediaGenerationData *)rtsp_sync_generation_data(generation);
+}
+
+static RtspSyncTrace *rtsp_generation_trace(
+    RtspSyncGeneration *generation) {
+  RtspMediaGenerationData *data = rtsp_media_generation_data(generation);
+  return data ? data->trace : NULL;
+}
+
+static void rtsp_sync_probe_ctx_free(gpointer data) {
+  RtspSyncProbeCtx *ctx = (RtspSyncProbeCtx *)data;
+  if (!ctx)
+    return;
+  rtsp_sync_generation_unref(ctx->generation);
+  g_free(ctx);
+}
+
+static void rtsp_test_stall_ctx_free(gpointer data) {
+  RtspTestStallCtx *ctx = (RtspTestStallCtx *)data;
+  if (!ctx)
+    return;
+  rtsp_sync_generation_unref(ctx->generation);
+  g_free(ctx);
+}
+
+static void rtsp_generation_unref_closure(gpointer data,
+                                          GClosure *closure) {
+  (void)closure;
+  rtsp_sync_generation_unref((RtspSyncGeneration *)data);
+}
+
+static void rtsp_media_generation_release_hooks(
+    RtspSyncGeneration *generation) {
+  RtspMediaGenerationData *data = rtsp_media_generation_data(generation);
+  if (!data)
+    return;
+
+  if (data->trace) {
+    g_mutex_lock(&data->trace->lock);
+    data->trace->active = FALSE;
+    g_mutex_unlock(&data->trace->lock);
+  }
+
+  GstPad *appsrc_pad;
+  GstPad *pay_sink_pad;
+  GstPad *pay_src_pad;
+  GstPad *debug_pay_src_pad;
+  GstElement *out_queue;
+  GstElement *appsrc;
+  gulong appsrc_probe_id;
+  gulong pay_sink_probe_id;
+  gulong rtp_probe_id;
+  gulong stall_probe_id;
+  gulong debug_pay_probe_id;
+  gulong overrun_handler_id;
+  gulong enough_handler_id;
+  gulong need_handler_id;
+
+  g_mutex_lock(&data->lock);
+  appsrc_pad = data->appsrc_pad;
+  pay_sink_pad = data->pay_sink_pad;
+  pay_src_pad = data->pay_src_pad;
+  debug_pay_src_pad = data->debug_pay_src_pad;
+  out_queue = data->out_queue;
+  appsrc = data->appsrc;
+  appsrc_probe_id = data->appsrc_probe_id;
+  pay_sink_probe_id = data->pay_sink_probe_id;
+  rtp_probe_id = data->rtp_probe_id;
+  stall_probe_id = data->stall_probe_id;
+  debug_pay_probe_id = data->debug_pay_probe_id;
+  overrun_handler_id = data->overrun_handler_id;
+  enough_handler_id = data->enough_handler_id;
+  need_handler_id = data->need_handler_id;
+  data->appsrc_pad = NULL;
+  data->pay_sink_pad = NULL;
+  data->pay_src_pad = NULL;
+  data->debug_pay_src_pad = NULL;
+  data->out_queue = NULL;
+  data->appsrc = NULL;
+  data->appsrc_probe_id = 0;
+  data->pay_sink_probe_id = 0;
+  data->rtp_probe_id = 0;
+  data->stall_probe_id = 0;
+  data->debug_pay_probe_id = 0;
+  data->overrun_handler_id = 0;
+  data->enough_handler_id = 0;
+  data->need_handler_id = 0;
+  g_mutex_unlock(&data->lock);
+
+  if (appsrc_pad && appsrc_probe_id)
+    gst_pad_remove_probe(appsrc_pad, appsrc_probe_id);
+  if (pay_sink_pad && pay_sink_probe_id)
+    gst_pad_remove_probe(pay_sink_pad, pay_sink_probe_id);
+  if (pay_src_pad && rtp_probe_id)
+    gst_pad_remove_probe(pay_src_pad, rtp_probe_id);
+  if (pay_src_pad && stall_probe_id)
+    gst_pad_remove_probe(pay_src_pad, stall_probe_id);
+  if (debug_pay_src_pad && debug_pay_probe_id)
+    gst_pad_remove_probe(debug_pay_src_pad, debug_pay_probe_id);
+  if (out_queue && overrun_handler_id &&
+      g_signal_handler_is_connected(out_queue, overrun_handler_id))
+    g_signal_handler_disconnect(out_queue, overrun_handler_id);
+  if (appsrc && enough_handler_id &&
+      g_signal_handler_is_connected(appsrc, enough_handler_id))
+    g_signal_handler_disconnect(appsrc, enough_handler_id);
+  if (appsrc && need_handler_id &&
+      g_signal_handler_is_connected(appsrc, need_handler_id))
+    g_signal_handler_disconnect(appsrc, need_handler_id);
+  if (appsrc_pad)
+    gst_object_unref(appsrc_pad);
+  if (pay_sink_pad)
+    gst_object_unref(pay_sink_pad);
+  if (pay_src_pad)
+    gst_object_unref(pay_src_pad);
+  if (debug_pay_src_pad)
+    gst_object_unref(debug_pay_src_pad);
+  if (out_queue)
+    gst_object_unref(out_queue);
+  if (appsrc)
+    gst_object_unref(appsrc);
+}
+
+static void rtsp_media_generation_owner_free(gpointer data) {
+  RtspSyncGeneration *generation = (RtspSyncGeneration *)data;
+  if (!generation)
+    return;
+  rtsp_sync_generation_deactivate(generation);
+  rtsp_media_generation_release_hooks(generation);
+  rtsp_sync_generation_unref(generation);
+}
+
+static void rtsp_media_generation_data_free(gpointer value) {
+  RtspMediaGenerationData *data = (RtspMediaGenerationData *)value;
+  if (!data)
+    return;
+
+  /* The media owner removes all hooks before its final unref. */
+  if (data->appsrc_pad)
+    gst_object_unref(data->appsrc_pad);
+  if (data->pay_sink_pad)
+    gst_object_unref(data->pay_sink_pad);
+  if (data->pay_src_pad)
+    gst_object_unref(data->pay_src_pad);
+  if (data->debug_pay_src_pad)
+    gst_object_unref(data->debug_pay_src_pad);
+  if (data->out_queue)
+    gst_object_unref(data->out_queue);
+  if (data->appsrc)
+    gst_object_unref(data->appsrc);
+  rtsp_sync_trace_free(data->trace);
+  g_mutex_clear(&data->lock);
+  g_free(data);
+}
+
+static RtspSyncGeneration *rtsp_media_generation_new(RtspServerData *info,
+                                                      guint8 ch,
+                                                      guint64 id) {
+  RtspMediaGenerationData *data = g_new0(RtspMediaGenerationData, 1);
+  if (!data)
+    return NULL;
+
+  g_mutex_init(&data->lock);
+  data->id = id;
+  data->info = info;
+  data->trace = ch < MAX_CHANNEL ? rtsp_sync_trace_new(ch, id) : NULL;
+  if (data->trace) {
+    g_mutex_lock(&data->trace->lock);
+    data->trace->active = TRUE;
+    g_mutex_unlock(&data->trace->lock);
+  }
+  RtspSyncGeneration *generation = rtsp_sync_generation_new(
+      id, data, rtsp_media_generation_data_free);
+  if (!generation) {
+    rtsp_media_generation_data_free(data);
+    return NULL;
+  }
+  return generation;
+}
+
+static gboolean rtsp_sync_bridge_input(RtspSyncTrace *trace,
+                                       GstBuffer *buffer,
+                                       gboolean has_appsrc,
+                                       gboolean drop_full,
+                                       gboolean drop_key_wait,
+                                       gboolean interrupted) {
+  if (!trace || !buffer)
+    return FALSE;
+
+  GstClockTime pts = GST_BUFFER_PTS(buffer);
+  gboolean trace_buffer = FALSE;
+
+  g_mutex_lock(&trace->lock);
+  if (!trace->active || trace->bridge_complete)
+    goto bridge_input_out;
+
+  if (!GST_CLOCK_TIME_IS_VALID(pts)) {
+    trace->bridge_invalid_pts++;
+    goto bridge_input_out;
+  }
+
+  if (!trace->bridge_started) {
+    trace->bridge_started = TRUE;
+    trace->bridge_first_pts = pts;
+  } else if (pts >= trace->bridge_first_pts &&
+             pts - trace->bridge_first_pts >=
+                 (GstClockTime)trace->duration_sec * GST_SECOND) {
+    GstClockTime span = trace->bridge_last_pts - trace->bridge_first_pts;
+    trace->bridge_complete = TRUE;
+    __LOG(LOG_NOTICE,
+          "[RTSP_SYNC][%s:%d] ch=%u generation=%" G_GUINT64_FORMAT
+          " stage=bridge summary"
+          " duration_pts_ns=%" G_GUINT64_FORMAT " frames=%"
+          G_GUINT64_FORMAT " invalid_pts=%" G_GUINT64_FORMAT
+          " pts_backwards=%" G_GUINT64_FORMAT " first_pts_ns=%"
+          G_GUINT64_FORMAT " last_pts_ns=%" G_GUINT64_FORMAT
+          " upstream_pts_hash=%016" G_GINT64_MODIFIER
+          "x no_appsrc=%" G_GUINT64_FORMAT " full_drop=%"
+          G_GUINT64_FORMAT " key_wait_drop=%" G_GUINT64_FORMAT
+          " factory_queue_overrun=%" G_GUINT64_FORMAT
+          " interrupted_drop=%" G_GUINT64_FORMAT " copy_fail=%"
+          G_GUINT64_FORMAT " stripped_pts_valid=%" G_GUINT64_FORMAT
+          " meta_fail=%" G_GUINT64_FORMAT " push_attempt=%"
+          G_GUINT64_FORMAT " push_ok=%" G_GUINT64_FORMAT
+          " push_fail=%" G_GUINT64_FORMAT " frame_id_sei_inserted=%"
+          G_GUINT64_FORMAT " frame_id_sei_failed=%" G_GUINT64_FORMAT,
+          _FILE_, __LINE__, trace->ch, trace->generation, span,
+          trace->bridge_frames,
+          trace->bridge_invalid_pts, trace->bridge_pts_backwards,
+          trace->bridge_first_pts, trace->bridge_last_pts,
+          trace->upstream_pts_hash, trace->bridge_no_appsrc,
+          trace->bridge_full_drop, trace->bridge_key_wait_drop,
+          trace->factory_queue_overrun,
+          trace->bridge_interrupted_drop, trace->bridge_copy_failure,
+          trace->bridge_stripped_pts_valid, trace->bridge_meta_failure,
+          trace->push_attempt, trace->push_ok, trace->push_failure,
+          trace->frame_id_sei_inserted, trace->frame_id_sei_failed);
+    if (trace->frame_id_sei_time_count > 0) {
+      __LOG(LOG_NOTICE,
+            "[RTSP_FRAME_ID][%s:%d] ch=%u generation=%" G_GUINT64_FORMAT
+            " timing summary count=%"
+            G_GUINT64_FORMAT " avg_ns=%" G_GUINT64_FORMAT " min_ns=%"
+            G_GUINT64_FORMAT " max_ns=%" G_GUINT64_FORMAT
+            " b_0_5us=%" G_GUINT64_FORMAT " b_5_10us=%"
+            G_GUINT64_FORMAT " b_10_25us=%" G_GUINT64_FORMAT
+            " b_25_50us=%" G_GUINT64_FORMAT " b_50_100us=%"
+            G_GUINT64_FORMAT " b_100_250us=%" G_GUINT64_FORMAT
+            " b_250_500us=%" G_GUINT64_FORMAT " b_500_1000us=%"
+            G_GUINT64_FORMAT " b_gt_1000us=%" G_GUINT64_FORMAT,
+            _FILE_, __LINE__, trace->ch, trace->generation,
+            trace->frame_id_sei_time_count,
+            trace->frame_id_sei_time_sum_ns /
+                trace->frame_id_sei_time_count,
+            trace->frame_id_sei_time_min_ns,
+            trace->frame_id_sei_time_max_ns,
+            trace->frame_id_sei_time_buckets[0],
+            trace->frame_id_sei_time_buckets[1],
+            trace->frame_id_sei_time_buckets[2],
+            trace->frame_id_sei_time_buckets[3],
+            trace->frame_id_sei_time_buckets[4],
+            trace->frame_id_sei_time_buckets[5],
+            trace->frame_id_sei_time_buckets[6],
+            trace->frame_id_sei_time_buckets[7],
+            trace->frame_id_sei_time_buckets[8]);
+    }
+    goto bridge_input_out;
+  }
+
+  if (trace->bridge_frames > 0 && pts < trace->bridge_previous_pts)
+    trace->bridge_pts_backwards++;
+  trace->bridge_frames++;
+  trace->bridge_previous_pts = pts;
+  trace->bridge_last_pts = pts;
+  trace->upstream_pts_hash =
+      rtsp_sync_hash_u64(trace->upstream_pts_hash, pts);
+  trace_buffer = TRUE;
+
+  if (!has_appsrc)
+    trace->bridge_no_appsrc++;
+  else if (drop_full)
+    trace->bridge_full_drop++;
+  else if (drop_key_wait)
+    trace->bridge_key_wait_drop++;
+  else if (interrupted)
+    trace->bridge_interrupted_drop++;
+
+bridge_input_out:
+  g_mutex_unlock(&trace->lock);
+  return trace_buffer;
+}
+
+static void rtsp_sync_record_copy(RtspSyncTrace *trace,
+                                  gboolean trace_buffer,
+                                  gboolean copy_ok,
+                                  gboolean stripped_pts_valid,
+                                  gboolean meta_ok) {
+  if (!trace || !trace_buffer)
+    return;
+
+  g_mutex_lock(&trace->lock);
+  if (!copy_ok)
+    trace->bridge_copy_failure++;
+  if (stripped_pts_valid)
+    trace->bridge_stripped_pts_valid++;
+  if (copy_ok && !meta_ok)
+    trace->bridge_meta_failure++;
+  g_mutex_unlock(&trace->lock);
+}
+
+static void rtsp_sync_record_push(RtspSyncTrace *trace,
+                                  gboolean trace_buffer,
+                                  GstFlowReturn result) {
+  if (!trace || !trace_buffer)
+    return;
+
+  g_mutex_lock(&trace->lock);
+  trace->push_attempt++;
+  if (result == GST_FLOW_OK)
+    trace->push_ok++;
+  else
+    trace->push_failure++;
+  g_mutex_unlock(&trace->lock);
+}
+
+static void rtsp_sync_record_frame_id_sei(RtspSyncTrace *trace,
+                                          gboolean trace_buffer,
+                                          gboolean inserted,
+                                          GstClockTime elapsed_ns) {
+  if (!trace || !trace_buffer)
+    return;
+
+  g_mutex_lock(&trace->lock);
+  if (inserted)
+    trace->frame_id_sei_inserted++;
+  else
+    trace->frame_id_sei_failed++;
+  if (GST_CLOCK_TIME_IS_VALID(elapsed_ns)) {
+    static const GstClockTime upper_ns[] = {
+      5 * GST_USECOND, 10 * GST_USECOND, 25 * GST_USECOND,
+      50 * GST_USECOND, 100 * GST_USECOND, 250 * GST_USECOND,
+      500 * GST_USECOND, GST_MSECOND, GST_CLOCK_TIME_NONE
+    };
+
+    trace->frame_id_sei_time_count++;
+    trace->frame_id_sei_time_sum_ns += elapsed_ns;
+    if (!GST_CLOCK_TIME_IS_VALID(trace->frame_id_sei_time_min_ns) ||
+        elapsed_ns < trace->frame_id_sei_time_min_ns)
+      trace->frame_id_sei_time_min_ns = elapsed_ns;
+    if (elapsed_ns > trace->frame_id_sei_time_max_ns)
+      trace->frame_id_sei_time_max_ns = elapsed_ns;
+
+    for (guint i = 0; i < G_N_ELEMENTS(upper_ns); i++) {
+      if (!GST_CLOCK_TIME_IS_VALID(upper_ns[i]) || elapsed_ns <= upper_ns[i]) {
+        trace->frame_id_sei_time_buckets[i]++;
+        break;
+      }
+    }
+  }
+  g_mutex_unlock(&trace->lock);
+}
+
+static GstPadProbeReturn rtsp_sync_buffer_probe(GstPad *pad,
+                                                GstPadProbeInfo *probe_info,
+                                                gpointer user_data) {
+  RtspSyncProbeCtx *ctx = (RtspSyncProbeCtx *)user_data;
+  GstBuffer *buffer = GST_PAD_PROBE_INFO_BUFFER(probe_info);
+  if (!ctx || !ctx->generation ||
+      !rtsp_sync_generation_is_active(ctx->generation))
+    return GST_PAD_PROBE_REMOVE;
+  RtspSyncTrace *trace = rtsp_generation_trace(ctx->generation);
+  if (!trace || !buffer)
+    return GST_PAD_PROBE_OK;
+  GstClockTime pts = GST_BUFFER_PTS(buffer);
+  GstReferenceTimestampMeta *meta = gst_buffer_get_reference_timestamp_meta(
+      buffer, trace->reference);
+
+  g_mutex_lock(&trace->lock);
+  if (!trace->active) {
+    g_mutex_unlock(&trace->lock);
+    return GST_PAD_PROBE_OK;
+  }
+
+  RtspSyncBufferStage *stage =
+      ctx->kind == RTSP_SYNC_STAGE_APPSRC ? &trace->appsrc_stage
+                                         : &trace->pay_stage;
+  const gchar *stage_name =
+      ctx->kind == RTSP_SYNC_STAGE_APPSRC ? "appsrc_out" : "pay_in";
+
+  if (stage->complete) {
+    g_mutex_unlock(&trace->lock);
+    return GST_PAD_PROBE_REMOVE;
+  }
+  if (!GST_CLOCK_TIME_IS_VALID(pts)) {
+    stage->invalid_pts++;
+    g_mutex_unlock(&trace->lock);
+    return GST_PAD_PROBE_OK;
+  }
+
+  if (!stage->started) {
+    stage->started = TRUE;
+    stage->first_pts = pts;
+  } else if (pts >= stage->first_pts &&
+             pts - stage->first_pts >=
+                 (GstClockTime)trace->duration_sec * GST_SECOND) {
+    GstClockTime span = stage->last_pts - stage->first_pts;
+    guint64 delta_count = stage->frames > 0 ? stage->frames - 1 : 0;
+    guint64 delta_avg =
+        delta_count > 0 ? stage->delta_sum / delta_count : 0;
+    stage->complete = TRUE;
+    __LOG(LOG_NOTICE,
+          "[RTSP_SYNC][%s:%d] ch=%u generation=%" G_GUINT64_FORMAT
+          " stage=%s summary"
+          " duration_pts_ns=%" G_GUINT64_FORMAT " frames=%"
+          G_GUINT64_FORMAT " invalid_pts=%" G_GUINT64_FORMAT
+          " pts_backwards=%" G_GUINT64_FORMAT " first_pts_ns=%"
+          G_GUINT64_FORMAT " last_pts_ns=%" G_GUINT64_FORMAT
+          " pts_hash=%016" G_GINT64_MODIFIER
+          "x normalized_pts_hash=%016" G_GINT64_MODIFIER
+          "x delta_min_ns=%" G_GUINT64_FORMAT " delta_max_ns=%"
+          G_GUINT64_FORMAT " delta_avg_ns=%" G_GUINT64_FORMAT
+          " missing_origin_meta=%" G_GUINT64_FORMAT
+          " first_origin_pts_ns=%" G_GUINT64_FORMAT
+          " last_origin_pts_ns=%" G_GUINT64_FORMAT
+          " origin_pts_hash=%016" G_GINT64_MODIFIER "x",
+          _FILE_, __LINE__, trace->ch, trace->generation, stage_name, span,
+          stage->frames,
+          stage->invalid_pts, stage->pts_backwards, stage->first_pts,
+          stage->last_pts, stage->pts_hash, stage->normalized_pts_hash,
+          stage->delta_min == GST_CLOCK_TIME_NONE ? 0 : stage->delta_min,
+          stage->delta_max, delta_avg, stage->missing_origin_meta,
+          stage->first_origin_pts, stage->last_origin_pts,
+          stage->origin_pts_hash);
+    g_mutex_unlock(&trace->lock);
+    return GST_PAD_PROBE_REMOVE;
+  }
+
+  if (stage->frames > 0) {
+    if (pts < stage->previous_pts) {
+      stage->pts_backwards++;
+    } else {
+      GstClockTime delta = pts - stage->previous_pts;
+      if (stage->delta_min == GST_CLOCK_TIME_NONE ||
+          delta < stage->delta_min)
+        stage->delta_min = delta;
+      if (delta > stage->delta_max)
+        stage->delta_max = delta;
+      stage->delta_sum += delta;
+    }
+  }
+
+  stage->frames++;
+  stage->previous_pts = pts;
+  stage->last_pts = pts;
+  stage->pts_hash = rtsp_sync_hash_u64(stage->pts_hash, pts);
+  stage->normalized_pts_hash =
+      rtsp_sync_hash_u64(stage->normalized_pts_hash, pts - stage->first_pts);
+
+  if (!meta) {
+    stage->missing_origin_meta++;
+  } else {
+    if (stage->frames == 1)
+      stage->first_origin_pts = meta->timestamp;
+    stage->last_origin_pts = meta->timestamp;
+    stage->origin_pts_hash =
+        rtsp_sync_hash_u64(stage->origin_pts_hash, meta->timestamp);
+  }
+
+  g_mutex_unlock(&trace->lock);
+  return GST_PAD_PROBE_OK;
+}
+
+static void rtsp_sync_process_rtp_buffer(RtspSyncTrace *trace,
+                                         GstBuffer *buffer) {
+  guint8 header[12];
+  if (!trace || !buffer ||
+      gst_buffer_extract(buffer, 0, header, sizeof(header)) != sizeof(header) ||
+      (header[0] >> 6) != 2)
+    return;
+
+  gboolean marker = (header[1] & 0x80) != 0;
+  guint32 timestamp = ((guint32)header[4] << 24) |
+                      ((guint32)header[5] << 16) |
+                      ((guint32)header[6] << 8) | (guint32)header[7];
+
+  g_mutex_lock(&trace->lock);
+  if (!trace->active || trace->rtp_complete) {
+    g_mutex_unlock(&trace->lock);
+    return;
+  }
+
+  guint64 unwrapped;
+  gboolean new_timestamp = !trace->rtp_started ||
+                           timestamp != trace->rtp_previous_raw;
+  if (!trace->rtp_started) {
+    trace->rtp_started = TRUE;
+    trace->rtp_first_raw = timestamp;
+    trace->rtp_first_unwrapped = timestamp;
+    trace->rtp_previous_unwrapped = timestamp;
+    trace->rtp_delta_min = G_MAXUINT64;
+  }
+
+  if (timestamp < trace->rtp_previous_raw &&
+      trace->rtp_previous_raw - timestamp > G_MAXUINT32 / 2)
+    trace->rtp_wrap_base += G_GUINT64_CONSTANT(1) << 32;
+  unwrapped = trace->rtp_wrap_base + timestamp;
+
+  if (new_timestamp && trace->rtp_timestamps > 0 &&
+      unwrapped < trace->rtp_previous_unwrapped) {
+    trace->rtp_timestamp_backwards++;
+  }
+
+  if (new_timestamp &&
+      unwrapped >= trace->rtp_first_unwrapped &&
+      unwrapped - trace->rtp_first_unwrapped >=
+          (guint64)trace->duration_sec * RTSP_VIDEO_CLOCK_RATE) {
+    guint64 delta_count =
+        trace->rtp_timestamps > 0 ? trace->rtp_timestamps - 1 : 0;
+    guint64 delta_avg =
+        delta_count > 0 ? trace->rtp_delta_sum / delta_count : 0;
+    trace->rtp_complete = TRUE;
+    __LOG(LOG_NOTICE,
+          "[RTSP_SYNC][%s:%d] ch=%u generation=%" G_GUINT64_FORMAT
+          " stage=rtp_out summary packets=%"
+          G_GUINT64_FORMAT " marker_frames=%" G_GUINT64_FORMAT
+          " distinct_timestamps=%" G_GUINT64_FORMAT
+          " timestamp_backwards=%" G_GUINT64_FORMAT
+          " first_timestamp=%u last_timestamp=%u span_ticks=%"
+          G_GUINT64_FORMAT " normalized_timestamp_hash=%016"
+          G_GINT64_MODIFIER "x delta_min_ticks=%" G_GUINT64_FORMAT
+          " delta_max_ticks=%" G_GUINT64_FORMAT " delta_avg_ticks=%"
+          G_GUINT64_FORMAT,
+          _FILE_, __LINE__, trace->ch, trace->generation, trace->rtp_packets,
+          trace->rtp_markers, trace->rtp_timestamps,
+          trace->rtp_timestamp_backwards, trace->rtp_first_raw,
+          trace->rtp_last_raw,
+          trace->rtp_last_unwrapped - trace->rtp_first_unwrapped,
+          trace->rtp_timestamp_hash,
+          trace->rtp_delta_min == G_MAXUINT64 ? 0 : trace->rtp_delta_min,
+          trace->rtp_delta_max, delta_avg);
+    g_mutex_unlock(&trace->lock);
+    return;
+  }
+
+  trace->rtp_packets++;
+  if (marker)
+    trace->rtp_markers++;
+  if (new_timestamp) {
+    if (trace->rtp_timestamps > 0 &&
+        unwrapped >= trace->rtp_previous_unwrapped) {
+      guint64 delta = unwrapped - trace->rtp_previous_unwrapped;
+      if (delta < trace->rtp_delta_min)
+        trace->rtp_delta_min = delta;
+      if (delta > trace->rtp_delta_max)
+        trace->rtp_delta_max = delta;
+      trace->rtp_delta_sum += delta;
+    }
+    trace->rtp_timestamps++;
+    trace->rtp_last_raw = timestamp;
+    trace->rtp_last_unwrapped = unwrapped;
+    trace->rtp_timestamp_hash = rtsp_sync_hash_u64(
+        trace->rtp_timestamp_hash, unwrapped - trace->rtp_first_unwrapped);
+    trace->rtp_previous_raw = timestamp;
+    trace->rtp_previous_unwrapped = unwrapped;
+  }
+
+  g_mutex_unlock(&trace->lock);
+}
+
+static GstPadProbeReturn rtsp_sync_rtp_probe(GstPad *pad,
+                                             GstPadProbeInfo *probe_info,
+                                             gpointer user_data) {
+  RtspSyncGeneration *generation = (RtspSyncGeneration *)user_data;
+  if (!rtsp_sync_generation_is_active(generation))
+    return GST_PAD_PROBE_REMOVE;
+  RtspSyncTrace *trace = rtsp_generation_trace(generation);
+  if (!trace)
+    return GST_PAD_PROBE_REMOVE;
+  if (GST_PAD_PROBE_INFO_TYPE(probe_info) & GST_PAD_PROBE_TYPE_BUFFER) {
+    GstBuffer *buffer = GST_PAD_PROBE_INFO_BUFFER(probe_info);
+    rtsp_sync_process_rtp_buffer(trace, buffer);
+    g_mutex_lock(&trace->lock);
+    gboolean complete = trace->rtp_complete;
+    g_mutex_unlock(&trace->lock);
+    return complete ? GST_PAD_PROBE_REMOVE : GST_PAD_PROBE_OK;
+  }
+
+  if (GST_PAD_PROBE_INFO_TYPE(probe_info) &
+      GST_PAD_PROBE_TYPE_BUFFER_LIST) {
+    GstBufferList *list = GST_PAD_PROBE_INFO_BUFFER_LIST(probe_info);
+    guint length = gst_buffer_list_length(list);
+    for (guint i = 0; i < length; i++)
+      rtsp_sync_process_rtp_buffer(trace, gst_buffer_list_get(list, i));
+  }
+
+  g_mutex_lock(&trace->lock);
+  gboolean complete = trace->rtp_complete;
+  g_mutex_unlock(&trace->lock);
+  return complete ? GST_PAD_PROBE_REMOVE : GST_PAD_PROBE_OK;
+}
+
+static void rtsp_sync_install_media_probes(RtspServerData *info,
+                                           GstElement *element,
+                                           GstElement *appsrc,
+                                           RtspSyncGeneration *generation) {
+  RtspMediaGenerationData *generation_data =
+      rtsp_media_generation_data(generation);
+  RtspSyncTrace *trace = rtsp_generation_trace(generation);
+  guint stall_after_sec = 0;
+  guint stall_duration_sec = 0;
+  gboolean stall_matches = rtsp_test_stall_config(
+      info->ch, &stall_after_sec, &stall_duration_sec);
+  if (!trace && !stall_matches)
+    return;
+
+  GstPad *pad = NULL;
+  if (trace) {
+    pad = gst_element_get_static_pad(appsrc, "src");
+    if (pad) {
+      RtspSyncProbeCtx *ctx = g_new0(RtspSyncProbeCtx, 1);
+      ctx->generation = rtsp_sync_generation_ref(generation);
+      ctx->kind = RTSP_SYNC_STAGE_APPSRC;
+      gulong id = gst_pad_add_probe(pad, GST_PAD_PROBE_TYPE_BUFFER,
+                                    rtsp_sync_buffer_probe, ctx,
+                                    rtsp_sync_probe_ctx_free);
+      if (id == 0) {
+        __LOG(LOG_ERR,
+              "[RTSP_SYNC][%s:%d] ch=%u appsrc probe install failed",
+              _FILE_, __LINE__, info->ch);
+        rtsp_sync_probe_ctx_free(ctx);
+      } else if (generation_data) {
+        generation_data->appsrc_pad =
+            (GstPad *)gst_object_ref(pad);
+        generation_data->appsrc_probe_id = id;
+      }
+      gst_object_unref(pad);
+    } else {
+      __LOG(LOG_ERR,
+            "[RTSP_SYNC][%s:%d] ch=%u appsrc src pad not found",
+            _FILE_, __LINE__, info->ch);
+    }
+  }
+
+  GstElement *pay =
+      gst_bin_get_by_name_recurse_up(GST_BIN(element), "pay0");
+  if (!pay) {
+    __LOG(LOG_ERR, "[RTSP_SYNC][%s:%d] ch=%u pay0 not found",
+          _FILE_, __LINE__, info->ch);
+    return;
+  }
+
+  if (trace) {
+    pad = gst_element_get_static_pad(pay, "sink");
+    if (pad) {
+      RtspSyncProbeCtx *ctx = g_new0(RtspSyncProbeCtx, 1);
+      ctx->generation = rtsp_sync_generation_ref(generation);
+      ctx->kind = RTSP_SYNC_STAGE_PAY;
+      gulong id = gst_pad_add_probe(pad, GST_PAD_PROBE_TYPE_BUFFER,
+                                    rtsp_sync_buffer_probe, ctx,
+                                    rtsp_sync_probe_ctx_free);
+      if (id == 0) {
+        __LOG(LOG_ERR,
+              "[RTSP_SYNC][%s:%d] ch=%u pay sink probe install failed",
+              _FILE_, __LINE__, info->ch);
+        rtsp_sync_probe_ctx_free(ctx);
+      } else if (generation_data) {
+        generation_data->pay_sink_pad =
+            (GstPad *)gst_object_ref(pad);
+        generation_data->pay_sink_probe_id = id;
+      }
+      gst_object_unref(pad);
+    } else {
+      __LOG(LOG_ERR,
+            "[RTSP_SYNC][%s:%d] ch=%u pay sink pad not found",
+            _FILE_, __LINE__, info->ch);
+    }
+  }
+
+  pad = gst_element_get_static_pad(pay, "src");
+  if (pad) {
+    if (stall_matches) {
+      RtspTestStallCtx *stall_ctx = g_new0(RtspTestStallCtx, 1);
+      stall_ctx->generation = rtsp_sync_generation_ref(generation);
+      stall_ctx->ch = info->ch;
+      stall_ctx->after_sec = stall_after_sec;
+      stall_ctx->duration_sec = stall_duration_sec;
+      gulong id = gst_pad_add_probe(
+          pad, (GstPadProbeType)(GST_PAD_PROBE_TYPE_BUFFER |
+                                 GST_PAD_PROBE_TYPE_BUFFER_LIST),
+          rtsp_test_stall_probe, stall_ctx, rtsp_test_stall_ctx_free);
+      if (id == 0) {
+        __LOG(LOG_ERR,
+              "[RTSP_SYNC][%s:%d] ch=%u stall probe install failed",
+              _FILE_, __LINE__, info->ch);
+        rtsp_test_stall_ctx_free(stall_ctx);
+      } else if (generation_data) {
+        generation_data->stall_probe_id = id;
+      }
+    }
+    if (trace) {
+      gulong id = gst_pad_add_probe(
+          pad, (GstPadProbeType)(GST_PAD_PROBE_TYPE_BUFFER |
+                                 GST_PAD_PROBE_TYPE_BUFFER_LIST),
+          rtsp_sync_rtp_probe, rtsp_sync_generation_ref(generation),
+          (GDestroyNotify)rtsp_sync_generation_unref);
+      if (id == 0) {
+        __LOG(LOG_ERR,
+              "[RTSP_SYNC][%s:%d] ch=%u RTP probe install failed",
+              _FILE_, __LINE__, info->ch);
+        rtsp_sync_generation_unref(generation);
+      } else if (generation_data) {
+        generation_data->rtp_probe_id = id;
+      }
+    }
+    if (generation_data &&
+        (generation_data->stall_probe_id || generation_data->rtp_probe_id))
+      generation_data->pay_src_pad = (GstPad *)gst_object_ref(pad);
+    gst_object_unref(pad);
+  } else {
+    __LOG(LOG_ERR,
+          "[RTSP_SYNC][%s:%d] ch=%u pay src pad not found"
+          " trace=%d stall=%d",
+          _FILE_, __LINE__, info->ch, trace != NULL, stall_matches);
+  }
+  gst_object_unref(pay);
+}
+
 static gint clamp_int(gint value, gint min_value, gint max_value) {
   if (value < min_value)
     return min_value;
@@ -51,6 +1069,7 @@ static gint clamp_int(gint value, gint min_value, gint max_value) {
 }
 
 typedef struct _RtspPayProbeCtx {
+  RtspSyncGeneration *generation;
   RtspServerData *info;
   GstElement *media_element;
   gint64 last_log_us;
@@ -61,6 +1080,8 @@ static void rtsp_pay_probe_ctx_free(gpointer data) {
   if (!ctx)
     return;
 
+  if (ctx->generation)
+    rtsp_sync_generation_unref(ctx->generation);
   if (ctx->media_element)
     gst_object_unref(ctx->media_element);
 
@@ -71,8 +1092,9 @@ static GstPadProbeReturn rtsp_pay_src_probe(GstPad *pad,
                                             GstPadProbeInfo *probe_info,
                                             gpointer user_data) {
   RtspPayProbeCtx *ctx = (RtspPayProbeCtx *)user_data;
-  if (!ctx || !ctx->info || !ctx->media_element)
-    return GST_PAD_PROBE_OK;
+  if (!ctx || !ctx->info || !ctx->media_element ||
+      !rtsp_sync_generation_is_active(ctx->generation))
+    return GST_PAD_PROBE_REMOVE;
 
   GstBuffer *buffer = GST_PAD_PROBE_INFO_BUFFER(probe_info);
   if (!buffer)
@@ -106,10 +1128,73 @@ static GstPadProbeReturn rtsp_pay_src_probe(GstPad *pad,
   return GST_PAD_PROBE_OK;
 }
 
-static void enough_data(GstElement *source, gpointer user_data) {
-  RtspServerData *info = (RtspServerData *)user_data;
+static void rtsp_install_debug_pay_probe(
+    RtspServerData *info, GstElement *element,
+    RtspSyncGeneration *generation,
+    RtspMediaGenerationData *generation_data) {
+  if (!cmdArg.dbg_rtsp_ts || !info || !element || !generation ||
+      !generation_data)
+    return;
 
-  g_atomic_int_set(&info->appsrc_full, 1);
+  GstElement *pay =
+      gst_bin_get_by_name_recurse_up(GST_BIN(element), "pay0");
+  if (!pay) {
+    __LOG(LOG_INFO, "[RTSP][%s:%d] ch%d pay0 not found (no rtsp-out-latency)",
+          _FILE_, __LINE__, info->ch);
+    return;
+  }
+
+  GstPad *pay_src_pad = gst_element_get_static_pad(pay, "src");
+  gst_object_unref(pay);
+  if (!pay_src_pad) {
+    __LOG(LOG_ERR, "[RTSP_SYNC][%s:%d] ch=%u debug pay src pad missing",
+          _FILE_, __LINE__, info->ch);
+    return;
+  }
+
+  RtspPayProbeCtx *ctx =
+      (RtspPayProbeCtx *)g_malloc0(sizeof(RtspPayProbeCtx));
+  ctx->generation = rtsp_sync_generation_ref(generation);
+  ctx->info = info;
+  ctx->media_element = (GstElement *)gst_object_ref(element);
+  gulong id = gst_pad_add_probe(
+      pay_src_pad, GST_PAD_PROBE_TYPE_BUFFER,
+      (GstPadProbeCallback)rtsp_pay_src_probe, ctx,
+      rtsp_pay_probe_ctx_free);
+  if (id == 0) {
+    __LOG(LOG_ERR,
+          "[RTSP_SYNC][%s:%d] ch=%u debug pay probe install failed",
+          _FILE_, __LINE__, info->ch);
+    rtsp_pay_probe_ctx_free(ctx);
+    gst_object_unref(pay_src_pad);
+    return;
+  }
+
+  g_mutex_lock(&generation_data->lock);
+  generation_data->debug_pay_src_pad = pay_src_pad;
+  generation_data->debug_pay_probe_id = id;
+  g_mutex_unlock(&generation_data->lock);
+}
+
+static void enough_data(GstElement *source, gpointer user_data) {
+  (void)source;
+  RtspSyncGeneration *generation = (RtspSyncGeneration *)user_data;
+  if (!rtsp_sync_generation_is_active(generation))
+    return;
+  RtspMediaGenerationData *data = rtsp_media_generation_data(generation);
+  RtspServerData *info = data ? data->info : NULL;
+  if (!info)
+    return;
+
+  g_mutex_lock(&info->lock);
+  gboolean current = rtsp_sync_generation_is_active(generation) &&
+                     info->sync_generation == generation;
+  if (current)
+    g_atomic_int_set(&info->appsrc_full, 1);
+  g_mutex_unlock(&info->lock);
+  if (!current)
+    return;
+
   /* push 스레드에서만 emit되므로 스로틀 타임스탬프는 락 불필요 */
   gint64 now_us = g_get_monotonic_time();
   if (info->last_enough_log_us == 0 ||
@@ -147,16 +1232,77 @@ static void request_keyframe(RtspServerData *info) {
 }
 
 static void need_data(GstElement *source, guint length, gpointer user_data) {
-  RtspServerData *info = (RtspServerData *)user_data;
-  gboolean want_key;
+  (void)source;
+  (void)length;
+  RtspSyncGeneration *generation = (RtspSyncGeneration *)user_data;
+  if (!rtsp_sync_generation_is_active(generation))
+    return;
+  RtspMediaGenerationData *data = rtsp_media_generation_data(generation);
+  RtspServerData *info = data ? data->info : NULL;
+  if (!info)
+    return;
+  gboolean want_key = FALSE;
 
-  g_atomic_int_set(&info->appsrc_full, 0);
   /* 드롭 구간 종료 — 키프레임 대기 중이면 즉시 IDR을 요청해 재개 지연 제거 */
   g_mutex_lock(&info->lock);
-  want_key = info->wait_keyframe;
+  gboolean current = rtsp_sync_generation_is_active(generation) &&
+                     info->sync_generation == generation;
+  if (current) {
+    g_atomic_int_set(&info->appsrc_full, 0);
+    want_key = info->wait_keyframe;
+  }
   g_mutex_unlock(&info->lock);
+  if (!current)
+    return;
   if (want_key)
     request_keyframe(info);
+}
+
+static void rtsp_connect_appsrc_flow_signals(
+    RtspServerData *info, GstElement *appsrc,
+    RtspSyncGeneration *generation,
+    RtspMediaGenerationData *generation_data) {
+  if (!info || !appsrc || !generation || !generation_data)
+    return;
+
+  gulong enough_id = g_signal_connect_data(
+      appsrc, "enough-data", (GCallback)enough_data,
+      rtsp_sync_generation_ref(generation),
+      rtsp_generation_unref_closure, (GConnectFlags)0);
+  gulong need_id = g_signal_connect_data(
+      appsrc, "need-data", (GCallback)need_data,
+      rtsp_sync_generation_ref(generation),
+      rtsp_generation_unref_closure, (GConnectFlags)0);
+  if (enough_id == 0 || need_id == 0) {
+    __LOG(LOG_ERR,
+          "[RTSP_SYNC][%s:%d] ch=%u generation=%" G_GUINT64_FORMAT
+          " appsrc flow signal install failed enough=%lu need=%lu",
+          _FILE_, __LINE__, info->ch,
+          rtsp_sync_generation_id(generation), enough_id, need_id);
+  }
+
+  g_mutex_lock(&generation_data->lock);
+  generation_data->enough_handler_id = enough_id;
+  generation_data->need_handler_id = need_id;
+  if (enough_id != 0 || need_id != 0)
+    generation_data->appsrc = (GstElement *)gst_object_ref(appsrc);
+  g_mutex_unlock(&generation_data->lock);
+}
+
+static void rtsp_factory_queue_overrun(GstElement *queue,
+                                       gpointer user_data) {
+  (void)queue;
+  RtspSyncGeneration *generation = (RtspSyncGeneration *)user_data;
+  if (!rtsp_sync_generation_is_active(generation))
+    return;
+  RtspSyncTrace *trace = rtsp_generation_trace(generation);
+  if (!trace)
+    return;
+
+  g_mutex_lock(&trace->lock);
+  if (trace->active && !trace->bridge_complete)
+    trace->factory_queue_overrun++;
+  g_mutex_unlock(&trace->lock);
 }
 
 static gboolean cleanRtspSession(GstRTSPServer *server) {
@@ -339,6 +1485,13 @@ static void media_unprepared_cb(GstRTSPMedia *media, gpointer user_data) {
   GstElement *media_bin;
   GstElement *media_appsrc = NULL;
   GstElement *appsrc = NULL;
+  RtspSyncGeneration *current_generation = NULL;
+  RtspSyncGeneration *generation =
+      (RtspSyncGeneration *)g_object_steal_data(
+          G_OBJECT(media), "gstapp-rtsp-sync-generation");
+
+  if (generation)
+    rtsp_sync_generation_deactivate(generation);
 
   __LOG(LOG_NOTICE, "[RTSP][%s:%d] ch%d media unprepared — clearing appsrc",
         _FILE_, __LINE__, info->ch);
@@ -350,20 +1503,41 @@ static void media_unprepared_cb(GstRTSPMedia *media, gpointer user_data) {
         gst_bin_get_by_name_recurse_up(GST_BIN(media_bin), info->appSrcName);
     gst_object_unref(media_bin);
   }
-  /* 전역 추적 배열에서 제거 — ref 해제보다 먼저 수행해, lock 하에 배열
-   * 항목을 본 쪽(SendEos)이 아직 살아있는 객체를 ref할 수 있게 한다 */
-  g_mutex_lock(&g_rtsp_appsrc_lock);
-  if (info->ch < MAX_RTSP_APPSRC && g_rtsp_appsrc[info->ch] == media_appsrc)
-    g_rtsp_appsrc[info->ch] = NULL;
-  g_mutex_unlock(&g_rtsp_appsrc_lock);
   /* 스트리밍 스레드가 스냅샷 ref를 쥐고 있을 수 있으므로 lock 안에서는
-   * 포인터만 분리하고 unref는 lock 밖에서 수행한다 */
+   * 포인터만 분리하고 unref는 lock 밖에서 수행한다. media element 조회가
+   * 이미 실패한 late-unprepare에서도 generation 일치가 소유권의 기준이다. */
   g_mutex_lock(&info->lock);
-  if (info->appsrc == media_appsrc) {
+  if (generation && info->sync_generation == generation) {
+    appsrc = info->appsrc;
+    info->appsrc = NULL;
+    current_generation =
+        (RtspSyncGeneration *)info->sync_generation;
+    info->sync_generation = NULL;
+  } else if (media_appsrc && info->appsrc == media_appsrc) {
     appsrc = info->appsrc;
     info->appsrc = NULL;
   }
   g_mutex_unlock(&info->lock);
+
+  /* 전역 추적 배열에서 같은 media의 appsrc만 제거 — ref 해제보다 먼저
+   * 수행해 SendEos의 lock 하 ref 스냅샷과 안전하게 직렬화한다. */
+  GstElement *detached_appsrc = appsrc ? appsrc : media_appsrc;
+  g_mutex_lock(&g_rtsp_appsrc_lock);
+  if (info->ch < MAX_RTSP_APPSRC &&
+      g_rtsp_appsrc[info->ch] == detached_appsrc)
+    g_rtsp_appsrc[info->ch] = NULL;
+  g_mutex_unlock(&g_rtsp_appsrc_lock);
+
+  if (generation) {
+    __LOG(LOG_NOTICE,
+          "[RTSP_SYNC][%s:%d] ch=%u generation=%" G_GUINT64_FORMAT
+          " deactivated",
+          _FILE_, __LINE__, info->ch, rtsp_sync_generation_id(generation));
+    rtsp_media_generation_release_hooks(generation);
+    rtsp_sync_generation_unref(generation);
+  }
+  if (current_generation)
+    rtsp_sync_generation_unref(current_generation);
   if (appsrc)
     gst_object_unref(appsrc);
   if (media_appsrc)
@@ -409,8 +1583,13 @@ static void media_configure(GstRTSPMediaFactory *factory, GstRTSPMedia *media,
   RtspServerData *info = (RtspServerData *)user_data;
   GstElement *element;
   GstElement *appsrc = NULL;
+  GstElement *out_queue = NULL;
   GstElement *old_appsrc = NULL;
   GstCaps *fallback_caps = NULL;
+  RtspSyncGeneration *generation = NULL;
+  RtspSyncGeneration *old_generation = NULL;
+  RtspMediaGenerationData *generation_data = NULL;
+  guint64 generation_id = 0;
   // GstElement *queue;
   // gchar *queue_name;
   // static GMutex mutex;
@@ -419,6 +1598,11 @@ static void media_configure(GstRTSPMediaFactory *factory, GstRTSPMedia *media,
   __LOG(LOG_NOTICE, "[GST][%s:%d] media connect ch:%d", _FILE_, __LINE__,
         info->ch);
   element = gst_rtsp_media_get_element(media);
+  if (!element) {
+    __LOG(LOG_ERR, "[RTSP_SYNC][%s:%d] ch=%u media element is null",
+          _FILE_, __LINE__, info->ch);
+    return;
+  }
   // name = GST_ELEMENT_NAME(GST_APP_SRC(element));
   // name = gst_object_get_name(GST_OBJECT(element));
   __LOG(LOG_NOTICE, "[GST][%s:%d] appsrc name : %s", _FILE_, __LINE__,
@@ -430,35 +1614,108 @@ static void media_configure(GstRTSPMediaFactory *factory, GstRTSPMedia *media,
      * 전역 배열의 같은 항목도 ref 해제 전에 정리(댕글링 방지) */
     g_mutex_lock(&info->lock);
     old_appsrc = info->appsrc;
+    old_generation = (RtspSyncGeneration *)info->sync_generation;
     info->appsrc = NULL;
+    info->sync_generation = NULL;
     g_mutex_unlock(&info->lock);
     g_mutex_lock(&g_rtsp_appsrc_lock);
     if (info->ch < MAX_RTSP_APPSRC && g_rtsp_appsrc[info->ch] == old_appsrc)
       g_rtsp_appsrc[info->ch] = NULL;
     g_mutex_unlock(&g_rtsp_appsrc_lock);
+    if (old_generation) {
+      rtsp_sync_generation_deactivate(old_generation);
+      rtsp_media_generation_release_hooks(old_generation);
+      rtsp_sync_generation_unref(old_generation);
+      old_generation = NULL;
+    }
     if (old_appsrc)
       gst_object_unref(old_appsrc);
     goto media_configure_out;
   }
-  {
-    const gboolean use_h265 = g_strcmp0(cmdArg.enc, ENC_H265) == 0;
-    fallback_caps = gst_caps_from_string(
-        use_h265 ? "video/x-h265,stream-format=byte-stream,alignment=au"
-                 : "video/x-h264,stream-format=byte-stream,alignment=au");
+  fallback_caps = rtsp_media_fallback_caps(info->ch, cmdArg.enc);
+  if (!fallback_caps) {
+    __LOG(LOG_ERR,
+          "[RTSP_SYNC][%s:%d] ch=%u unsupported fallback caps encoder=%s",
+          _FILE_, __LINE__, info->ch, cmdArg.enc ? cmdArg.enc : "(null)");
+    gst_object_unref(appsrc);
+    appsrc = NULL;
+    goto media_configure_out;
   }
+  g_mutex_lock(&info->lock);
+  generation_id = ++info->sync_generation_serial;
+  g_mutex_unlock(&info->lock);
+  generation = rtsp_media_generation_new(info, info->ch, generation_id);
+  if (!generation) {
+    __LOG(LOG_ERR,
+          "[RTSP_SYNC][%s:%d] ch=%u media generation allocation failed",
+          _FILE_, __LINE__, info->ch);
+    gst_object_unref(appsrc);
+    appsrc = NULL;
+    goto media_configure_out;
+  }
+  /* appsrc를 streaming thread에 게시하기 전에 probe를 먼저 설치해 첫 push부터
+   * 빠짐없이 측정한다. trace와 stall이 모두 꺼져 있으면 즉시 반환한다. */
+  rtsp_sync_install_media_probes(info, element, appsrc, generation);
+  generation_data = rtsp_media_generation_data(generation);
+  if (generation_data && generation_data->trace) {
+    out_queue =
+        gst_bin_get_by_name_recurse_up(GST_BIN(element), "rtsp_out_queue");
+    if (out_queue) {
+      gulong handler_id = g_signal_connect_data(
+          out_queue, "overrun", (GCallback)rtsp_factory_queue_overrun,
+          rtsp_sync_generation_ref(generation),
+          rtsp_generation_unref_closure, (GConnectFlags)0);
+      if (handler_id == 0) {
+        __LOG(LOG_ERR,
+              "[RTSP_SYNC][%s:%d] ch=%u overrun callback install failed",
+              _FILE_, __LINE__, info->ch);
+        gst_object_unref(out_queue);
+      } else {
+        g_mutex_lock(&generation_data->lock);
+        generation_data->out_queue = out_queue;
+        generation_data->overrun_handler_id = handler_id;
+        g_mutex_unlock(&generation_data->lock);
+        __LOG(LOG_NOTICE,
+              "[RTSP_SYNC][%s:%d] ch=%u generation=%" G_GUINT64_FORMAT
+              " rtsp_out_queue overrun callback connected",
+              _FILE_, __LINE__, info->ch, generation_id);
+      }
+    } else {
+      __LOG(LOG_ERR, "[RTSP_SYNC][%s:%d] ch=%u rtsp_out_queue not found",
+            _FILE_, __LINE__, info->ch);
+    }
+  }
+  rtsp_install_debug_pay_probe(info, element, generation, generation_data);
+  rtsp_connect_appsrc_flow_signals(info, appsrc, generation, generation_data);
+  /* All generation-owned hooks are retained before the media can expose the
+   * owner callback or the producer can observe an active generation. */
+  g_object_set_data_full(G_OBJECT(media), "gstapp-rtsp-sync-generation",
+                         generation, rtsp_media_generation_owner_free);
   /* appsrc 게시와 caps 적용을 한 임계구역에서 수행 — 스트리밍 스레드의
    * caps 갱신(g_object_set)과 전순서를 보장해 stale caps 덮어쓰기를 막는다 */
   g_mutex_lock(&info->lock);
   old_appsrc = info->appsrc;
+  old_generation = (RtspSyncGeneration *)info->sync_generation;
   info->appsrc = appsrc;
-  /* 새 appsrc는 빈 큐로 시작하므로 플로우 컨트롤 상태 리셋 */
+  info->sync_generation = rtsp_sync_generation_ref(generation);
+  /* Publication precedes activation: callbacks cannot observe a live
+   * generation before both appsrc and the matching generation are visible. */
+  rtsp_sync_generation_activate(generation);
+  /* 새 media의 준비/전송 경계에서 첫 prefix SEI만 소비되고 같은 AU의
+   * VCL이 먼저 노출되지 않도록, 요청한 IDR까지 delta AU를 게시하지
+   * 않는다. appsrc가 빈 큐라는 사실만으로 키프레임 대기를 풀면 안 된다. */
   g_atomic_int_set(&info->appsrc_full, 0);
-  info->wait_keyframe = FALSE;
+  info->wait_keyframe = info->ch < MAX_CHANNEL;
   if (info->caps)
     g_object_set(appsrc, "caps", info->caps, NULL);
   else if (fallback_caps)
     g_object_set(appsrc, "caps", fallback_caps, NULL);
   g_mutex_unlock(&info->lock);
+  if (old_generation) {
+    rtsp_sync_generation_deactivate(old_generation);
+    rtsp_media_generation_release_hooks(old_generation);
+    rtsp_sync_generation_unref(old_generation);
+  }
   /* 전역 추적 배열 갱신을 old ref 해제보다 먼저 수행 — 배열이 해제된
    * 객체를 가리키는 창을 없앤다 (SendEos의 lock 하 ref 안전 보장) */
   g_mutex_lock(&g_rtsp_appsrc_lock);
@@ -472,6 +1729,7 @@ static void media_configure(GstRTSPMediaFactory *factory, GstRTSPMedia *media,
     gst_object_unref(old_appsrc);
   if (fallback_caps)
     gst_caps_unref(fallback_caps);
+  fallback_caps = NULL;
   /* 새 media 접속 — GOP 위상과 무관하게 즉시 IDR을 받아 prepare(SDP용
    * SPS/PPS/IDR 대기)와 첫 화면 표시까지의 지연을 단축한다 */
   request_keyframe(info);
@@ -483,45 +1741,20 @@ static void media_configure(GstRTSPMediaFactory *factory, GstRTSPMedia *media,
   // g_object_set (G_OBJECT (queue),
   // g_free(queue_name);
 
-  if (cmdArg.dbg_rtsp_ts) {
-    GstElement *pay = gst_bin_get_by_name_recurse_up(GST_BIN(element), "pay0");
-    if (pay) {
-      if (g_object_get_data(G_OBJECT(pay), "rtsp-pay-probe-added")) {
-        gst_object_unref(pay);
-        goto media_configure_out;
-      }
-
-      GstPad *pay_src_pad = gst_element_get_static_pad(pay, "src");
-      if (pay_src_pad) {
-        RtspPayProbeCtx *ctx =
-            (RtspPayProbeCtx *)g_malloc0(sizeof(RtspPayProbeCtx));
-        ctx->info = info;
-        ctx->media_element = (GstElement *)gst_object_ref(element);
-        ctx->last_log_us = 0;
-        gst_pad_add_probe(pay_src_pad, GST_PAD_PROBE_TYPE_BUFFER,
-                          (GstPadProbeCallback)rtsp_pay_src_probe, ctx,
-                          rtsp_pay_probe_ctx_free);
-        g_object_set_data(G_OBJECT(pay), "rtsp-pay-probe-added",
-                          GINT_TO_POINTER(1));
-        gst_object_unref(pay_src_pad);
-      }
-      gst_object_unref(pay);
-    } else {
-      __LOG(LOG_INFO, "[RTSP][%s:%d] ch%d pay0 not found (no rtsp-out-latency)",
-            _FILE_, __LINE__, info->ch);
-    }
-  }
-
 media_configure_out:
+  if (fallback_caps)
+    gst_caps_unref(fallback_caps);
   gst_object_unref(element);
 
-  g_signal_connect(media, "prepared", (GCallback)media_prepared_cb, factory);
-  g_signal_connect(media, "unprepared", (GCallback)media_unprepared_cb, info);
-  if (appsrc) {
-    g_signal_connect(appsrc, "enough-data", (GCallback)enough_data, info);
-    g_signal_connect(appsrc, "need-data", (GCallback)need_data, info);
-  }
-
+  if (g_signal_connect(media, "prepared", (GCallback)media_prepared_cb,
+                       factory) == 0)
+    __LOG(LOG_ERR, "[RTSP_SYNC][%s:%d] ch=%u prepared signal install failed",
+          _FILE_, __LINE__, info->ch);
+  if (g_signal_connect(media, "unprepared", (GCallback)media_unprepared_cb,
+                       info) == 0)
+    __LOG(LOG_ERR,
+          "[RTSP_SYNC][%s:%d] ch=%u unprepared signal install failed",
+          _FILE_, __LINE__, info->ch);
   // g_object_set(element, "rtcp-min-interval", 10.0, NULL);
   // g_object_set(element, "rtcp-max-interval", 60.0, NULL);
 #if 0
@@ -564,7 +1797,7 @@ static GstFlowReturn new_sample_handler(GstElement *sink, gpointer userData) {
   GstSample *sample;
   GstBuffer *buffer;
   RtspServerData *info = (RtspServerData *)userData;
-  GstCaps *sample_caps;
+  GstCaps *sample_caps = NULL;
   gboolean caps_changed = FALSE;
 
   //__LOG(LOG_NOTICE, "[GST][%s:%d] %s", _FILE_, __LINE__, __FUNCTION__);
@@ -585,6 +1818,12 @@ static GstFlowReturn new_sample_handler(GstElement *sink, gpointer userData) {
     return GST_FLOW_ERROR;
   }
   buffer = gst_sample_get_buffer(sample);
+  if (!buffer) {
+    __LOG(LOG_CRIT, "[RTSP][%s:%d] ch%d buffer cannot get from sample",
+          _FILE_, __LINE__, info->ch);
+    gst_sample_unref(sample);
+    return GST_FLOW_ERROR;
+  }
   // gst_sample_unref(sample);
 
   g_mutex_lock(&info->lock);
@@ -606,15 +1845,20 @@ static GstFlowReturn new_sample_handler(GstElement *sink, gpointer userData) {
    * 무제한으로 쌓여 재생 시작이 수 초 지연되는 것을 방지한다 */
   gboolean drop = FALSE;
   gboolean want_key = FALSE;
+  gboolean drop_full = FALSE;
+  gboolean drop_key_wait = FALSE;
+  gboolean has_appsrc = info->appsrc != NULL;
   if (g_atomic_int_get(&info->appsrc_full)) {
     info->wait_keyframe = TRUE;
     drop = TRUE;
+    drop_full = TRUE;
   } else if (info->wait_keyframe) {
     if (buffer && !GST_BUFFER_FLAG_IS_SET(buffer, GST_BUFFER_FLAG_DELTA_UNIT))
       info->wait_keyframe = FALSE;
     else {
       drop = TRUE;
       want_key = TRUE;
+      drop_key_wait = TRUE;
     }
   }
   /* lock 밖 push 동안 쓸 스냅샷 — appsrc는 media_unprepared_cb가 언제든
@@ -622,7 +1866,18 @@ static GstFlowReturn new_sample_handler(GstElement *sink, gpointer userData) {
   GstElement *appsrc = (!drop && info->appsrc)
                            ? (GstElement *)gst_object_ref(info->appsrc)
                            : NULL;
+  RtspSyncGeneration *generation = info->sync_generation
+      ? rtsp_sync_generation_ref(
+            (RtspSyncGeneration *)info->sync_generation)
+      : NULL;
   g_mutex_unlock(&info->lock);
+
+  RtspSyncTrace *sync_trace = rtsp_sync_generation_is_active(generation)
+      ? rtsp_generation_trace(generation)
+      : NULL;
+  gboolean trace_buffer = rtsp_sync_bridge_input(
+      sync_trace, buffer, has_appsrc, drop_full, drop_key_wait,
+      is_interrupted);
 
   /* 스로틀로 유실된 IDR 요청의 지연 재시도 — 키프레임 대기 중이면 매 프레임
    * 재요청하되, request_keyframe 내부 스로틀이 실제 전송을 1회/초로 제한 */
@@ -643,18 +1898,12 @@ static GstFlowReturn new_sample_handler(GstElement *sink, gpointer userData) {
     // if(info->ch == 0) g_print("ch%d appsrc null return!\n", info->ch);
     if (appsrc)
       gst_object_unref(appsrc);
+    if (generation)
+      rtsp_sync_generation_unref(generation);
     gst_sample_unref(sample);
     return GST_FLOW_OK;
   }
 #endif
-
-  if (!buffer) {
-    __LOG(LOG_CRIT, "[RTSP][%s:%d] ch%d buffer cannot get from sample", _FILE_,
-          __LINE__, info->ch);
-    gst_object_unref(appsrc);
-    gst_sample_unref(sample);
-    return GST_FLOW_ERROR;
-  }
 
   if (info->debug) {
     GstClockTime pts = GST_BUFFER_PTS(buffer);
@@ -697,6 +1946,74 @@ static GstFlowReturn new_sample_handler(GstElement *sink, gpointer userData) {
   // (do-timestamp=1) avoiding sync issues.
   GstBuffer *out_buffer =
       gst_buffer_copy_region(buffer, GST_BUFFER_COPY_MEMORY, 0, -1);
+  gboolean stripped_pts_valid =
+      out_buffer && GST_BUFFER_PTS_IS_VALID(out_buffer);
+  gboolean meta_ok = TRUE;
+  if (out_buffer && trace_buffer && GST_BUFFER_PTS_IS_VALID(buffer)) {
+    /* This standard meta carries time only: timestamp is the upstream PTS and
+     * duration is unknown. The former trace-only ordinal was removed rather
+     * than encoding a non-time value in GstReferenceTimestampMeta. */
+    meta_ok = gst_buffer_add_reference_timestamp_meta(
+                  out_buffer, sync_trace->reference, GST_BUFFER_PTS(buffer),
+                  GST_CLOCK_TIME_NONE) != NULL;
+  }
+  rtsp_sync_record_copy(sync_trace, trace_buffer, out_buffer != NULL,
+                        stripped_pts_valid, meta_ok);
+
+  if (!out_buffer) {
+    __LOG(LOG_ERR, "[RTSP_SYNC][%s:%d] ch%d buffer copy failed",
+          _FILE_, __LINE__, info->ch);
+    gst_object_unref(appsrc);
+    if (generation)
+      rtsp_sync_generation_unref(generation);
+    gst_sample_unref(sample);
+    return GST_FLOW_ERROR;
+  }
+
+  if (rtsp_frame_id_sei_enabled() && info->ch < MAX_CHANNEL &&
+      g_strcmp0(cmdArg.enc, ENC_H265) == 0) {
+    const gboolean input_compatible =
+        rtsp_frame_id_insertion_allowed(&cmdArg, info->ch, sample_caps) &&
+        rtsp_h265_annex_b_au_buffer(out_buffer);
+    GstClockTime sei_start_ns = GST_CLOCK_TIME_NONE;
+    GstBuffer *sei_buffer = NULL;
+    if (input_compatible) {
+      if (sync_trace && trace_buffer)
+        sei_start_ns = gst_util_get_timestamp();
+      sei_buffer = rtsp_frame_id_sei_insert(
+          info, out_buffer, GST_BUFFER_PTS(buffer), sample_caps);
+    }
+    GstClockTime sei_elapsed_ns = GST_CLOCK_TIME_NONE;
+    if (GST_CLOCK_TIME_IS_VALID(sei_start_ns)) {
+      GstClockTime sei_end_ns = gst_util_get_timestamp();
+      if (sei_end_ns >= sei_start_ns)
+        sei_elapsed_ns = sei_end_ns - sei_start_ns;
+    }
+    rtsp_sync_record_frame_id_sei(
+        sync_trace, trace_buffer, sei_buffer != NULL, sei_elapsed_ns);
+    if (sei_buffer) {
+      gst_buffer_unref(out_buffer);
+      out_buffer = sei_buffer;
+      info->frame_id_sei_inserted++;
+      if (info->frame_id_sei_inserted == 1) {
+        __LOG(LOG_NOTICE,
+              "[RTSP_FRAME_ID][%s:%d] ch=%u H.265 SEI enabled"
+              " origin_pts_ns=%" G_GUINT64_FORMAT,
+              _FILE_, __LINE__, info->ch, GST_BUFFER_PTS(buffer));
+      }
+    } else {
+      info->frame_id_sei_failed++;
+      if (info->frame_id_sei_failed == 1) {
+        gchar *caps_text = sample_caps
+            ? gst_caps_to_string(sample_caps) : g_strdup("(null)");
+        __LOG(LOG_ERR,
+              "[RTSP_FRAME_ID][%s:%d] ch=%u H.265 SEI insertion failed"
+              " input_compatible=%d caps=%s",
+              _FILE_, __LINE__, info->ch, input_compatible, caps_text);
+        g_free(caps_text);
+      }
+    }
+  }
 
   /* NO_SHARE 메모리이거나 EXCLUSIVE lock 획득 실패 시 위 copy_region이 실제
    * memcpy로 동작하므로, 채널당 1회 메모리 공유 여부를 남겨 zero-copy를
@@ -718,12 +2035,15 @@ static GstFlowReturn new_sample_handler(GstElement *sink, gpointer userData) {
   // Push the buffer (takes ownership)
   GstFlowReturn push_ret =
       gst_app_src_push_buffer(GST_APP_SRC(appsrc), out_buffer);
+  rtsp_sync_record_push(sync_trace, trace_buffer, push_ret);
   if (push_ret != GST_FLOW_OK) {
     __LOG(LOG_WARNING, "[RTSP][%s:%d] ch%d appsrc push failed: %d", _FILE_,
           __LINE__, info->ch, push_ret);
   }
 
   gst_object_unref(appsrc);
+  if (generation)
+    rtsp_sync_generation_unref(generation);
   gst_sample_unref(sample);
 
   return GST_FLOW_OK;
@@ -1011,12 +2331,28 @@ RtspServerBin::RtspServerBin() {
   rtspServerData.last_enough_log_us = 0;
   rtspServerData.kick_sink = NULL;
   rtspServerData.last_kick_us = 0;
+  rtspServerData.sync_generation = NULL;
+  rtspServerData.sync_generation_serial = 0;
+  rtspServerData.frame_id_parser = NULL;
+  rtspServerData.frame_id_sei_inserted = 0;
+  rtspServerData.frame_id_sei_failed = 0;
   g_mutex_init(&rtspServerData.lock);
 }
 
 RtspServerBin::~RtspServerBin() {
   __LOG(LOG_INFO, "[GST][%s:%d] %s[%d]", _FILE_, __LINE__, __FUNCTION__,
         rtspServerData.ch);
+  if (rtspServerData.sync_generation) {
+    RtspSyncGeneration *generation =
+        (RtspSyncGeneration *)rtspServerData.sync_generation;
+    rtsp_sync_generation_deactivate(generation);
+    rtsp_media_generation_release_hooks(generation);
+    rtsp_sync_generation_unref(generation);
+    rtspServerData.sync_generation = NULL;
+  }
+  if (rtspServerData.frame_id_parser)
+    gst_h265_parser_free(
+        (GstH265Parser *)rtspServerData.frame_id_parser);
   g_mutex_clear(&rtspServerData.lock);
 }
 
@@ -1365,7 +2701,9 @@ gboolean RtspServerBin::init(guint8 ch, gboolean crop_en) {
   g_object_set(re.capsfilter, "caps", caps, NULL);
   gst_caps_unref(caps);
 
-  GstCaps *caps2 = gst_caps_new_empty_simple(encoded_media_type);
+  GstCaps *caps2 = gst_caps_new_simple(
+      encoded_media_type, "stream-format", G_TYPE_STRING, "byte-stream",
+      "alignment", G_TYPE_STRING, "au", NULL);
   g_object_set(re.capsfilter2, "caps", caps2, NULL);
   gst_caps_unref(caps2);
 
@@ -1405,26 +2743,25 @@ gboolean RtspServerBin::init(guint8 ch, gboolean crop_en) {
   if (crop_en && cmdArg.overlay_en) {
     if (cmdArg.videorate_en)
       ret = gst_element_link_many(re.queue, re.crop, re.overlay, re.convert,
-                                  re.rate, re.capsfilter, re.enc, re.capsfilter2,
-                                  re.parse, re.sink, NULL);
+                                  re.rate, re.capsfilter, re.enc, re.parse,
+                                  re.capsfilter2, re.sink, NULL);
     else
       ret = gst_element_link_many(re.queue, re.crop, re.overlay, re.convert,
-                                  re.capsfilter, re.enc, re.capsfilter2,
-                                  re.parse, re.sink, NULL);
+                                  re.capsfilter, re.enc, re.parse,
+                                  re.capsfilter2, re.sink, NULL);
   } else if (crop_en) {
     if (cmdArg.dual_enc == TRUE) {
       if (cmdArg.videorate_en)
         ret = gst_element_link_many(re.queue, re.crop, re.convert, re.rate,
-                                    re.capsfilter, re.enc, re.capsfilter2,
-                                    re.parse, re.sink, NULL);
+                                    re.capsfilter, re.enc, re.parse,
+                                    re.capsfilter2, re.sink, NULL);
       else
         ret = gst_element_link_many(re.queue, re.crop, re.convert,
-                                    re.capsfilter, re.enc, re.capsfilter2,
-                                    re.parse, re.sink, NULL);
+                                    re.capsfilter, re.enc, re.parse,
+                                    re.capsfilter2, re.sink, NULL);
     } else {
       gst_bin_remove_many(GST_BIN(re.bin), re.crop, re.convert,
-                          re.capsfilter, re.enc, re.capsfilter2, re.parse,
-                          NULL);
+                          re.capsfilter, re.enc, NULL);
       if (re.rate) {
         gst_bin_remove(GST_BIN(re.bin), re.rate);
         re.rate = NULL;
@@ -1433,22 +2770,20 @@ gboolean RtspServerBin::init(guint8 ch, gboolean crop_en) {
       re.convert = NULL;
       re.capsfilter = NULL;
       re.enc = NULL;
-      re.capsfilter2 = NULL;
-      re.parse = NULL;
-      ret = gst_element_link_many(re.queue, re.sink, NULL);
+      ret = gst_element_link_many(re.queue, re.parse, re.capsfilter2,
+                                  re.sink, NULL);
     }
   } else {
     if (cmdArg.dual_enc == TRUE) {
       if (cmdArg.videorate_en)
         ret = gst_element_link_many(re.queue, re.rate, re.capsfilter, re.enc,
-                                    re.capsfilter2, re.parse, re.sink, NULL);
+                                    re.parse, re.capsfilter2, re.sink, NULL);
       else
         ret = gst_element_link_many(re.queue, re.capsfilter, re.enc,
-                                    re.capsfilter2, re.parse, re.sink, NULL);
+                                    re.parse, re.capsfilter2, re.sink, NULL);
     } else {
       gst_bin_remove_many(GST_BIN(re.bin), re.crop, re.convert,
-                          re.capsfilter, re.enc, re.capsfilter2, re.parse,
-                          NULL);
+                          re.capsfilter, re.enc, NULL);
       if (re.rate) {
         gst_bin_remove(GST_BIN(re.bin), re.rate);
         re.rate = NULL;
@@ -1457,9 +2792,8 @@ gboolean RtspServerBin::init(guint8 ch, gboolean crop_en) {
       re.convert = NULL;
       re.capsfilter = NULL;
       re.enc = NULL;
-      re.capsfilter2 = NULL;
-      re.parse = NULL;
-      ret = gst_element_link_many(re.queue, re.sink, NULL);
+      ret = gst_element_link_many(re.queue, re.parse, re.capsfilter2,
+                                  re.sink, NULL);
     }
   }
 
@@ -1472,7 +2806,7 @@ gboolean RtspServerBin::init(guint8 ch, gboolean crop_en) {
 #else
   ret =
       gst_element_link_many(re.queue, re.rate, re.capsfilter, re.enc,
-                            re.capsfilter2, re.parse, re.queue2, re.sink, NULL);
+                            re.parse, re.capsfilter2, re.queue2, re.sink, NULL);
 #endif
   if (!ret) {
     __LOG(LOG_CRIT, "[GST][%s:%d] rtsp link err", _FILE_, __LINE__);
@@ -1537,7 +2871,8 @@ gboolean RtspServerBin::init(guint8 ch, gboolean crop_en) {
       clamp_int(cmdArg.rtsp_appsrc_max_bytes, 16384, 2097152);
   gchar *launch_str = g_strdup_printf(
       "( appsrc name=%s do-timestamp=1 is-live=1 format=3 max-bytes=%d "
-      "! queue max-size-buffers=%d max-size-time=0 max-size-bytes=0 leaky=2 ! "
+      "! queue name=rtsp_out_queue max-size-buffers=%d max-size-time=0 "
+      "max-size-bytes=0 leaky=2 ! "
       "%s config-interval=-1 ! %s name=pay0 config-interval=-1 )",
       rtspServerData.appSrcName, appsrc_max_bytes, q_max_buffers,
       parser_factory, payloader_factory);
@@ -1620,6 +2955,15 @@ remove_all_sessions_cb(GstRTSPSessionPool *pool, GstRTSPSession *session, gpoint
   return GST_RTSP_FILTER_REMOVE;
 }
 
+static GstRTSPFilterResult
+remove_all_clients_cb(GstRTSPServer *server, GstRTSPClient *client,
+                      gpointer user_data) {
+  (void)server;
+  (void)client;
+  (void)user_data;
+  return GST_RTSP_FILTER_REMOVE;
+}
+
 void rtspServerCloseAllSessions() {
   if (!rtspServer)
     return;
@@ -1636,16 +2980,42 @@ void rtspServerCloseAllSessions() {
 }
 
 void rtspServerStop() {
+  if (rtspServerSource_id) {
+    if (!g_source_remove(rtspServerSource_id)) {
+      __LOG(LOG_WARNING, "[RTSP][%s:%d] server source %u was not attached",
+            _FILE_, __LINE__, rtspServerSource_id);
+    }
+    rtspServerSource_id = 0;
+  }
+
+  /* Detaching the listener prevents new accepts, but established clients own
+   * their media pipelines independently.  REMOVE closes each client and its
+   * managed media before global GStreamer teardown. */
+  if (rtspServer) {
+    GList *clients = gst_rtsp_server_client_filter(
+        rtspServer, remove_all_clients_cb, NULL);
+    g_list_free_full(clients, g_object_unref);
+  }
+
+  if (cleanSesson_id) {
+    g_source_remove(cleanSesson_id);
+    cleanSesson_id = 0;
+  }
+  if (removeSesson_id) {
+    g_source_remove(removeSesson_id);
+    removeSesson_id = 0;
+  }
+
+  if (rtspMounts) {
+    g_object_unref(rtspMounts);
+    rtspMounts = NULL;
+  }
+
   if (rtspServer) {
     __LOG(LOG_INFO, "[RTSP][%s:%d] %s", _FILE_, __LINE__, __FUNCTION__);
     g_object_unref(rtspServer);
     rtspServer = NULL;
   }
-
-  if (cleanSesson_id)
-    g_source_remove(cleanSesson_id);
-  if (removeSesson_id)
-    g_source_remove(removeSesson_id);
 }
 
 guint rtspServerStart() {
@@ -1689,6 +3059,13 @@ guint rtspServerStart() {
   g_object_unref(auth);
   // g_timeout_add_seconds (2, (GSourceFunc) timeout, rtspServer);
 
-  return gst_rtsp_server_attach(rtspServer, NULL);
+  rtspServerSource_id = gst_rtsp_server_attach(rtspServer, NULL);
+  if (!rtspServerSource_id) {
+    __LOG(LOG_ERR, "[RTSP][%s:%d] server attach failed", _FILE_, __LINE__);
+    rtspServerStop();
+    return 0;
+  }
+
+  return 1;
 }
 #endif

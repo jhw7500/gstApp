@@ -21,7 +21,7 @@ OBJ = obj
 #CFLAGS += -I/opt/desktop/build-desktop/tmp/sysroots-components/cortexa53-crypto-mx8mp/gstreamer1.0-plugins-base/usr/include/gstreamer-1.0
 #IFLAGS += -I$(ROOTFS)/usr/include
 #IDIR += $(SYSROOT)/usr/include #-I$(ROOTFS)/usr/include
-LIBS += gstreamer-1.0 gstreamer-rtsp-server-1.0 glib-2.0 gstreamer-plugins-base-1.0 gstreamer-app-1.0 check json-c openssl gstreamer-video-1.0
+LIBS += gstreamer-1.0 gstreamer-rtsp-server-1.0 glib-2.0 gstreamer-plugins-base-1.0 gstreamer-app-1.0 gstreamer-codecparsers-1.0 check json-c openssl gstreamer-video-1.0
 #LIBS += gstreamer-audio-1.0
 #LIBS += gstreamer-pbutils-1.0
 LDFLAGS+="-Wl,--copy-dt-needed-entries"
@@ -54,11 +54,29 @@ CXXFLAGS += $(ALL_CFLAGS) $(CPP_PERF_FLAGS)
 
 ALLFLAGS=$(ALL_CFLAGS) $(ALL_LDFLAGS) -lturbojpeg
 #OBJS = videoBin.o recordBin.o muxSinkBin.o rtspServerBin.o audioBin.o muxBin.o
-OBJS = videoBin.o recordBin.o muxSinkBin.o rtspServerBin.o testBin.o captureBin.o util.o parser.o cfgjson.o aes.o tcpServer.o audioBin.o ipc.o encoderBin.o
+OBJS = videoBin.o recordBin.o muxSinkBin.o rtspServerBin.o rtspSync.o testBin.o captureBin.o util.o parser.o cfgjson.o aes.o tcpServer.o audioBin.o ipc.o encoderBin.o encoderStat.o
 
 $(OUTPUT)/gstApp : $(OBJS) main.cpp | $(OUTPUT) $(OBJ)
 	$(CXX) $(CPP_PERF_FLAGS) -o $@ $^ $(ALLFLAGS)
 	mv *.o $(OBJ)
+
+$(OUTPUT)/rtspFrameSyncClient : test/rtspFrameSyncClient.cpp test/rtspValidation.cpp test/rtspValidation.h rtspFrameId.h | $(OUTPUT)
+	$(CXX) $(CPP_PERF_FLAGS) -o $@ test/rtspFrameSyncClient.cpp test/rtspValidation.cpp $(ALLFLAGS)
+
+$(OUTPUT)/decoderRecoveryClient : test/decoderRecoveryClient.cpp test/rtspValidation.cpp test/rtspValidation.h rtspFrameId.h | $(OUTPUT)
+	$(CXX) $(CPP_PERF_FLAGS) -o $@ test/decoderRecoveryClient.cpp test/rtspValidation.cpp $(ALLFLAGS)
+
+$(OUTPUT)/testRtspSync : test/test_rtspSync.cpp rtspSync.cpp rtspSync.h | $(OUTPUT)
+	$(CXX) $(CPP_PERF_FLAGS) -o $@ test/test_rtspSync.cpp rtspSync.cpp $(ALLFLAGS)
+
+$(OUTPUT)/testRtspValidation : test/test_rtspValidation.cpp test/rtspValidation.cpp test/rtspValidation.h rtspFrameId.h | $(OUTPUT)
+	$(CXX) $(CPP_PERF_FLAGS) -o $@ test/test_rtspValidation.cpp test/rtspValidation.cpp $(ALLFLAGS)
+
+$(OUTPUT)/testCfgjson : test/test_cfgjson.cpp cfgjson.cpp cfgjson.h | $(OUTPUT)
+	$(CXX) $(CPP_PERF_FLAGS) -o $@ test/test_cfgjson.cpp cfgjson.cpp $(ALLFLAGS)
+
+$(OUTPUT)/testEncoderStat : test/test_encoderStat.cpp encoderStat.cpp encoderStat.h | $(OUTPUT)
+	$(CXX) -Wall $(CPP_PERF_FLAGS) $(OPT_FLAGS) $(shell pkg-config --cflags glib-2.0) -o $@ test/test_encoderStat.cpp encoderStat.cpp $(shell pkg-config --libs glib-2.0)
 
 $(OUTPUT) $(OBJ) :
 	mkdir -p $@
@@ -72,8 +90,11 @@ recordBin.o : recordBin.cpp recordBin.h
 muxSinkBin.o : muxSinkBin.cpp muxSinkBin.h
 	$(CXX) $(CXXFLAGS) -c muxSinkBin.cpp
 
-rtspServerBin.o : rtspServerBin.cpp rtspServerBin.h
+rtspServerBin.o : rtspServerBin.cpp rtspServerBin.h rtspFrameId.h rtspSync.h
 	$(CXX) $(CXXFLAGS) -c rtspServerBin.cpp
+
+rtspSync.o : rtspSync.cpp rtspSync.h util.h
+	$(CXX) $(CXXFLAGS) -c rtspSync.cpp
 
 #muxBin.o : muxBin.cpp muxBin.h
 #	$(CXX) $(CXXFLAGS) -c muxBin.cpp
@@ -105,8 +126,11 @@ audioBin.o : audioBin.cpp audioBin.h
 ipc.o : ipc.cpp ipc.h
 	$(CXX) $(CXXFLAGS) -c ipc.cpp
 
-encoderBin.o : encoderBin.cpp encoderBin.h
+encoderBin.o : encoderBin.cpp encoderBin.h encoderStat.h
 	$(CXX) $(CXXFLAGS) -c encoderBin.cpp
+
+encoderStat.o : encoderStat.cpp encoderStat.h
+	$(CXX) $(CXXFLAGS) -c encoderStat.cpp
 
 #json_c.o : json_c.cpp json_c.h
 #	$(CXX) $(ALLFLAGS) -c json_c.cpp

@@ -36,3 +36,25 @@ CfgArrStatus cfg_get_int_array(json_object *obj, const char *name, gint *out,
   }
   return CFG_ARR_OK;
 }
+
+CfgBoolStatus cfg_get_bool(json_object *obj, const char *name, gboolean *out) {
+  if (!obj || !name || !out)
+    return CFG_BOOL_MISSING;
+  json_object *value = NULL;
+  if (!json_object_object_get_ex(obj, name, &value))
+    return CFG_BOOL_MISSING;
+  if (!value)
+    return CFG_BOOL_BAD_TYPE;
+  enum json_type type = json_object_get_type(value);
+  if (type == json_type_boolean) {
+    *out = json_object_get_boolean(value) ? TRUE : FALSE;
+    return CFG_BOOL_OK;
+  }
+  if (type != json_type_int)
+    return CFG_BOOL_BAD_TYPE;
+  gint number = json_object_get_int(value);
+  if (number != 0 && number != 1)
+    return CFG_BOOL_BAD_VALUE;
+  *out = number == 1 ? TRUE : FALSE;
+  return CFG_BOOL_OK;
+}
