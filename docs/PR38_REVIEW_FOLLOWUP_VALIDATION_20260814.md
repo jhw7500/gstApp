@@ -210,5 +210,5 @@ systemd나 supervisor가 아니라 사람의 serial console 수명주기에서 �
 - 대상 검증은 3초 trace와 제한된 시작/식별정보 poll로 수행한 제한 시간 연기 시험이다.
   장시간 운용, 최대 부하, 재부팅 후 자동 기동, 운영 서비스 가용성을
   입증하지 않는다.
-- 검증 범위에서는 제품/시험 소스와 과거 검증 문서를 수정하지 않았다. 기존 미추적
-  `docs/gstapp-handoff-2026-08-11-channel-logging.md`도 그대로 보존했다.
+- 당시 채널 미기동 진단 handoff는 현재 동작과 구분되는 역사 기록으로 정리해
+  `docs/CHANNEL_STARTUP_DIAGNOSTICS_HISTORY.md`에서 추적한다.
