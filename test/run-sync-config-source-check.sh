@@ -85,6 +85,20 @@ if parser.count('arg.v4l2_sync_log_frames = FALSE;',
 probe_start = video.index('static GstPadProbeReturn v4l2_sync_trace_probe')
 probe_end = video.index('static void install_v4l2_sync_trace', probe_start)
 probe = video[probe_start:probe_end]
+install_start = probe_end
+install_end = video.index('static void prepare_format', install_start)
+install = video[install_start:install_end]
+if probe.count('trace->log_frames') != 1 or \
+        probe.count('if (trace->log_frames)') != 1:
+    raise SystemExit(
+        'V4L2 probe log_frames use must be only the exact per-frame guard')
+if install.count('trace->log_frames') != 2 or not re.search(
+        r'trace->duration_sec,\s*trace->log_frames\);', install):
+    raise SystemExit(
+        'V4L2 trace setup log_frames uses must be normalized copy and notice')
+if video.count('trace->log_frames') != 3:
+    raise SystemExit(
+        'V4L2 trace log_frames must have exactly three approved uses')
 frame_log_guard = probe.index('if (trace->log_frames)')
 frame_log_call = probe.index(
     '__LOG(LOG_NOTICE,\n          "[V4L2_SYNC]', frame_log_guard)
