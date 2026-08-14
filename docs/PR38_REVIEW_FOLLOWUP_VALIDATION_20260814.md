@@ -21,7 +21,7 @@
 
 | 항목 | 값 |
 | --- | --- |
-| 저장소/브랜치 | `/home/jhw/ai/opencode/projects/gstApp`, `fix/split-skew-and-channel-diagnostics` |
+| 저장소/브랜치 | `gstApp` 작업 트리, `fix/split-skew-and-channel-diagnostics` |
 | 검증 HEAD | `854f9b4372bcc9f41db6f3e185120626c1be2dd7` |
 | 대상 장치 | `root@192.168.214.4` (`pim-camera-v016`, i.MX8, aarch64) |
 | SDK | `/shared/fsl-imx-xwayland/5.10-hardknott` |
