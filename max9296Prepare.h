@@ -80,8 +80,15 @@ struct Max9296PrepareIo {
     void (*sleep_ms)(void *context, unsigned milliseconds);
     int (*thread_create)(void *context, pthread_t *thread,
                          void *(*entry)(void *), void *argument);
+    /* Zero is the only quiescence proof. A nonzero result means the worker's
+     * liveness is unknown and the coordinator will retry rather than return. */
     int (*thread_join)(void *context, pthread_t thread, void **result);
     void *context;
+    /* Optional extended write contract. `committed` is true once the complete
+     * sysfs store occurred, even if later descriptor cleanup fails. */
+    ssize_t (*write_file_with_commit)(void *context, const char *path,
+                                      const char *buffer, size_t length,
+                                      bool *committed);
 };
 
 struct Max9296PrepareDomainReport {

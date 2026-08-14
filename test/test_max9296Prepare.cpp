@@ -418,12 +418,27 @@ struct FakeIo {
     unsigned join_calls;
     unsigned fail_create_call;
     int fail_create_error;
+    unsigned fail_join_call;
+    int fail_join_error;
+    bool hold_prepare_for_join_retry;
+    bool release_held_prepare;
+    unsigned active_prepare_writes;
+    bool read_before_quiescence;
+    pthread_t last_created_thread;
+    bool last_created_valid;
+    bool last_created_joined;
+    bool prepare_committed_on_error;
     uint64_t now;
 
     FakeIo()
         : barrier_target(0), barrier_entered(0), max_barrier_entered(0),
           barrier_released(false), sleep_calls(0), create_calls(0), join_calls(0),
-          fail_create_call(0), fail_create_error(EAGAIN), now(1000)
+          fail_create_call(0), fail_create_error(EAGAIN), fail_join_call(0),
+          fail_join_error(EIO), hold_prepare_for_join_retry(false),
+          release_held_prepare(false), active_prepare_writes(0),
+          read_before_quiescence(false), last_created_thread(),
+          last_created_valid(false), last_created_joined(false),
+          prepare_committed_on_error(false), now(1000)
     {
         CHECK(pthread_mutex_init(&mutex, NULL) == 0);
         CHECK(pthread_cond_init(&condition, NULL) == 0);
@@ -467,6 +482,15 @@ static ssize_t fake_read_file(void *context, const char *path, char *buffer,
         return -ENOENT;
 
     CHECK(pthread_mutex_lock(&fake->mutex) == 0);
+    if (fake->hold_prepare_for_join_retry &&
+        fake->active_prepare_writes != 0 &&
+        !fake->release_held_prepare) {
+        fake->read_before_quiescence = true;
+        fake->release_held_prepare = true;
+        pthread_cond_broadcast(&fake->condition);
+        while (fake->active_prepare_writes != 0)
+            CHECK(pthread_cond_wait(&fake->condition, &fake->mutex) == 0);
+    }
     FakeDomain &domain = fake->domain[index];
     if (domain.read_index >= domain.reads.size()) {
         CHECK(false);
@@ -533,11 +557,37 @@ static ssize_t fake_write_file(void *context, const char *path,
     }
     const bool wait = !cancel && result == SSIZE_MAX &&
                       fake->barrier_target != 0;
+    const bool hold = !cancel && result == SSIZE_MAX &&
+                      fake->hold_prepare_for_join_retry;
+    if (hold) {
+        ++fake->active_prepare_writes;
+        pthread_cond_broadcast(&fake->condition);
+    }
     CHECK(pthread_mutex_unlock(&fake->mutex) == 0);
 
     if (wait)
         fake_barrier_wait(fake);
+    if (hold) {
+        CHECK(pthread_mutex_lock(&fake->mutex) == 0);
+        while (!fake->release_held_prepare)
+            CHECK(pthread_cond_wait(&fake->condition, &fake->mutex) == 0);
+        --fake->active_prepare_writes;
+        pthread_cond_broadcast(&fake->condition);
+        CHECK(pthread_mutex_unlock(&fake->mutex) == 0);
+    }
     return result == SSIZE_MAX ? static_cast<ssize_t>(length) : result;
+}
+
+static ssize_t fake_write_file_with_commit(void *context, const char *path,
+                                           const char *buffer, size_t length,
+                                           bool *committed)
+{
+    FakeIo *const fake = static_cast<FakeIo *>(context);
+    const ssize_t result = fake_write_file(context, path, buffer, length);
+    *committed = result == static_cast<ssize_t>(length) ||
+                 (fake->prepare_committed_on_error &&
+                  std::string(buffer, length) != "0\n");
+    return result;
 }
 
 static uint64_t fake_monotonic_ns(void *context)
@@ -568,16 +618,43 @@ static int fake_thread_create(void *context, pthread_t *thread,
     const bool fail = call == fake->fail_create_call;
     const int failure = fake->fail_create_error;
     CHECK(pthread_mutex_unlock(&fake->mutex) == 0);
-    return fail ? failure : pthread_create(thread, NULL, entry, argument);
+    if (fail)
+        return failure;
+    const int result = pthread_create(thread, NULL, entry, argument);
+    if (result == 0) {
+        CHECK(pthread_mutex_lock(&fake->mutex) == 0);
+        fake->last_created_thread = *thread;
+        fake->last_created_valid = true;
+        fake->last_created_joined = false;
+        CHECK(pthread_mutex_unlock(&fake->mutex) == 0);
+    }
+    return result;
 }
 
 static int fake_thread_join(void *context, pthread_t thread, void **result)
 {
     FakeIo *const fake = static_cast<FakeIo *>(context);
     CHECK(pthread_mutex_lock(&fake->mutex) == 0);
-    ++fake->join_calls;
+    const unsigned call = ++fake->join_calls;
+    const bool fail = call == fake->fail_join_call;
+    const int failure = fake->fail_join_error;
+    while (fail && fake->hold_prepare_for_join_retry &&
+           fake->active_prepare_writes == 0)
+        CHECK(pthread_cond_wait(&fake->condition, &fake->mutex) == 0);
+    if (!fail && fake->hold_prepare_for_join_retry) {
+        fake->release_held_prepare = true;
+        pthread_cond_broadcast(&fake->condition);
+    }
     CHECK(pthread_mutex_unlock(&fake->mutex) == 0);
-    return pthread_join(thread, result);
+    if (fail)
+        return failure;
+    const int join_result = pthread_join(thread, result);
+    if (join_result == 0) {
+        CHECK(pthread_mutex_lock(&fake->mutex) == 0);
+        fake->last_created_joined = true;
+        CHECK(pthread_mutex_unlock(&fake->mutex) == 0);
+    }
+    return join_result;
 }
 
 static Max9296PrepareIo fake_io(FakeIo *fake)
@@ -585,6 +662,7 @@ static Max9296PrepareIo fake_io(FakeIo *fake)
     Max9296PrepareIo io = {};
     io.read_file = fake_read_file;
     io.write_file = fake_write_file;
+    io.write_file_with_commit = fake_write_file_with_commit;
     io.monotonic_ns = fake_monotonic_ns;
     io.sleep_ms = fake_sleep_ms;
     io.thread_create = fake_thread_create;
@@ -725,8 +803,11 @@ static void test_legacy_requires_all_active_paths_missing(void)
 static void test_warm_consumed_is_reread_without_a_worker(void)
 {
     FakeIo fake;
-    fake_add_read(&fake, 0, dual_consumed(45, 8));
-    fake_add_read(&fake, 0, dual_consumed(45, 8));
+    const std::string warm = status_text(
+        "CONSUMED", 45, 8, "fhd", "dual", 3840, 1080, 15, 3,
+        -ESTALE, 0, 0, 1);
+    fake_add_read(&fake, 0, warm);
+    fake_add_read(&fake, 0, warm);
     Max9296PrepareInput input = dual_input();
     input.channel_enabled[2] = input.channel_enabled[3] = 0;
     Max9296PrepareReport report = {};
@@ -736,6 +817,7 @@ static void test_warm_consumed_is_reread_without_a_worker(void)
     CHECK(fake.domain[0].read_index == 2);
     CHECK(fake.create_calls == 0 && fake.domain[0].writes.empty());
     CHECK(report.domain[0].action == MAX9296_ACTION_WARM_REUSED);
+    CHECK(report.domain[0].after.last_errno == -ESTALE);
 }
 
 static void test_nonwarm_consumed_write_results_propagate(void)
@@ -923,6 +1005,97 @@ static void test_second_create_failure_joins_first_and_rolls_it_back(void)
     CHECK(fake.domain[1].writes.empty());
 }
 
+static void test_join_failure_retries_until_worker_is_quiescent(void)
+{
+    FakeIo fake;
+    fake.fail_join_call = 1;
+    fake.fail_join_error = EIO;
+    fake.hold_prepare_for_join_retry = true;
+    fake_add_read(&fake, 0, idle_status());
+    fake_add_read(&fake, 0, single_ready(77, 9));
+    Max9296PrepareInput input = base_input();
+    input.channel_enabled[0] = 1;
+    Max9296PrepareReport report = {};
+    const Max9296PrepareIo io = fake_io(&fake);
+
+    CHECK(max9296_prepare_all(&input, &report, &io) == -EIO);
+    CHECK(report.error == -EIO);
+    CHECK(fake.join_calls == 2);
+    CHECK(fake.last_created_joined);
+    CHECK(!fake.read_before_quiescence);
+    CHECK(fake.active_prepare_writes == 0);
+    CHECK(fake.domain[0].writes.size() == 2);
+    CHECK(fake.domain[0].writes[1] == "0\n");
+
+    if (fake.last_created_valid && !fake.last_created_joined) {
+        CHECK(pthread_join(fake.last_created_thread, NULL) == 0);
+        fake.last_created_joined = true;
+    }
+}
+
+static void test_nonwarm_final_ready_requires_zero_errno(void)
+{
+    {
+        FakeIo fake;
+        fake_add_read(&fake, 0, idle_status());
+        fake_add_read(&fake, 0, single_ready(77, 9));
+        fake.domain[0].reads[1].text = status_text(
+            "READY", 77, 9, "fhd", "single", 1920, 1080, 15, 1,
+            -ESTALE, 0, 1, 1);
+        Max9296PrepareInput input = base_input();
+        input.channel_enabled[0] = 1;
+        Max9296PrepareReport report = {};
+        const Max9296PrepareIo io = fake_io(&fake);
+
+        CHECK(max9296_prepare_all(&input, &report, &io) == -ESTALE);
+        CHECK(report.error == -ESTALE);
+        CHECK(report.domain[0].after.last_errno == -ESTALE);
+        CHECK(report.domain[0].rollback_owned);
+        CHECK(fake.domain[0].writes.size() == 2);
+        if (fake.domain[0].writes.size() >= 2)
+            CHECK(fake.domain[0].writes[1] == "0\n");
+    }
+    {
+        FakeIo fake;
+        fake_add_read(&fake, 0, dual_ready(45, 8, -ESTALE));
+        fake_add_read(&fake, 0, dual_ready(45, 9, -ESTALE));
+        Max9296PrepareInput input = dual_input();
+        input.channel_enabled[2] = input.channel_enabled[3] = 0;
+        Max9296PrepareReport report = {};
+        const Max9296PrepareIo io = fake_io(&fake);
+
+        CHECK(max9296_prepare_all(&input, &report, &io) == -ESTALE);
+        CHECK(report.error == -ESTALE);
+        CHECK(report.domain[0].after.last_errno == -ESTALE);
+        CHECK(!report.domain[0].rollback_owned);
+        CHECK(fake.domain[0].writes.size() == 1);
+    }
+}
+
+static void test_committed_store_close_error_is_owned_and_rolled_back(void)
+{
+    FakeIo fake;
+    fake.prepare_committed_on_error = true;
+    fake.domain[0].prepare_results.push_back(-EAGAIN);
+    fake_add_read(&fake, 0, idle_status());
+    fake_add_read(&fake, 0, single_ready(77, 9));
+    Max9296PrepareInput input = base_input();
+    input.channel_enabled[0] = 1;
+    Max9296PrepareReport report = {};
+    const Max9296PrepareIo io = fake_io(&fake);
+
+    CHECK(max9296_prepare_all(&input, &report, &io) == -EAGAIN);
+    CHECK(report.error == -EAGAIN);
+    CHECK(report.domain[0].error == -EAGAIN);
+    CHECK(report.domain[0].rollback_owned);
+    CHECK(report.domain[0].rollback_error == 0);
+    CHECK(fake.domain[0].writes.size() == 2);
+    CHECK(fake.domain[0].prepare_index == 1);
+    CHECK(fake.sleep_calls == 0);
+    if (fake.domain[0].writes.size() >= 2)
+        CHECK(fake.domain[0].writes[1] == "0\n");
+}
+
 static void test_generation_source_is_nonzero_and_changes(void)
 {
     const uint64_t first = max9296_prepare_generate_generation();
@@ -955,6 +1128,9 @@ int main(void)
     test_eagain_retries_twice_and_never_attempts_four();
     test_short_positive_write_fails_without_rollback_ownership();
     test_second_create_failure_joins_first_and_rolls_it_back();
+    test_join_failure_retries_until_worker_is_quiescent();
+    test_nonwarm_final_ready_requires_zero_errno();
+    test_committed_store_close_error_is_owned_and_rolled_back();
     test_generation_source_is_nonzero_and_changes();
     printf("max9296 prepare test: %d checks, %d failures -> %s\n", checks,
            failures, failures ? "FAILED" : "PASSED");

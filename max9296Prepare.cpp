@@ -192,20 +192,32 @@ static ssize_t posix_read_file(void *, const char *path, char *buffer,
     return result;
 }
 
-static ssize_t posix_write_file(void *, const char *path, const char *buffer,
-                                size_t length)
+static ssize_t posix_write_file_with_commit(void *, const char *path,
+                                            const char *buffer, size_t length,
+                                            bool *committed)
 {
+    *committed = false;
     const int fd = open(path, O_WRONLY | O_CLOEXEC);
     if (fd < 0)
         return -errno;
     const ssize_t result = write(fd, buffer, length);
     const int operation_error = result < 0 ? errno : 0;
+    if (result == static_cast<ssize_t>(length))
+        *committed = true;
     const int close_result = close(fd);
     if (result < 0)
         return -operation_error;
     if (close_result != 0)
         return -errno;
     return result;
+}
+
+static ssize_t posix_write_file(void *context, const char *path,
+                                const char *buffer, size_t length)
+{
+    bool committed = false;
+    return posix_write_file_with_commit(context, path, buffer, length,
+                                        &committed);
 }
 
 static uint64_t posix_monotonic_ns(void *)
@@ -245,11 +257,14 @@ static const Max9296PrepareIo kDefaultIo = {
     posix_thread_create,
     posix_thread_join,
     NULL,
+    posix_write_file_with_commit,
 };
 
 static bool valid_io(const Max9296PrepareIo *io)
 {
-    return io && io->read_file && io->write_file && io->monotonic_ns &&
+    return io && io->read_file &&
+           (io->write_file || io->write_file_with_commit) &&
+           io->monotonic_ns &&
            io->sleep_ms && io->thread_create && io->thread_join;
 }
 
@@ -258,18 +273,31 @@ static int pthread_error(int result)
     return result > 0 ? -result : result;
 }
 
-static ssize_t retry_write(const Max9296PrepareIo *io, const char *path,
-                           const char *buffer, size_t length)
+struct WriteResult {
+    ssize_t result;
+    bool committed;
+};
+
+static WriteResult retry_write(const Max9296PrepareIo *io, const char *path,
+                               const char *buffer, size_t length)
 {
-    ssize_t result = -EIO;
+    WriteResult outcome = {-EIO, false};
     for (unsigned attempt = 0; attempt < 3; ++attempt) {
-        result = io->write_file(io->context, path, buffer, length);
-        if (result != -EAGAIN)
-            return result;
+        bool committed = false;
+        outcome.result = io->write_file_with_commit
+                             ? io->write_file_with_commit(
+                                   io->context, path, buffer, length,
+                                   &committed)
+                             : io->write_file(io->context, path, buffer,
+                                              length);
+        outcome.committed = committed ||
+                            outcome.result == static_cast<ssize_t>(length);
+        if (outcome.committed || outcome.result != -EAGAIN)
+            return outcome;
         if (attempt != 2)
             io->sleep_ms(io->context, 100);
     }
-    return result;
+    return outcome;
 }
 
 static int read_status(const Max9296PrepareIo *io, const char *path,
@@ -317,17 +345,17 @@ static void *prepare_worker_entry(void *argument)
     }
 
     const uint64_t started = worker->io->monotonic_ns(worker->io->context);
-    const ssize_t write_result = retry_write(
+    const WriteResult write_result = retry_write(
         worker->io, worker->target->path, command,
         static_cast<size_t>(command_length));
     const uint64_t finished = worker->io->monotonic_ns(worker->io->context);
     worker->report->elapsed_ns = finished >= started ? finished - started : 0;
 
-    if (!worker->preexisting_lease && write_result == command_length)
+    if (!worker->preexisting_lease && write_result.committed)
         worker->report->rollback_owned = true;
-    if (write_result != command_length) {
-        worker->report->error = write_result < 0
-                                    ? static_cast<int>(write_result)
+    if (write_result.result != command_length) {
+        worker->report->error = write_result.result < 0
+                                    ? static_cast<int>(write_result.result)
                                     : -EIO;
         worker->report->action = MAX9296_ACTION_FAILED;
     } else {
@@ -356,6 +384,8 @@ static int validate_final_status(const Max9296PrepareTarget *target,
         disposition == MAX9296_DISPOSITION_NEW_PREPARE
             ? generation
             : before->generation;
+    if (!warm && after->last_errno != 0)
+        return after->last_errno < 0 ? after->last_errno : -EIO;
     if ((warm && after->state != MAX9296_STATE_CONSUMED) ||
         (!warm && after->state != MAX9296_STATE_READY) ||
         after->generation != expected_generation || after->epoch == 0 ||
@@ -712,12 +742,24 @@ int max9296_prepare_all(const Max9296PrepareInput *input,
     for (unsigned csi = 0; csi < 2; ++csi) {
         if (!created[csi])
             continue;
-        const int result = io->thread_join(io->context, thread[csi], NULL);
-        if (result != 0) {
+        int join_error = 0;
+        for (;;) {
+            const int result = io->thread_join(io->context, thread[csi], NULL);
+            if (result == 0)
+                break;
             const int error = pthread_error(result);
+            if (join_error == 0)
+                join_error = error;
+            /* A failed join proves nothing about worker liveness.  Retrying
+             * until success is an intentional fail-stop: the coordinator
+             * must not inspect worker-owned state, rollback, or return while
+             * quiescence is uncertain. */
+            io->sleep_ms(io->context, 100);
+        }
+        if (join_error != 0) {
             if (report->domain[csi].error == 0)
-                report->domain[csi].error = error;
-            remember_error(error, &first_error);
+                report->domain[csi].error = join_error;
+            remember_error(join_error, &first_error);
         }
     }
     for (unsigned csi = 0; csi < 2; ++csi)
@@ -761,11 +803,12 @@ int max9296_prepare_all(const Max9296PrepareInput *input,
             if (!domain.rollback_owned)
                 continue;
             static const char cancel[] = "0\n";
-            const ssize_t result = retry_write(io, target[csi].path, cancel,
-                                               sizeof(cancel) - 1);
-            if (result != static_cast<ssize_t>(sizeof(cancel) - 1))
-                domain.rollback_error = result < 0
-                                            ? static_cast<int>(result)
+            const WriteResult result = retry_write(
+                io, target[csi].path, cancel, sizeof(cancel) - 1);
+            if (result.result !=
+                static_cast<ssize_t>(sizeof(cancel) - 1))
+                domain.rollback_error = result.result < 0
+                                            ? static_cast<int>(result.result)
                                             : -EIO;
         }
         report->error = first_error;
