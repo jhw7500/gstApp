@@ -29,7 +29,9 @@
 | 검증 `bin/gstApp` SHA-256 | `4539a8d30af83a06efd0fc4ebd657e780bff1dc5e583bf2ef03010839274d344` |
 | 대상 실행 시간 | `2026-08-14T02:34:19Z` ~ `02:37:15Z` |
 
-검증한 정확한 커밋 범위는 다음과 같다.
+최초 검증 기록 시점의 전체 PR #38 후속 이력은 `dcc73bf..cb76659`이다. 이 이력에는
+설계·계획·검증 문서 커밋도 포함된다. 아래 일곱 SHA는 전체 범위라는 뜻이 아니라,
+실제 구현과 구현 계약 보강에 해당하는 정확한 커밋만 추린 것이다.
 
 | 커밋 | 내용 |
 | --- | --- |
@@ -78,8 +80,8 @@
 
 ## 4. 로컬·소스·ShellCheck·빌드 게이트
 
-비밀번호는 명령, 로그, 문서에 기록하지 않았으며 대상 인증값은 실행 환경에서만 별도로
-주입했다.
+이 추적 검증 기록과 커밋된 산출물에는 비밀번호가 없다. 대상 인증값은 실행 환경 외부에서
+주입했으며, 자격증명을 포함할 수 있는 로컬 원시 증거는 배포하거나 커밋하지 않는다.
 
 | 구분 | 실행 명령/검사 | 결과 |
 | --- | --- | --- |
@@ -91,8 +93,8 @@
 | 소스 계약 | `test/run-sync-config-source-check.sh` | `sync config source contract: PASSED` |
 | 깨끗한 빌드 | `./make-for-imx8 clean && ./make-for-imx8 -j4` | 종료 0, aarch64 `bin/gstApp` 생성 |
 | 순수 시험 빌드 | `./make-for-imx8 bin/testRtspSync bin/testRtspValidation bin/testCfgjson bin/testEncoderStat` | 네 aarch64 실행 파일 생성 |
-| 대상 help 계약 | `test/run-sync-config-cli-test.sh` | 8개 필수 help option 확인, 임시 파일 삭제 |
-| cfgjson 독립 게이트 | `test/run-cfgjson-test.sh` | `30 checks, 0 failures` |
+| 대상 help 계약 | `BOARD=192.168.214.4 BOARD_PW="${BOARD_PW:?외부 주입 필요}" bash test/run-sync-config-cli-test.sh` | 100644 파일도 깨끗한 체크아웃에서 실행 가능, 8개 필수 도움말 옵션 확인, 임시 파일 삭제 |
+| cfgjson 독립 게이트 | `BOARD=192.168.214.4 BOARD_PW="${BOARD_PW:?외부 주입 필요}" bash test/run-cfgjson-test.sh` | 외부 인증값으로 실행, `30 checks, 0 failures` |
 
 순수 대상 시험은 각 파일을 고유한 `/tmp/omx-1786606350624-aggregate-*` 경로로
 복사하기 전후 SHA-256 일치를 확인하고 순차 실행했다.
