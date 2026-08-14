@@ -50,6 +50,7 @@
 typedef struct {
   guint8 csi;
   guint duration_sec;
+  gboolean log_frames;
   gint64 start_us;
   guint64 warmup_count;
   guint64 frame_count;
@@ -122,15 +123,17 @@ static GstPadProbeReturn v4l2_sync_trace_probe(GstPad *pad,
   }
 
   trace->frame_count++;
-  __LOG(LOG_NOTICE,
-        "[V4L2_SYNC][%s:%d] csi=%u sample=%" G_GUINT64_FORMAT
-        " mono_ns=%" G_GINT64_FORMAT " seq_valid=%d seq=%"
-        G_GUINT64_FORMAT " seq_delta=%" G_GINT64_FORMAT
-        " pts_valid=%d pts_ns=%" G_GUINT64_FORMAT " pts_delta_ns=%"
-        G_GINT64_FORMAT " lost_total=%" G_GUINT64_FORMAT,
-        _FILE_, __LINE__, trace->csi, trace->frame_count, now_us * 1000,
-        sequence_valid, sequence, sequence_delta, pts_valid, pts, pts_delta_ns,
-        trace->lost_count);
+  if (trace->log_frames) {
+    __LOG(LOG_NOTICE,
+          "[V4L2_SYNC][%s:%d] csi=%u sample=%" G_GUINT64_FORMAT
+          " mono_ns=%" G_GINT64_FORMAT " seq_valid=%d seq=%"
+          G_GUINT64_FORMAT " seq_delta=%" G_GINT64_FORMAT
+          " pts_valid=%d pts_ns=%" G_GUINT64_FORMAT " pts_delta_ns=%"
+          G_GINT64_FORMAT " lost_total=%" G_GUINT64_FORMAT,
+          _FILE_, __LINE__, trace->csi, trace->frame_count, now_us * 1000,
+          sequence_valid, sequence, sequence_delta, pts_valid, pts,
+          pts_delta_ns, trace->lost_count);
+  }
 
   trace->previous_sequence = sequence;
   trace->previous_pts = pts;
@@ -155,6 +158,7 @@ static void install_v4l2_sync_trace(GstElement *src, guint8 csi) {
   V4l2SyncTrace *trace = g_new0(V4l2SyncTrace, 1);
   trace->csi = csi;
   trace->duration_sec = duration_sec;
+  trace->log_frames = cmdArg.v4l2_sync_log_frames;
 
   gulong probe_id = gst_pad_add_probe(
       src_pad, GST_PAD_PROBE_TYPE_BUFFER, v4l2_sync_trace_probe, trace,
@@ -169,8 +173,9 @@ static void install_v4l2_sync_trace(GstElement *src, guint8 csi) {
   }
 
   __LOG(LOG_NOTICE,
-        "[V4L2_SYNC][%s:%d] csi=%u enabled duration_sec=%u source=v4l2src",
-        _FILE_, __LINE__, csi, trace->duration_sec);
+        "[V4L2_SYNC][%s:%d] csi=%u enabled duration_sec=%u frame_log=%d "
+        "source=v4l2src",
+        _FILE_, __LINE__, csi, trace->duration_sec, trace->log_frames);
 }
 
 static void prepare_format(GstElement *object, gint arg0, GstCaps *caps,

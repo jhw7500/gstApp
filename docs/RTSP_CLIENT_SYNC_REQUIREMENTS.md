@@ -47,11 +47,18 @@ JSON이 `frame_id_sei: true`여도
 `--rtsp-frame-id-sei=0`을 지정하면 해당 실행에서는 SEI가 꺼진다. SEI는
 H.265에서만 활성화되며 H.264 실행에서는 요청값을 비활성화한다.
 
-세 trace는 CLI 전용이며 `0`은 probe/trace OFF, `1..3600`은 계측 초다.
+세 trace와 V4L2 frame log는 CLI 전용이며 trace의 `0`은 probe/trace OFF,
+`1..3600`은 계측 초다.
 
 - `--v4l2-sync-trace-sec=N`
+- `--v4l2-sync-log-frames=0|1`
 - `--channel-sync-trace-sec=N`
 - `--rtsp-sync-trace-sec=N`
+
+V4L2 trace만 켜면 probe와 연속성 summary만 생성된다. 각 frame의 sequence/PTS
+상세 log까지 수집하려면 `--v4l2-sync-trace-sec=N`과
+`--v4l2-sync-log-frames=1`을 함께 지정해야 한다. 유효 trace가 없는 frame log
+요청은 trace를 암묵적으로 켜지 않고 경고 후 비활성화된다.
 
 정체 주입도 CLI 전용이다. `--rtsp-test-stall-ch`,
 `--rtsp-test-stall-after-sec`, `--rtsp-test-stall-duration-sec` 세 값을 유효하게

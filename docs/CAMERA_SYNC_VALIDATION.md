@@ -81,11 +81,18 @@
 | --- | --- | --- |
 | `GSTAPP_RTSP_FRAME_ID_SEI` | `--rtsp-frame-id-sei=0|1` | H.265 Frame ID SEI |
 | `GSTAPP_V4L2_SYNC_TRACE_SEC` | `--v4l2-sync-trace-sec=N` | V4L2 동기화 trace |
+| — | `--v4l2-sync-log-frames=0|1` | V4L2 frame별 상세 log (trace 필요) |
 | `GSTAPP_CHANNEL_SYNC_TRACE_SEC` | `--channel-sync-trace-sec=N` | 채널 경로 trace |
 | `GSTAPP_RTSP_SYNC_TRACE_SEC` | `--rtsp-sync-trace-sec=N` | RTSP bridge/media trace |
 | `GSTAPP_RTSP_TEST_STALL_CH` | `--rtsp-test-stall-ch=N` | 시험 정체 채널 |
 | `GSTAPP_RTSP_TEST_STALL_AFTER_SEC` | `--rtsp-test-stall-after-sec=N` | 시험 정체 시작 시각 |
 | `GSTAPP_RTSP_TEST_STALL_DURATION_SEC` | `--rtsp-test-stall-duration-sec=N` | 시험 정체 시간 |
+
+`--v4l2-sync-trace-sec=N`만 유효하게 지정하면 probe와 연속성 summary만
+활성화된다. 각 frame의 sequence/PTS 상세 log까지 수집하려면 trace 시간을
+`1..3600`으로 지정하고 `--v4l2-sync-log-frames=1`도 함께 지정해야 한다.
+유효 trace가 없는 frame log 요청은 trace를 암묵적으로 켜지 않고 경고 후
+비활성화된다.
 
 현재 수동 계측은 운영 바이너리를 교체하지 않는다. service를 중지하고 기존
 `gstApp`/`killcam` 종료를 확인한 뒤 `/root`에서 `/tmp` 시험 바이너리를 직접

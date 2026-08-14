@@ -19,6 +19,55 @@ frame = Path('rtspFrameId.h').read_text(encoding='utf-8')
 main = Path('main.cpp').read_text(encoding='utf-8')
 audio = Path('audioBin.cpp').read_text(encoding='utf-8')
 encoder = Path('encoderBin.cpp').read_text(encoding='utf-8')
+parser = Path('parser.cpp').read_text(encoding='utf-8')
+parser_h = Path('parser.h').read_text(encoding='utf-8')
+util_h = Path('util.h').read_text(encoding='utf-8')
+video = Path('videoBin.cpp').read_text(encoding='utf-8')
+
+missing_v4l2_frame_log = []
+for label, needle, source in (
+        ('V4L2 frame-log CmdArg field',
+         'gboolean v4l2_sync_log_frames;', util_h),
+        ('V4L2 frame-log default',
+         '#define DEFAULT_V4L2_SYNC_LOG_FRAMES FALSE', parser_h),
+        ('V4L2 frame-log default assignment',
+         'arg.v4l2_sync_log_frames = DEFAULT_V4L2_SYNC_LOG_FRAMES;', parser),
+        ('V4L2 frame-log CLI option',
+         '{"v4l2-sync-log-frames", 0, 0, G_OPTION_ARG_INT,', parser),
+        ('V4L2 trace frame-log state', 'gboolean log_frames;', video),
+        ('V4L2 trace frame-log copy',
+         'trace->log_frames = cmdArg.v4l2_sync_log_frames;', video),
+        ('V4L2 per-frame log guard', 'if (trace->log_frames)', video),
+        ('V4L2 trace enabled notice', 'frame_log=%d', video)):
+    if needle not in source:
+        missing_v4l2_frame_log.append(label)
+if missing_v4l2_frame_log:
+    raise SystemExit('missing source contracts: ' +
+                     ', '.join(missing_v4l2_frame_log))
+
+trace_normalize = parser.index(
+    'sync_trace_sanity(&arg.v4l2_sync_trace_sec, "v4l2_sync_trace_sec")')
+bool_validate = parser.index(
+    'arg.v4l2_sync_log_frames != FALSE &&\n'
+    '      arg.v4l2_sync_log_frames != TRUE')
+dependency_normalize = parser.index(
+    'arg.v4l2_sync_log_frames && arg.v4l2_sync_trace_sec == 0')
+effective_log = parser.index('sync_config v4l2_trace_sec:%d v4l2_log_frames:%d')
+if not trace_normalize < bool_validate < dependency_normalize < effective_log:
+    raise SystemExit('V4L2 frame-log normalization order is not trace/bool/dependency/log')
+if parser.count('arg.v4l2_sync_log_frames = FALSE;',
+                bool_validate, effective_log) != 2:
+    raise SystemExit('V4L2 invalid/dependency normalization does not disable frame logs')
+
+probe_start = video.index('static GstPadProbeReturn v4l2_sync_trace_probe')
+probe_end = video.index('static void install_v4l2_sync_trace', probe_start)
+probe = video[probe_start:probe_end]
+frame_log_guard = probe.index('if (trace->log_frames)')
+frame_log_call = probe.index(
+    '__LOG(LOG_NOTICE,\n          "[V4L2_SYNC]', frame_log_guard)
+frame_log_guard_end = probe.index('\n  }', frame_log_guard)
+if frame_log_call > frame_log_guard_end:
+    raise SystemExit('V4L2 per-frame __LOG call is not guarded by log_frames')
 
 required = {
     'generation-owned media state': 'g_object_set_data_full(G_OBJECT(media), "gstapp-rtsp-sync-generation"',

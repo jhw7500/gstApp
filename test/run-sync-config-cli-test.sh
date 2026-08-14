@@ -30,12 +30,19 @@ REMOTE_SHA=$(sshpass -p "$BOARD_PW" ssh "${SSH_OPTS[@]}" root@"$BOARD" \
 [ "$REMOTE_SHA" = "$LOCAL_SHA" ]
 help=$(sshpass -p "$BOARD_PW" ssh "${SSH_OPTS[@]}" root@"$BOARD" \
   "'$REMOTE' --help-all")
+missing_options=()
 for option in \
-  --rtsp-frame-id-sei --v4l2-sync-trace-sec \
+  --rtsp-frame-id-sei --v4l2-sync-trace-sec --v4l2-sync-log-frames \
   --channel-sync-trace-sec --rtsp-sync-trace-sec \
   --rtsp-test-stall-ch --rtsp-test-stall-after-sec \
   --rtsp-test-stall-duration-sec
 do
-  grep -q -- "$option" <<<"$help"
+  if ! grep -q -- "$option" <<<"$help"; then
+    missing_options+=("$option")
+  fi
 done
+if [ "${#missing_options[@]}" -ne 0 ]; then
+  printf 'missing CLI help contracts: %s\n' "${missing_options[*]}" >&2
+  exit 1
+fi
 echo "sync config CLI contract: PASSED"

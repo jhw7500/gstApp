@@ -286,6 +286,7 @@ void ParserClass::init_arg(gchar *argv) {
   arg.rtsp_appsrc_max_bytes = DEFAULT_RTSP_APPSRC_MAX_BYTES;
   arg.rtsp_frame_id_sei = DEFAULT_RTSP_FRAME_ID_SEI;
   arg.v4l2_sync_trace_sec = DEFAULT_V4L2_SYNC_TRACE_SEC;
+  arg.v4l2_sync_log_frames = DEFAULT_V4L2_SYNC_LOG_FRAMES;
   arg.channel_sync_trace_sec = DEFAULT_CHANNEL_SYNC_TRACE_SEC;
   arg.rtsp_sync_trace_sec = DEFAULT_RTSP_SYNC_TRACE_SEC;
   arg.rtsp_test_stall_ch = DEFAULT_RTSP_TEST_STALL_CH;
@@ -874,6 +875,9 @@ gint ParserClass::arg_parser(int *argc, char **argv[]) {
       {"v4l2-sync-trace-sec", 0, 0, G_OPTION_ARG_INT,
        &arg.v4l2_sync_trace_sec,
        "V4L2 sync trace: 0=off, 1..3600=seconds", "INT"},
+      {"v4l2-sync-log-frames", 0, 0, G_OPTION_ARG_INT,
+       &arg.v4l2_sync_log_frames,
+       "V4L2 per-frame sync log: 0=off, 1=on; requires trace", "INT"},
       {"channel-sync-trace-sec", 0, 0, G_OPTION_ARG_INT,
        &arg.channel_sync_trace_sec,
        "Channel sync trace: 0=off, 1..3600=seconds", "INT"},
@@ -1107,6 +1111,19 @@ gint ParserClass::check_arg() {
     arg.rtsp_frame_id_sei = FALSE;
   }
   sync_trace_sanity(&arg.v4l2_sync_trace_sec, "v4l2_sync_trace_sec");
+  if (arg.v4l2_sync_log_frames != FALSE &&
+      arg.v4l2_sync_log_frames != TRUE) {
+    __LOG(LOG_WARNING,
+          "[CFG][%s:%d] invalid v4l2_sync_log_frames=%d, disabling",
+          _FILE_, __LINE__, arg.v4l2_sync_log_frames);
+    arg.v4l2_sync_log_frames = FALSE;
+  }
+  if (arg.v4l2_sync_log_frames && arg.v4l2_sync_trace_sec == 0) {
+    __LOG(LOG_WARNING,
+          "[CFG][%s:%d] V4L2 frame log requires sync trace, disabling",
+          _FILE_, __LINE__);
+    arg.v4l2_sync_log_frames = FALSE;
+  }
   sync_trace_sanity(&arg.channel_sync_trace_sec, "channel_sync_trace_sec");
   sync_trace_sanity(&arg.rtsp_sync_trace_sec, "rtsp_sync_trace_sec");
 
@@ -1131,11 +1148,12 @@ gint ParserClass::check_arg() {
   }
 
   __LOG(LOG_NOTICE,
-        "[CFG][%s:%d] sync_config v4l2_trace_sec:%d channel_trace_sec:%d "
-        "rtsp_trace_sec:%d stall_ch:%d stall_after_sec:%d "
+        "[CFG][%s:%d] sync_config v4l2_trace_sec:%d v4l2_log_frames:%d "
+        "channel_trace_sec:%d rtsp_trace_sec:%d stall_ch:%d stall_after_sec:%d "
         "stall_duration_sec:%d",
         _FILE_, __LINE__, arg.v4l2_sync_trace_sec,
-        arg.channel_sync_trace_sec, arg.rtsp_sync_trace_sec,
+        arg.v4l2_sync_log_frames, arg.channel_sync_trace_sec,
+        arg.rtsp_sync_trace_sec,
         arg.rtsp_test_stall_ch, arg.rtsp_test_stall_after_sec,
         arg.rtsp_test_stall_duration_sec);
 

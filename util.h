@@ -207,6 +207,7 @@ typedef struct _CmdArg
     gint rtsp_appsrc_max_bytes;
     gboolean rtsp_frame_id_sei;
     gint v4l2_sync_trace_sec;
+    gboolean v4l2_sync_log_frames;
     gint channel_sync_trace_sec;
     gint rtsp_sync_trace_sec;
     gint rtsp_test_stall_ch;
