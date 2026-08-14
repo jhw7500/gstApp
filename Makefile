@@ -75,6 +75,9 @@ $(OUTPUT)/testRtspValidation : test/test_rtspValidation.cpp test/rtspValidation.
 $(OUTPUT)/testCfgjson : test/test_cfgjson.cpp cfgjson.cpp cfgjson.h | $(OUTPUT)
 	$(CXX) $(CPP_PERF_FLAGS) -o $@ test/test_cfgjson.cpp cfgjson.cpp $(ALLFLAGS)
 
+$(OUTPUT)/testEncoderStat : test/test_encoderStat.cpp encoderStat.cpp encoderStat.h | $(OUTPUT)
+	$(CXX) -Wall $(CPP_PERF_FLAGS) $(OPT_FLAGS) $(shell pkg-config --cflags glib-2.0) -o $@ test/test_encoderStat.cpp encoderStat.cpp $(shell pkg-config --libs glib-2.0)
+
 $(OUTPUT) $(OBJ) :
 	mkdir -p $@
 
