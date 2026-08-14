@@ -4,9 +4,12 @@
 #include <errno.h>
 #include <fcntl.h>
 #include <limits.h>
+#include <pthread.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/file.h>
+#include <time.h>
 #include <unistd.h>
 
 namespace {
@@ -171,6 +174,204 @@ static bool has_current_fingerprint(const Max9296PrepareTarget *target,
            status->width == target->width && status->height == target->height &&
            status->fps == target->fps && status->code == 0x2006 &&
            status->enable == target->enable;
+}
+
+static ssize_t posix_read_file(void *, const char *path, char *buffer,
+                               size_t capacity)
+{
+    const int fd = open(path, O_RDONLY | O_CLOEXEC);
+    if (fd < 0)
+        return -errno;
+    const ssize_t result = read(fd, buffer, capacity);
+    const int operation_error = result < 0 ? errno : 0;
+    const int close_result = close(fd);
+    if (result < 0)
+        return -operation_error;
+    if (close_result != 0)
+        return -errno;
+    return result;
+}
+
+static ssize_t posix_write_file(void *, const char *path, const char *buffer,
+                                size_t length)
+{
+    const int fd = open(path, O_WRONLY | O_CLOEXEC);
+    if (fd < 0)
+        return -errno;
+    const ssize_t result = write(fd, buffer, length);
+    const int operation_error = result < 0 ? errno : 0;
+    const int close_result = close(fd);
+    if (result < 0)
+        return -operation_error;
+    if (close_result != 0)
+        return -errno;
+    return result;
+}
+
+static uint64_t posix_monotonic_ns(void *)
+{
+    struct timespec value = {};
+    if (clock_gettime(CLOCK_MONOTONIC, &value) != 0)
+        return 0;
+    return static_cast<uint64_t>(value.tv_sec) * 1000000000ULL +
+           static_cast<uint64_t>(value.tv_nsec);
+}
+
+static void posix_sleep_ms(void *, unsigned milliseconds)
+{
+    struct timespec remaining = {};
+    remaining.tv_sec = milliseconds / 1000;
+    remaining.tv_nsec = static_cast<long>(milliseconds % 1000) * 1000000L;
+    while (nanosleep(&remaining, &remaining) != 0 && errno == EINTR) {
+    }
+}
+
+static int posix_thread_create(void *, pthread_t *thread,
+                               void *(*entry)(void *), void *argument)
+{
+    return pthread_create(thread, NULL, entry, argument);
+}
+
+static int posix_thread_join(void *, pthread_t thread, void **result)
+{
+    return pthread_join(thread, result);
+}
+
+static const Max9296PrepareIo kDefaultIo = {
+    posix_read_file,
+    posix_write_file,
+    posix_monotonic_ns,
+    posix_sleep_ms,
+    posix_thread_create,
+    posix_thread_join,
+    NULL,
+};
+
+static bool valid_io(const Max9296PrepareIo *io)
+{
+    return io && io->read_file && io->write_file && io->monotonic_ns &&
+           io->sleep_ms && io->thread_create && io->thread_join;
+}
+
+static int pthread_error(int result)
+{
+    return result > 0 ? -result : result;
+}
+
+static ssize_t retry_write(const Max9296PrepareIo *io, const char *path,
+                           const char *buffer, size_t length)
+{
+    ssize_t result = -EIO;
+    for (unsigned attempt = 0; attempt < 3; ++attempt) {
+        result = io->write_file(io->context, path, buffer, length);
+        if (result != -EAGAIN)
+            return result;
+        if (attempt != 2)
+            io->sleep_ms(io->context, 100);
+    }
+    return result;
+}
+
+static int read_status(const Max9296PrepareIo *io, const char *path,
+                       Max9296PrepareStatus *status)
+{
+    char buffer[1024];
+    ssize_t result = -EIO;
+    for (unsigned attempt = 0; attempt < 3; ++attempt) {
+        result = io->read_file(io->context, path, buffer, sizeof(buffer));
+        if (result != -EAGAIN)
+            break;
+        if (attempt != 2)
+            io->sleep_ms(io->context, 100);
+    }
+    if (result < 0)
+        return static_cast<int>(result);
+    if (static_cast<size_t>(result) > sizeof(buffer))
+        return -EOVERFLOW;
+    return max9296_prepare_parse_status(buffer, static_cast<size_t>(result),
+                                        status);
+}
+
+struct PrepareWorker {
+    const Max9296PrepareIo *io;
+    const Max9296PrepareTarget *target;
+    Max9296PrepareDomainReport *report;
+    uint64_t generation;
+    bool preexisting_lease;
+};
+
+static void *prepare_worker_entry(void *argument)
+{
+    PrepareWorker *const worker = static_cast<PrepareWorker *>(argument);
+    char command[128];
+    const int command_length = snprintf(
+        command, sizeof(command), "1 %llu %u %u %u %u\n",
+        static_cast<unsigned long long>(worker->generation),
+        worker->target->width, worker->target->height, worker->target->fps,
+        worker->target->enable);
+    if (command_length <= 0 ||
+        static_cast<size_t>(command_length) >= sizeof(command)) {
+        worker->report->error = -EOVERFLOW;
+        worker->report->action = MAX9296_ACTION_FAILED;
+        return NULL;
+    }
+
+    const uint64_t started = worker->io->monotonic_ns(worker->io->context);
+    const ssize_t write_result = retry_write(
+        worker->io, worker->target->path, command,
+        static_cast<size_t>(command_length));
+    const uint64_t finished = worker->io->monotonic_ns(worker->io->context);
+    worker->report->elapsed_ns = finished >= started ? finished - started : 0;
+
+    if (!worker->preexisting_lease && write_result == command_length)
+        worker->report->rollback_owned = true;
+    if (write_result != command_length) {
+        worker->report->error = write_result < 0
+                                    ? static_cast<int>(write_result)
+                                    : -EIO;
+        worker->report->action = MAX9296_ACTION_FAILED;
+    } else {
+        worker->report->action = worker->preexisting_lease
+                                     ? MAX9296_ACTION_READY_REFRESHED
+                                     : MAX9296_ACTION_COLD_PREPARED;
+    }
+    return NULL;
+}
+
+static int failed_disposition_error(const Max9296PrepareStatus *status)
+{
+    if (status->worker_errno != 0)
+        return status->worker_errno < 0 ? status->worker_errno : -EIO;
+    return -ESTALE;
+}
+
+static int validate_final_status(const Max9296PrepareTarget *target,
+                                 const Max9296PrepareStatus *before,
+                                 const Max9296PrepareStatus *after,
+                                 Max9296PrepareDisposition disposition,
+                                 uint64_t generation)
+{
+    const bool warm = disposition == MAX9296_DISPOSITION_WARM;
+    const uint64_t expected_generation =
+        disposition == MAX9296_DISPOSITION_NEW_PREPARE
+            ? generation
+            : before->generation;
+    if ((warm && after->state != MAX9296_STATE_CONSUMED) ||
+        (!warm && after->state != MAX9296_STATE_READY) ||
+        after->generation != expected_generation || after->epoch == 0 ||
+        !has_current_fingerprint(target, after) ||
+        after->worker_errno != 0 || after->lease != (warm ? 0U : 1U) ||
+        after->match != 1)
+        return after->worker_errno != 0
+                   ? (after->worker_errno < 0 ? after->worker_errno : -EIO)
+                   : -ESTALE;
+    return 0;
+}
+
+static void remember_error(int error, int *first_error)
+{
+    if (error < 0 && *first_error == 0)
+        *first_error = error;
 }
 
 }  // namespace
@@ -372,4 +573,205 @@ int max9296_prepare_classify(const Max9296PrepareTarget *target,
          status->state == MAX9296_STATE_STALE))
         *disposition = MAX9296_DISPOSITION_NEW_PREPARE;
     return 0;
+}
+
+uint64_t max9296_prepare_generate_generation(void)
+{
+    static uint64_t last_generation = 0;
+    struct timespec value = {};
+    uint64_t candidate = 1;
+    if (clock_gettime(CLOCK_MONOTONIC, &value) == 0) {
+        candidate = static_cast<uint64_t>(value.tv_sec) * 1000000000ULL +
+                    static_cast<uint64_t>(value.tv_nsec);
+        candidate ^= static_cast<uint64_t>(getpid()) << 32;
+        if (candidate == 0)
+            candidate = 1;
+    }
+
+    uint64_t observed = __atomic_load_n(&last_generation, __ATOMIC_RELAXED);
+    for (;;) {
+        const uint64_t next = candidate > observed ? candidate : observed + 1;
+        if (__atomic_compare_exchange_n(&last_generation, &observed, next,
+                                        false, __ATOMIC_RELAXED,
+                                        __ATOMIC_RELAXED))
+            return next == 0 ? 1 : next;
+    }
+}
+
+int max9296_prepare_all(const Max9296PrepareInput *input,
+                        Max9296PrepareReport *report,
+                        const Max9296PrepareIo *provided_io)
+{
+    if (!input || !report)
+        return -EINVAL;
+    const Max9296PrepareIo *const io = provided_io ? provided_io : &kDefaultIo;
+    if (!valid_io(io))
+        return -EINVAL;
+
+    memset(report, 0, sizeof(*report));
+    report->generation = input->generation;
+    for (unsigned csi = 0; csi < 2; ++csi)
+        report->domain[csi].action = MAX9296_ACTION_SKIPPED;
+
+    Max9296PrepareTarget target[2] = {};
+    int first_error = max9296_prepare_build_targets(input, target);
+    if (first_error < 0) {
+        report->error = first_error;
+        return first_error;
+    }
+
+    unsigned active_count = 0;
+    unsigned missing_count = 0;
+    for (unsigned csi = 0; csi < 2; ++csi) {
+        Max9296PrepareDomainReport &domain = report->domain[csi];
+        domain.active = target[csi].active;
+        if (!target[csi].active)
+            continue;
+        ++active_count;
+        const int result = read_status(io, target[csi].path, &domain.before);
+        if (result == -ENOENT)
+            ++missing_count;
+        if (result < 0) {
+            domain.error = result;
+            domain.action = MAX9296_ACTION_FAILED;
+            remember_error(result, &first_error);
+        }
+    }
+
+    if (active_count != 0 && missing_count == active_count) {
+        report->legacy_fallback = true;
+        report->error = 0;
+        for (unsigned csi = 0; csi < 2; ++csi) {
+            if (target[csi].active) {
+                report->domain[csi].action = MAX9296_ACTION_LEGACY;
+                report->domain[csi].error = 0;
+            }
+        }
+        return MAX9296_PREPARE_LEGACY;
+    }
+    if (first_error < 0) {
+        report->error = first_error;
+        return first_error;
+    }
+
+    Max9296PrepareDisposition disposition[2] = {
+        MAX9296_DISPOSITION_FAIL,
+        MAX9296_DISPOSITION_FAIL,
+    };
+    for (unsigned csi = 0; csi < 2; ++csi) {
+        Max9296PrepareDomainReport &domain = report->domain[csi];
+        if (!target[csi].active)
+            continue;
+        const int result = max9296_prepare_classify(
+            &target[csi], &domain.before, &disposition[csi]);
+        if (result < 0 || disposition[csi] == MAX9296_DISPOSITION_FAIL) {
+            domain.error = result < 0 ? result
+                                      : failed_disposition_error(&domain.before);
+            domain.action = MAX9296_ACTION_FAILED;
+            remember_error(domain.error, &first_error);
+        } else if (disposition[csi] == MAX9296_DISPOSITION_WARM) {
+            domain.action = MAX9296_ACTION_WARM_REUSED;
+        }
+    }
+    if (first_error < 0) {
+        report->error = first_error;
+        return first_error;
+    }
+
+    pthread_t thread[2] = {};
+    bool created[2] = {};
+    PrepareWorker worker[2] = {};
+    for (unsigned csi = 0; csi < 2; ++csi) {
+        if (!target[csi].active ||
+            disposition[csi] == MAX9296_DISPOSITION_WARM)
+            continue;
+        const bool preexisting_lease =
+            disposition[csi] == MAX9296_DISPOSITION_REFRESH_READY;
+        const uint64_t request_generation = preexisting_lease
+                                                ? report->domain[csi]
+                                                      .before.generation
+                                                : report->generation;
+        worker[csi].io = io;
+        worker[csi].target = &target[csi];
+        worker[csi].report = &report->domain[csi];
+        worker[csi].generation = request_generation;
+        worker[csi].preexisting_lease = preexisting_lease;
+        const int result = io->thread_create(io->context, &thread[csi],
+                                             prepare_worker_entry,
+                                             &worker[csi]);
+        if (result != 0) {
+            const int error = pthread_error(result);
+            report->domain[csi].error = error;
+            report->domain[csi].action = MAX9296_ACTION_FAILED;
+            remember_error(error, &first_error);
+            break;
+        }
+        created[csi] = true;
+    }
+
+    for (unsigned csi = 0; csi < 2; ++csi) {
+        if (!created[csi])
+            continue;
+        const int result = io->thread_join(io->context, thread[csi], NULL);
+        if (result != 0) {
+            const int error = pthread_error(result);
+            if (report->domain[csi].error == 0)
+                report->domain[csi].error = error;
+            remember_error(error, &first_error);
+        }
+    }
+    for (unsigned csi = 0; csi < 2; ++csi)
+        if (target[csi].active)
+            remember_error(report->domain[csi].error, &first_error);
+
+    for (unsigned csi = 0; csi < 2; ++csi) {
+        Max9296PrepareDomainReport &domain = report->domain[csi];
+        if (!target[csi].active)
+            continue;
+        const int read_result = read_status(io, target[csi].path, &domain.after);
+        int result = read_result;
+        if (result == 0)
+            result = validate_final_status(&target[csi], &domain.before,
+                                           &domain.after, disposition[csi],
+                                           report->generation);
+        if (result < 0) {
+            if (domain.error == 0)
+                domain.error = result;
+            remember_error(result, &first_error);
+        }
+    }
+
+    uint64_t epoch = 0;
+    for (unsigned csi = 0; csi < 2; ++csi) {
+        Max9296PrepareDomainReport &domain = report->domain[csi];
+        if (!target[csi].active || domain.after.epoch == 0)
+            continue;
+        if (epoch == 0) {
+            epoch = domain.after.epoch;
+        } else if (domain.after.epoch != epoch) {
+            if (domain.error == 0)
+                domain.error = -ESTALE;
+            remember_error(-ESTALE, &first_error);
+        }
+    }
+
+    if (first_error < 0) {
+        for (unsigned csi = 0; csi < 2; ++csi) {
+            Max9296PrepareDomainReport &domain = report->domain[csi];
+            if (!domain.rollback_owned)
+                continue;
+            static const char cancel[] = "0\n";
+            const ssize_t result = retry_write(io, target[csi].path, cancel,
+                                               sizeof(cancel) - 1);
+            if (result != static_cast<ssize_t>(sizeof(cancel) - 1))
+                domain.rollback_error = result < 0
+                                            ? static_cast<int>(result)
+                                            : -EIO;
+        }
+        report->error = first_error;
+        return first_error;
+    }
+
+    report->error = 0;
+    return MAX9296_PREPARE_OK;
 }

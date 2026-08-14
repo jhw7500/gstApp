@@ -1,22 +1,28 @@
 #include "../max9296Prepare.h"
 
 #include <errno.h>
+#include <limits.h>
+#include <pthread.h>
 #include <stdlib.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <string.h>
+#include <time.h>
 #include <unistd.h>
+
+#include <string>
+#include <vector>
 
 static int failures = 0;
 static int checks = 0;
 
 #define CHECK(condition)                                                   \
     do {                                                                   \
-        ++checks;                                                          \
+        __sync_add_and_fetch(&checks, 1);                                  \
         if (!(condition)) {                                                \
             fprintf(stderr, "FAIL %s:%d: %s\n", __FILE__, __LINE__,    \
                     #condition);                                           \
-            ++failures;                                                    \
+            __sync_add_and_fetch(&failures, 1);                            \
         }                                                                  \
     } while (0)
 
@@ -380,6 +386,550 @@ static void test_classifies_prepare_status_truth_table(void)
     }
 }
 
+struct FakeReadStep {
+    std::string text;
+    ssize_t result;
+};
+
+struct FakeDomain {
+    std::vector<FakeReadStep> reads;
+    std::vector<ssize_t> prepare_results;
+    ssize_t cancel_result;
+    size_t read_index;
+    size_t prepare_index;
+    std::vector<std::string> writes;
+
+    FakeDomain()
+        : cancel_result(SSIZE_MAX), read_index(0), prepare_index(0)
+    {
+    }
+};
+
+struct FakeIo {
+    FakeDomain domain[2];
+    pthread_mutex_t mutex;
+    pthread_cond_t condition;
+    unsigned barrier_target;
+    unsigned barrier_entered;
+    unsigned max_barrier_entered;
+    bool barrier_released;
+    unsigned sleep_calls;
+    unsigned create_calls;
+    unsigned join_calls;
+    unsigned fail_create_call;
+    int fail_create_error;
+    uint64_t now;
+
+    FakeIo()
+        : barrier_target(0), barrier_entered(0), max_barrier_entered(0),
+          barrier_released(false), sleep_calls(0), create_calls(0), join_calls(0),
+          fail_create_call(0), fail_create_error(EAGAIN), now(1000)
+    {
+        CHECK(pthread_mutex_init(&mutex, NULL) == 0);
+        CHECK(pthread_cond_init(&condition, NULL) == 0);
+    }
+
+    ~FakeIo()
+    {
+        CHECK(pthread_cond_destroy(&condition) == 0);
+        CHECK(pthread_mutex_destroy(&mutex) == 0);
+    }
+};
+
+static int fake_domain_index(const char *path)
+{
+    if (strcmp(path, max9296_prepare_path(0)) == 0)
+        return 0;
+    if (strcmp(path, max9296_prepare_path(1)) == 0)
+        return 1;
+    return -1;
+}
+
+static void fake_add_read(FakeIo *fake, unsigned domain,
+                          const std::string &text)
+{
+    FakeReadStep step = {text, SSIZE_MAX};
+    fake->domain[domain].reads.push_back(step);
+}
+
+static void fake_add_read_error(FakeIo *fake, unsigned domain, int error)
+{
+    FakeReadStep step = {"", -error};
+    fake->domain[domain].reads.push_back(step);
+}
+
+static ssize_t fake_read_file(void *context, const char *path, char *buffer,
+                              size_t capacity)
+{
+    FakeIo *const fake = static_cast<FakeIo *>(context);
+    const int index = fake_domain_index(path);
+    if (index < 0)
+        return -ENOENT;
+
+    CHECK(pthread_mutex_lock(&fake->mutex) == 0);
+    FakeDomain &domain = fake->domain[index];
+    if (domain.read_index >= domain.reads.size()) {
+        CHECK(false);
+        CHECK(pthread_mutex_unlock(&fake->mutex) == 0);
+        return -EIO;
+    }
+    const FakeReadStep step = domain.reads[domain.read_index++];
+    CHECK(pthread_mutex_unlock(&fake->mutex) == 0);
+    if (step.result != SSIZE_MAX)
+        return step.result;
+    if (step.text.size() > capacity)
+        return -ENOSPC;
+    memcpy(buffer, step.text.data(), step.text.size());
+    return static_cast<ssize_t>(step.text.size());
+}
+
+static void fake_barrier_wait(FakeIo *fake)
+{
+    CHECK(pthread_mutex_lock(&fake->mutex) == 0);
+    ++fake->barrier_entered;
+    if (fake->barrier_entered > fake->max_barrier_entered)
+        fake->max_barrier_entered = fake->barrier_entered;
+    if (fake->barrier_entered >= fake->barrier_target)
+        fake->barrier_released = true;
+    pthread_cond_broadcast(&fake->condition);
+
+    struct timespec deadline = {};
+    CHECK(clock_gettime(CLOCK_REALTIME, &deadline) == 0);
+    deadline.tv_nsec += 300000000L;
+    if (deadline.tv_nsec >= 1000000000L) {
+        ++deadline.tv_sec;
+        deadline.tv_nsec -= 1000000000L;
+    }
+    while (!fake->barrier_released) {
+        const int result = pthread_cond_timedwait(&fake->condition,
+                                                  &fake->mutex, &deadline);
+        if (result == ETIMEDOUT)
+            break;
+        CHECK(result == 0);
+    }
+    --fake->barrier_entered;
+    pthread_cond_broadcast(&fake->condition);
+    CHECK(pthread_mutex_unlock(&fake->mutex) == 0);
+}
+
+static ssize_t fake_write_file(void *context, const char *path,
+                               const char *buffer, size_t length)
+{
+    FakeIo *const fake = static_cast<FakeIo *>(context);
+    const int index = fake_domain_index(path);
+    if (index < 0)
+        return -ENOENT;
+
+    const std::string command(buffer, length);
+    CHECK(pthread_mutex_lock(&fake->mutex) == 0);
+    FakeDomain &domain = fake->domain[index];
+    domain.writes.push_back(command);
+    ssize_t result = SSIZE_MAX;
+    const bool cancel = command == "0\n";
+    if (cancel) {
+        result = domain.cancel_result;
+    } else if (domain.prepare_index < domain.prepare_results.size()) {
+        result = domain.prepare_results[domain.prepare_index++];
+    }
+    const bool wait = !cancel && result == SSIZE_MAX &&
+                      fake->barrier_target != 0;
+    CHECK(pthread_mutex_unlock(&fake->mutex) == 0);
+
+    if (wait)
+        fake_barrier_wait(fake);
+    return result == SSIZE_MAX ? static_cast<ssize_t>(length) : result;
+}
+
+static uint64_t fake_monotonic_ns(void *context)
+{
+    FakeIo *const fake = static_cast<FakeIo *>(context);
+    CHECK(pthread_mutex_lock(&fake->mutex) == 0);
+    fake->now += 100;
+    const uint64_t result = fake->now;
+    CHECK(pthread_mutex_unlock(&fake->mutex) == 0);
+    return result;
+}
+
+static void fake_sleep_ms(void *context, unsigned milliseconds)
+{
+    FakeIo *const fake = static_cast<FakeIo *>(context);
+    CHECK(milliseconds == 100);
+    CHECK(pthread_mutex_lock(&fake->mutex) == 0);
+    ++fake->sleep_calls;
+    CHECK(pthread_mutex_unlock(&fake->mutex) == 0);
+}
+
+static int fake_thread_create(void *context, pthread_t *thread,
+                              void *(*entry)(void *), void *argument)
+{
+    FakeIo *const fake = static_cast<FakeIo *>(context);
+    CHECK(pthread_mutex_lock(&fake->mutex) == 0);
+    const unsigned call = ++fake->create_calls;
+    const bool fail = call == fake->fail_create_call;
+    const int failure = fake->fail_create_error;
+    CHECK(pthread_mutex_unlock(&fake->mutex) == 0);
+    return fail ? failure : pthread_create(thread, NULL, entry, argument);
+}
+
+static int fake_thread_join(void *context, pthread_t thread, void **result)
+{
+    FakeIo *const fake = static_cast<FakeIo *>(context);
+    CHECK(pthread_mutex_lock(&fake->mutex) == 0);
+    ++fake->join_calls;
+    CHECK(pthread_mutex_unlock(&fake->mutex) == 0);
+    return pthread_join(thread, result);
+}
+
+static Max9296PrepareIo fake_io(FakeIo *fake)
+{
+    Max9296PrepareIo io = {};
+    io.read_file = fake_read_file;
+    io.write_file = fake_write_file;
+    io.monotonic_ns = fake_monotonic_ns;
+    io.sleep_ms = fake_sleep_ms;
+    io.thread_create = fake_thread_create;
+    io.thread_join = fake_thread_join;
+    io.context = fake;
+    return io;
+}
+
+static Max9296PrepareInput dual_input(void)
+{
+    Max9296PrepareInput input = base_input();
+    input.channel_enabled[0] = 1;
+    input.channel_enabled[1] = 1;
+    input.channel_enabled[2] = 1;
+    input.channel_enabled[3] = 1;
+    return input;
+}
+
+static std::string status_text(const char *state, uint64_t generation,
+                               uint64_t epoch, const char *mode,
+                               const char *table, uint32_t width,
+                               uint32_t height, uint32_t fps, uint32_t enable,
+                               int last_errno, int worker_errno,
+                               uint32_t lease, uint32_t match)
+{
+    char text[256];
+    const int length = snprintf(
+        text, sizeof(text),
+        "state=%s generation=%llu epoch=%llu mode=%s table=%s width=%u "
+        "height=%u fps=%u code=0x2006 enable=%u errno=%d worker_errno=%d "
+        "lease=%u match=%u\n",
+        state, static_cast<unsigned long long>(generation),
+        static_cast<unsigned long long>(epoch), mode, table, width, height,
+        fps, enable, last_errno, worker_errno, lease, match);
+    CHECK(length > 0 && static_cast<size_t>(length) < sizeof(text));
+    return std::string(text, static_cast<size_t>(length));
+}
+
+static std::string idle_status(void)
+{
+    return status_text("IDLE", 0, 0, "none", "none", 0, 0, 0, 0, 0, 0,
+                       0, 0);
+}
+
+static std::string dual_ready(uint64_t generation, uint64_t epoch,
+                              int last_errno = 0, int worker_errno = 0,
+                              uint32_t lease = 1, uint32_t match = 1)
+{
+    return status_text("READY", generation, epoch, "fhd", "dual", 3840,
+                       1080, 15, 3, last_errno, worker_errno, lease, match);
+}
+
+static std::string single_ready(uint64_t generation, uint64_t epoch)
+{
+    return status_text("READY", generation, epoch, "fhd", "single", 1920,
+                       1080, 15, 1, 0, 0, 1, 1);
+}
+
+static std::string dual_consumed(uint64_t generation, uint64_t epoch,
+                                 uint32_t width = 3840)
+{
+    return status_text("CONSUMED", generation, epoch, "fhd", "dual", width,
+                       1080, 15, 3, 0, 0, 0, 1);
+}
+
+static void test_cold_domains_write_in_parallel_with_one_generation(void)
+{
+    FakeIo fake;
+    fake.barrier_target = 2;
+    for (unsigned i = 0; i < 2; ++i) {
+        fake_add_read(&fake, i, idle_status());
+        fake_add_read(&fake, i, dual_ready(77, 9));
+    }
+    Max9296PrepareReport report = {};
+    Max9296PrepareInput input = dual_input();
+    const Max9296PrepareIo io = fake_io(&fake);
+
+    CHECK(max9296_prepare_all(&input, &report, &io) == MAX9296_PREPARE_OK);
+    CHECK(report.generation == 77 && report.error == 0);
+    CHECK(fake.create_calls == 2 && fake.join_calls == 2);
+    CHECK(fake.max_barrier_entered == 2);
+    for (unsigned i = 0; i < 2; ++i) {
+        CHECK(fake.domain[i].writes.size() == 1);
+        CHECK(fake.domain[i].writes[0] == "1 77 3840 1080 15 3\n");
+        CHECK(report.domain[i].action == MAX9296_ACTION_COLD_PREPARED);
+        CHECK(report.domain[i].rollback_owned);
+        CHECK(report.domain[i].elapsed_ns > 0);
+    }
+}
+
+static void test_one_active_domain_creates_one_worker(void)
+{
+    FakeIo fake;
+    fake_add_read(&fake, 0, idle_status());
+    fake_add_read(&fake, 0, single_ready(77, 4));
+    Max9296PrepareInput input = base_input();
+    input.channel_enabled[0] = 1;
+    Max9296PrepareReport report = {};
+    const Max9296PrepareIo io = fake_io(&fake);
+
+    CHECK(max9296_prepare_all(&input, &report, &io) == 0);
+    CHECK(fake.create_calls == 1 && fake.join_calls == 1);
+    CHECK(fake.domain[1].reads.empty() && fake.domain[1].writes.empty());
+    CHECK(report.domain[1].action == MAX9296_ACTION_SKIPPED);
+}
+
+static void test_legacy_requires_all_active_paths_missing(void)
+{
+    {
+        FakeIo fake;
+        fake_add_read_error(&fake, 0, ENOENT);
+        fake_add_read_error(&fake, 1, ENOENT);
+        Max9296PrepareInput input = dual_input();
+        Max9296PrepareReport report = {};
+        const Max9296PrepareIo io = fake_io(&fake);
+        CHECK(max9296_prepare_all(&input, &report, &io) ==
+              MAX9296_PREPARE_LEGACY);
+        CHECK(report.legacy_fallback && report.error == 0);
+        CHECK(fake.create_calls == 0);
+        CHECK(report.domain[0].action == MAX9296_ACTION_LEGACY);
+        CHECK(report.domain[1].action == MAX9296_ACTION_LEGACY);
+        CHECK(fake.domain[0].writes.empty() && fake.domain[1].writes.empty());
+    }
+    {
+        FakeIo fake;
+        fake_add_read_error(&fake, 0, ENOENT);
+        fake_add_read(&fake, 1, idle_status());
+        Max9296PrepareInput input = dual_input();
+        Max9296PrepareReport report = {};
+        const Max9296PrepareIo io = fake_io(&fake);
+        CHECK(max9296_prepare_all(&input, &report, &io) == -ENOENT);
+        CHECK(!report.legacy_fallback && report.error == -ENOENT);
+        CHECK(fake.create_calls == 0);
+        CHECK(fake.domain[0].writes.empty() && fake.domain[1].writes.empty());
+    }
+}
+
+static void test_warm_consumed_is_reread_without_a_worker(void)
+{
+    FakeIo fake;
+    fake_add_read(&fake, 0, dual_consumed(45, 8));
+    fake_add_read(&fake, 0, dual_consumed(45, 8));
+    Max9296PrepareInput input = dual_input();
+    input.channel_enabled[2] = input.channel_enabled[3] = 0;
+    Max9296PrepareReport report = {};
+    const Max9296PrepareIo io = fake_io(&fake);
+
+    CHECK(max9296_prepare_all(&input, &report, &io) == 0);
+    CHECK(fake.domain[0].read_index == 2);
+    CHECK(fake.create_calls == 0 && fake.domain[0].writes.empty());
+    CHECK(report.domain[0].action == MAX9296_ACTION_WARM_REUSED);
+}
+
+static void test_nonwarm_consumed_write_results_propagate(void)
+{
+    const ssize_t results[] = {SSIZE_MAX, -EBUSY, -ESTALE};
+    const int expected[] = {0, -EBUSY, -ESTALE};
+    for (unsigned case_index = 0; case_index < 3; ++case_index) {
+        FakeIo fake;
+        fake_add_read(&fake, 0, dual_consumed(45, 8, 1920));
+        fake_add_read(&fake, 0,
+                      case_index == 0 ? dual_ready(77, 9) : idle_status());
+        fake.domain[0].prepare_results.push_back(results[case_index]);
+        Max9296PrepareInput input = dual_input();
+        input.channel_enabled[2] = input.channel_enabled[3] = 0;
+        Max9296PrepareReport report = {};
+        const Max9296PrepareIo io = fake_io(&fake);
+        CHECK(max9296_prepare_all(&input, &report, &io) ==
+              expected[case_index]);
+        CHECK(report.error == expected[case_index]);
+        CHECK(fake.domain[0].read_index == 2);
+    }
+}
+
+static void test_ready_refresh_keeps_generation_and_not_rollback_ownership(void)
+{
+    FakeIo fake;
+    fake_add_read(&fake, 0, dual_ready(45, 8, -ESTALE));
+    fake_add_read(&fake, 0, dual_ready(45, 9));
+    Max9296PrepareInput input = dual_input();
+    input.channel_enabled[2] = input.channel_enabled[3] = 0;
+    Max9296PrepareReport report = {};
+    const Max9296PrepareIo io = fake_io(&fake);
+
+    CHECK(max9296_prepare_all(&input, &report, &io) == 0);
+    CHECK(fake.domain[0].writes.size() == 1);
+    CHECK(fake.domain[0].writes[0] == "1 45 3840 1080 15 3\n");
+    CHECK(report.domain[0].action == MAX9296_ACTION_READY_REFRESHED);
+    CHECK(!report.domain[0].rollback_owned);
+    CHECK(report.domain[0].after.last_errno == 0);
+}
+
+static void test_peer_failure_rolls_back_only_newly_published_lease(void)
+{
+    FakeIo fake;
+    for (unsigned i = 0; i < 2; ++i)
+        fake_add_read(&fake, i, idle_status());
+    fake_add_read(&fake, 0, dual_ready(77, 9));
+    fake_add_read(&fake, 1, idle_status());
+    fake.domain[1].prepare_results.push_back(-EIO);
+    Max9296PrepareInput input = dual_input();
+    Max9296PrepareReport report = {};
+    const Max9296PrepareIo io = fake_io(&fake);
+
+    CHECK(max9296_prepare_all(&input, &report, &io) == -EIO);
+    CHECK(fake.join_calls == 2);
+    CHECK(fake.domain[0].writes.size() == 2);
+    CHECK(fake.domain[0].writes[1] == "0\n");
+    CHECK(fake.domain[1].writes.size() == 1);
+    CHECK(report.domain[0].rollback_owned);
+    CHECK(!report.domain[1].rollback_owned);
+}
+
+static void test_final_read_failure_cancels_and_preserves_first_error(void)
+{
+    FakeIo fake;
+    fake_add_read(&fake, 0, idle_status());
+    fake_add_read_error(&fake, 0, EIO);
+    fake.domain[0].cancel_result = -EROFS;
+    Max9296PrepareInput input = dual_input();
+    input.channel_enabled[2] = input.channel_enabled[3] = 0;
+    Max9296PrepareReport report = {};
+    const Max9296PrepareIo io = fake_io(&fake);
+
+    CHECK(max9296_prepare_all(&input, &report, &io) == -EIO);
+    CHECK(report.error == -EIO);
+    CHECK(report.domain[0].error == -EIO);
+    CHECK(report.domain[0].rollback_error == -EROFS);
+    CHECK(fake.domain[0].writes.size() == 2);
+    CHECK(fake.domain[0].writes[1] == "0\n");
+}
+
+static void test_final_status_mismatches_fail_and_cancel(void)
+{
+    const std::string bad[] = {
+        dual_ready(76, 9),
+        status_text("READY", 77, 9, "fhd", "dual", 1920, 1080, 15, 3,
+                    0, 0, 1, 1),
+        status_text("READY", 77, 9, "hd", "dual", 3840, 1080, 15, 3, 0,
+                    0, 1, 1),
+        status_text("READY", 77, 9, "fhd", "single", 3840, 1080, 15, 3,
+                    0, 0, 1, 1),
+        dual_ready(77, 9, 0, -EIO),
+        dual_ready(77, 9, 0, 0, 0, 1),
+        dual_ready(77, 9, 0, 0, 1, 0),
+    };
+    for (size_t i = 0; i < sizeof(bad) / sizeof(bad[0]); ++i) {
+        FakeIo fake;
+        fake_add_read(&fake, 0, idle_status());
+        fake_add_read(&fake, 0, bad[i]);
+        Max9296PrepareInput input = dual_input();
+        input.channel_enabled[2] = input.channel_enabled[3] = 0;
+        Max9296PrepareReport report = {};
+        const Max9296PrepareIo io = fake_io(&fake);
+        CHECK(max9296_prepare_all(&input, &report, &io) < 0);
+        CHECK(report.error < 0 && report.domain[0].error < 0);
+        CHECK(fake.domain[0].writes.size() == 2);
+        CHECK(fake.domain[0].writes[1] == "0\n");
+    }
+}
+
+static void test_final_epoch_must_be_nonzero_and_shared(void)
+{
+    const uint64_t second_epochs[] = {10, 0};
+    for (unsigned case_index = 0; case_index < 2; ++case_index) {
+        FakeIo fake;
+        for (unsigned i = 0; i < 2; ++i)
+            fake_add_read(&fake, i, idle_status());
+        fake_add_read(&fake, 0, dual_ready(77, 9));
+        fake_add_read(&fake, 1, dual_ready(77, second_epochs[case_index]));
+        Max9296PrepareInput input = dual_input();
+        Max9296PrepareReport report = {};
+        const Max9296PrepareIo io = fake_io(&fake);
+        CHECK(max9296_prepare_all(&input, &report, &io) < 0);
+        CHECK(fake.domain[0].writes.back() == "0\n");
+        CHECK(fake.domain[1].writes.back() == "0\n");
+    }
+}
+
+static void test_eagain_retries_twice_and_never_attempts_four(void)
+{
+    FakeIo fake;
+    fake_add_read_error(&fake, 0, EAGAIN);
+    fake_add_read_error(&fake, 0, EAGAIN);
+    fake_add_read(&fake, 0, idle_status());
+    fake_add_read(&fake, 0, single_ready(77, 9));
+    fake.domain[0].prepare_results.push_back(-EAGAIN);
+    fake.domain[0].prepare_results.push_back(-EAGAIN);
+    fake.domain[0].prepare_results.push_back(SSIZE_MAX);
+    fake.domain[0].prepare_results.push_back(-EIO);
+    Max9296PrepareInput input = base_input();
+    input.channel_enabled[0] = 1;
+    Max9296PrepareReport report = {};
+    const Max9296PrepareIo io = fake_io(&fake);
+
+    CHECK(max9296_prepare_all(&input, &report, &io) == 0);
+    CHECK(fake.domain[0].read_index == 4);
+    CHECK(fake.domain[0].prepare_index == 3);
+    CHECK(fake.domain[0].writes.size() == 3);
+    CHECK(fake.sleep_calls == 4);
+}
+
+static void test_short_positive_write_fails_without_rollback_ownership(void)
+{
+    FakeIo fake;
+    fake_add_read(&fake, 0, idle_status());
+    fake_add_read(&fake, 0, idle_status());
+    fake.domain[0].prepare_results.push_back(1);
+    Max9296PrepareInput input = base_input();
+    input.channel_enabled[0] = 1;
+    Max9296PrepareReport report = {};
+    const Max9296PrepareIo io = fake_io(&fake);
+
+    CHECK(max9296_prepare_all(&input, &report, &io) == -EIO);
+    CHECK(!report.domain[0].rollback_owned);
+    CHECK(fake.domain[0].writes.size() == 1);
+}
+
+static void test_second_create_failure_joins_first_and_rolls_it_back(void)
+{
+    FakeIo fake;
+    for (unsigned i = 0; i < 2; ++i)
+        fake_add_read(&fake, i, idle_status());
+    fake_add_read(&fake, 0, dual_ready(77, 9));
+    fake_add_read(&fake, 1, idle_status());
+    fake.fail_create_call = 2;
+    fake.fail_create_error = EAGAIN;
+    Max9296PrepareInput input = dual_input();
+    Max9296PrepareReport report = {};
+    const Max9296PrepareIo io = fake_io(&fake);
+
+    CHECK(max9296_prepare_all(&input, &report, &io) == -EAGAIN);
+    CHECK(fake.create_calls == 2 && fake.join_calls == 1);
+    CHECK(fake.domain[0].writes.size() == 2);
+    CHECK(fake.domain[0].writes[1] == "0\n");
+    CHECK(fake.domain[1].writes.empty());
+}
+
+static void test_generation_source_is_nonzero_and_changes(void)
+{
+    const uint64_t first = max9296_prepare_generate_generation();
+    const uint64_t second = max9296_prepare_generate_generation();
+    CHECK(first != 0 && second != 0 && first != second);
+}
+
 int main(void)
 {
     test_builds_dual_and_single_targets();
@@ -392,6 +942,20 @@ int main(void)
     test_rejects_malformed_status_samples();
     test_owner_lock_is_exclusive_until_released();
     test_classifies_prepare_status_truth_table();
+    test_cold_domains_write_in_parallel_with_one_generation();
+    test_one_active_domain_creates_one_worker();
+    test_legacy_requires_all_active_paths_missing();
+    test_warm_consumed_is_reread_without_a_worker();
+    test_nonwarm_consumed_write_results_propagate();
+    test_ready_refresh_keeps_generation_and_not_rollback_ownership();
+    test_peer_failure_rolls_back_only_newly_published_lease();
+    test_final_read_failure_cancels_and_preserves_first_error();
+    test_final_status_mismatches_fail_and_cancel();
+    test_final_epoch_must_be_nonzero_and_shared();
+    test_eagain_retries_twice_and_never_attempts_four();
+    test_short_positive_write_fails_without_rollback_ownership();
+    test_second_create_failure_joins_first_and_rolls_it_back();
+    test_generation_source_is_nonzero_and_changes();
     printf("max9296 prepare test: %d checks, %d failures -> %s\n", checks,
            failures, failures ? "FAILED" : "PASSED");
     return failures ? 1 : 0;

@@ -3,6 +3,8 @@
 
 #include <stddef.h>
 #include <stdint.h>
+#include <pthread.h>
+#include <sys/types.h>
 
 #define MAX9296_PREPARE_OWNER_LOCK "/run/lock/gstapp-camera.lock"
 
@@ -69,6 +71,42 @@ struct Max9296PrepareTarget {
     const char *table;
 };
 
+struct Max9296PrepareIo {
+    ssize_t (*read_file)(void *context, const char *path,
+                         char *buffer, size_t capacity);
+    ssize_t (*write_file)(void *context, const char *path,
+                          const char *buffer, size_t length);
+    uint64_t (*monotonic_ns)(void *context);
+    void (*sleep_ms)(void *context, unsigned milliseconds);
+    int (*thread_create)(void *context, pthread_t *thread,
+                         void *(*entry)(void *), void *argument);
+    int (*thread_join)(void *context, pthread_t thread, void **result);
+    void *context;
+};
+
+struct Max9296PrepareDomainReport {
+    bool active;
+    bool rollback_owned;
+    Max9296PrepareAction action;
+    int error;
+    int rollback_error;
+    uint64_t elapsed_ns;
+    Max9296PrepareStatus before;
+    Max9296PrepareStatus after;
+};
+
+struct Max9296PrepareReport {
+    bool legacy_fallback;
+    uint64_t generation;
+    int error;
+    Max9296PrepareDomainReport domain[2];
+};
+
+enum {
+    MAX9296_PREPARE_OK = 0,
+    MAX9296_PREPARE_LEGACY = 1
+};
+
 int max9296_prepare_build_targets(const Max9296PrepareInput *input,
                                   Max9296PrepareTarget targets[2]);
 int max9296_prepare_parse_status(const char *line, size_t length,
@@ -79,5 +117,9 @@ void max9296_prepare_release_owner_lock(int fd);
 int max9296_prepare_classify(const Max9296PrepareTarget *target,
                              const Max9296PrepareStatus *status,
                              Max9296PrepareDisposition *disposition);
+uint64_t max9296_prepare_generate_generation(void);
+int max9296_prepare_all(const Max9296PrepareInput *input,
+                        Max9296PrepareReport *report,
+                        const Max9296PrepareIo *io);
 
 #endif
