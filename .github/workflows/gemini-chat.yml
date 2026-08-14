@@ -18,7 +18,7 @@ jobs:
       enabled: ${{ steps.check.outputs.enabled }}
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           sparse-checkout: .github
 
@@ -43,5 +43,9 @@ jobs:
       issues: write
       id-token: write
       actions: read
-    uses: jhw7500/automation/.github/workflows/gemini-chat.yml@v1.31
-    secrets: inherit
+    uses: jhw7500/automation/.github/workflows/gemini-chat.yml@v1.39
+    with:
+      app_id: ${{ vars.APP_ID }}
+    secrets:
+      APP_PRIVATE_KEY: ${{ secrets.APP_PRIVATE_KEY }}
+      GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
