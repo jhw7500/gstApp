@@ -571,6 +571,14 @@ static void install_channel_sync_trace(GstElement *element,
         gst_object_unref(pad);
 }
 
+/* health producer 용 접근자. g_encStat 는 이 파일 static 이므로 여기서 노출한다. */
+guint64 encoderQueueInputTotal(guint8 ch)
+{
+    if (ch >= MAX_CHANNEL)
+        return 0;
+    return g_encStat[ch].telemetry.snapshot(FALSE).q_in;
+}
+
 /* 활성 채널 수 (메모리 예산 분배용) */
 static guint enc_active_channels(void)
 {

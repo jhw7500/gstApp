@@ -54,7 +54,7 @@ CXXFLAGS += $(ALL_CFLAGS) $(CPP_PERF_FLAGS)
 
 ALLFLAGS=$(ALL_CFLAGS) $(ALL_LDFLAGS) -lturbojpeg
 #OBJS = videoBin.o recordBin.o muxSinkBin.o rtspServerBin.o audioBin.o muxBin.o
-OBJS = videoBin.o recordBin.o muxSinkBin.o rtspServerBin.o rtspSync.o testBin.o captureBin.o util.o parser.o cfgjson.o aes.o tcpServer.o audioBin.o ipc.o encoderBin.o encoderStat.o
+OBJS = videoBin.o recordBin.o muxSinkBin.o rtspServerBin.o rtspSync.o testBin.o captureBin.o util.o parser.o cfgjson.o aes.o tcpServer.o audioBin.o ipc.o encoderBin.o encoderStat.o healthProducer.o
 
 $(OUTPUT)/gstApp : $(OBJS) main.cpp | $(OUTPUT) $(OBJ)
 	$(CXX) $(CPP_PERF_FLAGS) -o $@ $^ $(ALLFLAGS)
@@ -77,6 +77,12 @@ $(OUTPUT)/testCfgjson : test/test_cfgjson.cpp cfgjson.cpp cfgjson.h | $(OUTPUT)
 
 $(OUTPUT)/testEncoderStat : test/test_encoderStat.cpp encoderStat.cpp encoderStat.h | $(OUTPUT)
 	$(CXX) -Wall $(CPP_PERF_FLAGS) $(OPT_FLAGS) $(shell pkg-config --cflags glib-2.0) -o $@ test/test_encoderStat.cpp encoderStat.cpp $(shell pkg-config --libs glib-2.0)
+
+# healthProducer 는 gstApp 본체를 링크하지 않는다. 시험 파일이 cmdArg /
+# encoderQueueInputTotal / mylog 를 직접 정의한다. 실제 publish() 를 돌려야
+# 하므로 로직을 시험 쪽에 복제하지 않는다.
+$(OUTPUT)/testHealthProducer : test/test_healthProducer.cpp healthProducer.cpp healthProducer.h | $(OUTPUT)
+	$(CXX) $(CPP_PERF_FLAGS) -o $@ test/test_healthProducer.cpp healthProducer.cpp $(ALLFLAGS)
 
 $(OUTPUT) $(OBJ) :
 	mkdir -p $@
