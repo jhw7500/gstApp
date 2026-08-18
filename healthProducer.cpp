@@ -48,6 +48,7 @@ static gint    g_no_growth_sec = NO_GROWTH_SEC;
  * main loop 스레드에서 읽는다. 1초에 한 번 읽고 분당 몇 번 쓰는 정도라
  * 뮤텍스 비용은 무시할 수 있다. */
 static GMutex  g_health_lock;
+static gboolean g_publish_failed;   /* 직전 publish 가 실패한 상태인지 */
 
 static gint64 now_us(void) { return g_get_monotonic_time(); }
 
@@ -238,20 +239,45 @@ static void publish(void)
     gchar path[256], tmp[288];
     g_snprintf(path, sizeof(path), "%s/%s", dir, HEALTH_BASENAME);
     g_snprintf(tmp, sizeof(tmp), "%s%s", path, HEALTH_TMP_SUFFIX);
+
+    /* publish 가 조용히 실패하면 aggregator 는 PRODUCER_STALE 을 보는데, 그건
+     * "producer 가 아예 없다"와 구분되지 않는다. 이 producer 가 존재하는 이유가
+     * 바로 그 구분이므로 실패를 반드시 남긴다.
+     *
+     * 다만 1Hz 로 도는 만큼 매 회 찍으면 로그를 뒤덮는다. 실패 구간의 시작과
+     * 회복에만 한 번씩 남긴다. */
+    const gchar *failed_at = NULL;
     FILE *fp = fopen(tmp, "w");
-    if (fp) {
+    if (!fp) {
+        failed_at = "open";
+    } else {
         const char *text = json_object_to_json_string_ext(root, JSON_C_TO_STRING_PLAIN);
-        if (fputs(text, fp) >= 0 && fputc('\n', fp) != EOF) {
-            fflush(fp);
-            fsync(fileno(fp));
-            fclose(fp);
-            chmod(tmp, 0640);
-            if (rename(tmp, path) != 0)
-                unlink(tmp);
-        } else {
-            fclose(fp);
-            unlink(tmp);
+        if (fputs(text, fp) < 0 || fputc('\n', fp) == EOF)
+            failed_at = "write";
+        else if (fflush(fp) != 0 || fsync(fileno(fp)) != 0)
+            failed_at = "flush";
+        if (fclose(fp) != 0 && !failed_at)
+            failed_at = "close";
+        if (!failed_at) {
+            if (chmod(tmp, 0640) != 0)
+                failed_at = "chmod";
+            else if (rename(tmp, path) != 0)
+                failed_at = "rename";
         }
+        if (failed_at)
+            unlink(tmp);
+    }
+
+    if (failed_at) {
+        if (!g_publish_failed) {
+            g_publish_failed = TRUE;
+            __LOG(LOG_ERR, "[GST][%s:%d] health publish failed at %s: %s (%s)",
+                  _FILE_, __LINE__, failed_at, path, g_strerror(errno));
+        }
+    } else if (g_publish_failed) {
+        g_publish_failed = FALSE;
+        __LOG(LOG_NOTICE, "[GST][%s:%d] health publish recovered: %s",
+              _FILE_, __LINE__, path);
     }
     json_object_put(root);
 }

@@ -170,6 +170,27 @@ print(p["state"], p["code"], d["overall_status"], ",".join(blocks) or "-")' "$ru
     check "$roots" "$expect_root" "$name: 근본 원인 블록"
 done
 
+# publish 실패는 조용히 지나가면 안 된다. aggregator 에는 PRODUCER_STALE 로 보이고
+# 그건 "producer 부재"와 구분되지 않는다. 쓸 수 없는 경로를 주고 로그를 확인한다.
+BAD="$WORK/bad-dir"
+: > "$BAD"            # 디렉터리가 아니라 파일 -> mkdir 도 열기도 실패한다
+if PIM_CAMERA_HEALTH_DIR="$BAD" "${RUNNER[@]}" "$BIN" "$BAD" >"$WORK/bad.log" 2>&1; then
+    if grep -q "health publish failed" "$WORK/bad.log"; then
+        check ok ok "쓸 수 없는 출력 경로를 로그로 보고한다"
+    else
+        check "로그 없음" "health publish failed" "쓸 수 없는 출력 경로를 로그로 보고한다"
+    fi
+    # 실패가 반복돼도 1Hz 로 로그를 뒤덮지 않는다.
+    hits=$(grep -c "health publish failed" "$WORK/bad.log")
+    if [ "$hits" -le 2 ]; then
+        check ok ok "실패 로그가 구간당 한 번만 나온다 ($hits 회)"
+    else
+        check "$hits" "<=2" "실패 로그가 구간당 한 번만 나온다"
+    fi
+else
+    check "비정상 종료" "정상 종료" "출력 경로가 막혀도 producer 는 죽지 않는다"
+fi
+
 echo
 echo "gstApp health producer: $passed passed / $failed failed"
 [ "$failed" -eq 0 ]
