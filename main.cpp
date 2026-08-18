@@ -14,6 +14,7 @@
 #include "audioBin.h"
 #include "captureBin.h"
 #include "encoderBin.h"
+#include "healthProducer.h"
 #include "ipc.h"
 #include "muxSinkBin.h"
 #include "parser.h"
@@ -153,6 +154,7 @@ static gpointer fragment_closed_worker(gpointer data) {
     }
 
     msBin[ev->ch].handleFragmentClosed(ev->location, ev->running_time, ev->duration);
+    healthProducerNoteFragmentClosed(ev->ch, ev->location);
 
     // 객체 반환 (풀로 복구)
     if (ev->location) {
@@ -278,6 +280,7 @@ gboolean bus_message_parse(GstBus *bus, GstMessage *message, gpointer data) {
     if (err) {
       __LOG(LOG_ERR, "[GST][%s:%d] err(%d) %s from element(%s)", _FILE_,
             __LINE__, err->code, err->message, GST_MESSAGE_SRC_NAME(message));
+      healthProducerNotePipelineError(err->message);
       if (safe_write_file("/tmp/gst_err", err->message) < 0)
         __LOG(LOG_ERR, "[GST][%s:%d] err writing to /tmp/gst_err", _FILE_,
               __LINE__);
@@ -1247,6 +1250,9 @@ gint main(gint argc, gchar *argv[]) {
   g_timeout_add_seconds(LINK_STATUS_RECHECK_SEC, link_status_recheck_cb,
                         videoBin);
   g_timeout_add_seconds(PLAYING_WATCH_SEC, playing_watch_cb, NULL);
+
+  /* camera health v1 producer. 관측만 하며 파이프라인을 바꾸지 않는다. */
+  healthProducerStart();
 
   if (cmdArg.input_en) {
     terminalThread = g_thread_new(

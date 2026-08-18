@@ -36,6 +36,13 @@ typedef struct _EncData
     guint8 ch;
 } EncData;
 
+/* 채널별 enc 큐 유입 누적 카운터를 읽는다.
+ *
+ * enc_q_in_probe 는 무데이터 감시용으로 항상 설치되므로(enc_stat_sec 와 무관)
+ * 이 값은 상시 유효하다. health producer 가 소스 stall 을 판정하는 데 쓴다.
+ * enc_out 계열은 enc_stat_sec > 0 일 때만 누적되므로 여기서 노출하지 않는다. */
+guint64 encoderQueueInputTotal(guint8 ch);
+
 class EncoderBin
 {
 public :
