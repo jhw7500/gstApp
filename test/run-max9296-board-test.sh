@@ -25,6 +25,7 @@ CSI1_NODE="/sys/bus/i2c/devices/1-0048/prepare"
 : "${GSTAPP_EXTRA_ARGS:=}"
 : "${FIRST_FRAME_TIMEOUT_S:=30}"
 : "${MAX9296_MODULE:=max9296}"
+: "${HARD_RESET_CMD:=}"
 
 SCENARIOS="fast"
 ALLOW_DESTRUCTIVE=0
@@ -64,7 +65,12 @@ Options:
 
 Environment overrides:
   GSTAPP_BIN CAM_SERVICE CAM_WIDTH CAM_HEIGHT DUAL_MASK SINGLE_MASK
-  GSTAPP_EXTRA_ARGS FIRST_FRAME_TIMEOUT_S MAX9296_MODULE
+  GSTAPP_EXTRA_ARGS FIRST_FRAME_TIMEOUT_S MAX9296_MODULE HARD_RESET_CMD
+
+HARD_RESET_CMD runs when the shared power refcount is not 0, e.g.
+  HARD_RESET_CMD='/root/tools/cam_hard_reset.sh -s'
+Without it the run refuses to start, because a leaked reference skips the
+deserializer reset and every scenario would fail with a misleading ENXIO.
 
 Exit status: 0 when nothing FAILED, 1 otherwise.  SKIPPED does not fail.
 USAGE
@@ -150,6 +156,55 @@ csi_total() {
              }
          }
          END { printf "%d\n", s + 0 }' /proc/interrupts
+}
+
+# max9296_set_power() logs "users:<n> <run|skip>" on every transition, ungated by
+# the debug parameter, so the shared power refcount is readable at any time.
+#
+# It matters because both deserializer instances share the board power rails and
+# reset GPIOs: the physical power/reset sequence runs only on the 0->1 and 1->0
+# edges of this global count. The vendor capture driver (imx8-isi-cap.c) calls
+# s_power(1) and never s_power(0), so the count leaks upward. Rebinding one i2c
+# device clears that instance's EBUSY gate while the peer's leaked reference
+# keeps the count above zero -- the reset pulse is skipped, the deserializer is
+# never reset, and prepare then fails with ENXIO on its own i2c writes. Those
+# failures look like a driver defect and are not one, so refuse to interpret any
+# scenario until the count is actually zero.
+global_power_users() {
+    journalctl -k --no-pager 2>/dev/null |
+        grep -oE 'users:[0-9]+ (run|skip)' | tail -1 |
+        sed 's/users:\([0-9]*\).*/\1/'
+}
+
+check_power_quiescent() {
+    local users
+    users=$(global_power_users)
+    if [ -z "$users" ]; then
+        say "NOTE: shared power refcount not observable in the kernel log"
+        return 0
+    fi
+    info "shared power refcount: $users"
+    [ "$users" = "0" ] && return 0
+
+    if [ -n "$HARD_RESET_CMD" ]; then
+        say "power refcount is $users; running HARD_RESET_CMD"
+        bash -c "$HARD_RESET_CMD"
+        sleep 3
+        users=$(global_power_users)
+        info "shared power refcount after reset: $users"
+        [ "$users" = "0" ] && return 0
+    fi
+
+    say "REFUSING TO RUN: shared power refcount is $users, not 0."
+    say ""
+    say "Both deserializers share power rails and reset GPIOs, and the reset"
+    say "sequence only runs on the 0<->1 edge of this count. With a leaked"
+    say "reference the hardware is never reset, prepare fails with ENXIO, and"
+    say "every scenario result below would be meaningless."
+    say ""
+    say "Drop the count to 0 first (a full camera hard reset), then re-run:"
+    say "  HARD_RESET_CMD='/root/tools/cam_hard_reset.sh -s' $0 --scenario fast"
+    return 1
 }
 
 calibrate_sampler() {
@@ -881,6 +936,7 @@ main() {
     trap restore_state EXIT INT TERM HUP
     arm_safety_net
     stop_camera_service
+    check_power_quiescent || exit 2
     calibrate_sampler
 
     for s in $list; do
