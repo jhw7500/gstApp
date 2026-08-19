@@ -275,14 +275,65 @@ wait_first_frame() {
 
 # ------------------------------------------------------------ service guard --
 
+# The PIM supervisor's killer (killcam -> kill_test.sh) locates victims with
+#
+#     pid=$(ps -ef | grep gstApp | grep -v grep | awk '{print $2}')
+#
+# which is a substring match against the whole ps line, command line included.
+# Any process carrying the literal "gstApp" in argv is SIGKILLed, and anything
+# it cannot kill within 30 tries reboots the board.  A run that puts the binary
+# path on the command line therefore kills this very script mid-test, with no
+# chance for the EXIT trap to put the camera service back.
+check_cmdline_hazard() {
+    local self
+    self=$(tr '\0' ' ' <"/proc/$$/cmdline" 2>/dev/null)
+    case "$self" in
+        *gstApp*)
+            say "REFUSING TO RUN: this command line contains the literal 'gstApp':"
+            say "  $self"
+            say ""
+            say "The camera supervisor greps ps output for that string and SIGKILLs"
+            say "every match, this script included.  Pass the binary through the"
+            say "environment instead, which does not appear in ps:"
+            say ""
+            say "  GSTAPP_BIN=/root/<dir>/gstApp $0 --scenario fast"
+            return 1
+            ;;
+    esac
+    return 0
+}
+
+# A SIGKILL leaves no chance to run the EXIT trap, so restoration cannot depend
+# on this process surviving.  Hand it to a detached child that watches the
+# parent and restores the service once it is gone.  It self-disarms: a clean
+# exit restores the service first, and the child then finds it already active.
+arm_safety_net() {
+    [ "$KEEP_SERVICE" -eq 1 ] && return 0
+    command -v systemctl >/dev/null 2>&1 || return 0
+    setsid bash -c "
+        while kill -0 $$ 2>/dev/null; do sleep 5; done
+        systemctl is-active --quiet '$CAM_SERVICE' || systemctl start '$CAM_SERVICE'
+    " >/dev/null 2>&1 </dev/null &
+    say "safety net armed: $CAM_SERVICE is restored even if this run is killed"
+}
+
 stop_camera_service() {
     [ "$KEEP_SERVICE" -eq 1 ] && return 0
     command -v systemctl >/dev/null 2>&1 || return 0
     if systemctl is-active --quiet "$CAM_SERVICE" 2>/dev/null; then
         SERVICE_WAS_ACTIVE=1
-        say "stopping $CAM_SERVICE (production gstApp restarts itself otherwise)"
+        # ExecStop runs the supervisor's killer, which retries for tens of
+        # seconds before the unit reports stopped.  Say so, or the wait reads
+        # as a hang.
+        say "stopping $CAM_SERVICE (takes ~20s: the supervisor retries the kill)"
+        local t0
+        t0=$(now_ms)
         systemctl stop "$CAM_SERVICE"
+        say "stopped after $(( ($(now_ms) - t0) / 1000 ))s"
         sleep 2
+    fi
+    if systemctl is-active --quiet "$CAM_SERVICE" 2>/dev/null; then
+        say "WARNING: $CAM_SERVICE is still active; scenarios will be unreliable"
     fi
     kill_gstapp
     return 0
@@ -814,6 +865,7 @@ main() {
         exit 1
     fi
 
+    check_cmdline_hazard || exit 2
     if [ "$(id -u)" -ne 0 ]; then
         say "must run as root (sysfs writes, service control)"
         exit 2
@@ -826,7 +878,8 @@ main() {
     say "  logs      : $RUN_DIR"
     say ""
 
-    trap restore_state EXIT INT TERM
+    trap restore_state EXIT INT TERM HUP
+    arm_safety_net
     stop_camera_service
     calibrate_sampler
 
