@@ -205,6 +205,18 @@ report_power_state() {
     return 0
 }
 
+# Changing the dual/left/right programming inside one hardware epoch is refused
+# with ESTALE by design -- serializer address routing may already have moved.
+# Any scenario that switches topology therefore needs a fresh epoch, which only
+# a real power cycle produces.  Without HARD_RESET_CMD the caller gets the
+# ESTALE and a note explaining it, rather than a silent wrong result.
+new_hardware_epoch() {
+    [ -n "$HARD_RESET_CMD" ] || return 1
+    bash -c "$HARD_RESET_CMD" >/dev/null 2>&1
+    sleep 2
+    return 0
+}
+
 calibrate_sampler() {
     local start end i
     start=$(now_ms)
@@ -447,13 +459,21 @@ scenario_1() {
         awk 'BEGIN { m = 0 } { if ($1 > m) m = $1 } END { printf "%d\n", m }')
     info "elapsed per domain: sum=${sum}ms max=${max}ms  first-frame=${first}ms"
 
-    if [ "$sum" -gt 0 ] && [ "$max" -gt 0 ]; then
-        local limit
-        limit=$(awk -v m="$max" 'BEGIN { printf "%d", m * 1.25 + 5 }')
-        if [ "$sum" -gt "$limit" ] && [ "$max" -lt "$sum" ]; then
-            info "NOTE: domains look serialized (sum ${sum}ms > ${limit}ms budget)"
-        fi
-    fi
+    # Parallelism cannot be read off sum-vs-max: two domains running
+    # concurrently for the same duration produce sum == 2 * max just as
+    # serialized ones do.  What separates them is wall clock.  gstApp logs no
+    # prepare start timestamp, but prepare completes before the first frame, so
+    # first_frame < sum proves the domains overlapped -- serialized work could
+    # not have finished the sum and produced a frame in less than the sum.
+    case "$first" in
+        [0-9]*)
+            if [ "$sum" -gt 0 ] && [ "$first" -lt "$sum" ]; then
+                info "domains overlapped: first frame at ${first}ms < ${sum}ms of prepare work"
+            elif [ "$sum" -gt 0 ] && [ "$max" -gt 0 ] && [ "$sum" -gt "$max" ]; then
+                info "NOTE: no overlap evidence (first frame ${first}ms >= ${sum}ms summed work)"
+            fi
+            ;;
+    esac
 
     if [ "$first" = "timeout" ] || [ "$first" = "died" ]; then
         result_fail "$id" "$name" "no video data after prepare (first-frame=$first)"
@@ -621,6 +641,8 @@ scenario_5() {
     local mask node mode table label
     while read -r mask node mode table label; do
         [ -n "$mask" ] || continue
+        new_hardware_epoch ||
+            info "$label: no HARD_RESET_CMD; a topology change may return ESTALE"
         kill_gstapp
         start_gstapp "s5-$label" "$mask"
         if ! wait_first_frame "$FIRST_FRAME_TIMEOUT_S" >/dev/null; then
@@ -777,6 +799,8 @@ scenario_7() {
 measure_startup() {
     local tag="$1" mask="$2" runs="$3"
     local i results="" actions=""
+    new_hardware_epoch ||
+        info "$tag: no HARD_RESET_CMD; the topology switch may return ESTALE"
     for i in $(seq 1 "$runs"); do
         kill_gstapp
         sleep 1
