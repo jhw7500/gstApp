@@ -849,7 +849,7 @@ scenario_7() {
     local warns
     warns=$(grep -ciE 'power.?count|unbalanced|leak' "$RUN_DIR/s7.dmesg.log")
 
-    local unload_ms="n/a"
+    local unload_ms="n/a" cycle_method="none"
     if command -v modprobe >/dev/null 2>&1 &&
         lsmod 2>/dev/null | grep -q "^${MAX9296_MODULE} "; then
         local t0
@@ -861,32 +861,52 @@ scenario_7() {
         # drivers first and unloads the module on the way through, so prefer it
         # when one is configured and only fall back to modprobe otherwise.
         if [ -n "$HARD_RESET_CMD" ]; then
-            if bash -c "$HARD_RESET_CMD" >/dev/null 2>&1 &&
-                lsmod 2>/dev/null | grep -q "^${MAX9296_MODULE} "; then
+            cycle_method="hard-reset"
+            if bash -c "$HARD_RESET_CMD" >/dev/null 2>&1; then
                 unload_ms=$(( $(now_ms) - t0 ))
+                # Settle before verifying, as the other HARD_RESET_CMD call
+                # sites do: the script can return before the drivers finish
+                # re-probing, and checking immediately races that.  Timing is
+                # taken first so the wait does not inflate it.
+                sleep 3
+                lsmod 2>/dev/null | grep -q "^${MAX9296_MODULE} " ||
+                    unload_ms="reset-failed"
             else
                 unload_ms="reset-failed"
             fi
         elif modprobe -r "$MAX9296_MODULE" >/dev/null 2>&1; then
+            cycle_method="modprobe"
             unload_ms=$(( $(now_ms) - t0 ))
             modprobe "$MAX9296_MODULE" >/dev/null 2>&1
             sleep 2
             lsmod 2>/dev/null | grep -q "^${MAX9296_MODULE} " ||
                 unload_ms="reload-failed"
         else
+            cycle_method="blocked"
             unload_ms="in-use"
         fi
     fi
 
-    info "soak failures=$failures  power/leak warnings=$warns  unload=${unload_ms}ms"
-    if [ "$unload_ms" = "in-use" ]; then
-        info "module unload not attempted: held by the media device, and no"
-        info "HARD_RESET_CMD to cycle it through the SoC drivers"
-    fi
+    # The two paths do not measure the same thing, so they are not reported
+    # under one label: the reset covers unbind + unload + reload, modprobe
+    # covers the unload alone.
+    case "$cycle_method" in
+        hard-reset)
+            info "module cycle via hard reset: ${unload_ms}ms (unbind + unload + reload)"
+            ;;
+        modprobe)
+            info "module unload via modprobe: ${unload_ms}ms (reload verified, untimed)"
+            ;;
+        blocked)
+            info "module unload refused: in use by the media device, and no"
+            info "HARD_RESET_CMD to cycle it through the SoC drivers; check not run"
+            ;;
+    esac
+    info "soak failures=$failures  power/leak warnings=$warns"
     if [ "$failures" -ne 0 ] || [ "$warns" -ne 0 ] ||
         [ "$unload_ms" = "reset-failed" ] || [ "$unload_ms" = "reload-failed" ]; then
         result_fail "$id" "$name" \
-            "failures=$failures warnings=$warns unload=$unload_ms"
+            "failures=$failures warnings=$warns cycle=$cycle_method/$unload_ms"
         return
     fi
     result_pass "$id" "$name"
