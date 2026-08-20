@@ -222,6 +222,7 @@ public :
     gint cfi_parser(gchar* buffer, gint len, gpointer data);
     gint json_parser(const gchar *path, const gchar *header);
     gint arg_parser(int *argc, char **argv[]);
+    gint apply_camera_sysfs();
     gint check_arg();
     void init_arg(gchar *argv);
     static gint json_object_get_value(json_object *hobj, const gchar *name, gpointer data);

@@ -794,7 +794,6 @@ gint ParserClass::arg_parser(int *argc, char **argv[]) {
   // arg* arg = (arg *)data;
   GOptionContext *ctx;
   GError *err = NULL;
-  gchar str[128];
   gint ret = 0;
   guint8 i;
   gchar *enc_option = NULL;
@@ -1035,6 +1034,13 @@ gint ParserClass::arg_parser(int *argc, char **argv[]) {
     arg.cam[i].hflip = (arg.ch_rotate >> (i * 2)) & 0x01;
     arg.cam[i].vflip = (arg.ch_rotate >> (i * 2 + 1)) & 0x01;
   }
+
+  return ret;
+}
+
+gint ParserClass::apply_camera_sysfs() {
+  gchar str[128];
+  gint ret = 0;
 
   // Use safe_write_file instead of system("echo ... > ...")
   sprintf(str, "%d", arg.ch_enable & 0x03);
