@@ -246,6 +246,7 @@ field() {
 
 LOG_READER=""
 LOG_MARK=""
+LOGGER_WARNED=0
 
 detect_log_reader() {
     if command -v journalctl >/dev/null 2>&1; then
@@ -267,8 +268,23 @@ detect_log_reader() {
 # stale line from scenario 1 turns a real failure into a pass.  Drop a unique
 # marker into syslog instead and read from the last one.
 log_mark() {
+    if ! command -v logger >/dev/null 2>&1; then
+        # Without logger no marker reaches syslog, and mark_tail would silently
+        # fall back to reading the whole log -- exactly the cross-scenario
+        # contamination the marker exists to prevent.  Say so once, and only
+        # when it can actually bite: journalctl filters by time and needs no
+        # marker.
+        LOG_MARK=""
+        if [ "$LOG_READER" != "journalctl" ] && [ "$LOGGER_WARNED" = "0" ]; then
+            LOGGER_WARNED=1
+            say "WARNING: no 'logger' binary and reader is $LOG_READER;"
+            say "         scenario log isolation is off, counts may include"
+            say "         lines from earlier scenarios"
+        fi
+        return 0
+    fi
     LOG_MARK="max9296-board-test-mark-$$-$1"
-    command -v logger >/dev/null 2>&1 && logger -p local0.notice "$LOG_MARK"
+    logger -p local0.notice "$LOG_MARK"
     return 0
 }
 
@@ -1025,7 +1041,10 @@ main() {
     # Without an explicit exit, Ctrl-C during the soak loop would restore the
     # production service and then keep restarting gstApp against it.
     trap restore_state EXIT
-    trap 'restore_state; exit 1' INT TERM HUP
+    # Disarm the signal traps on entry so a repeated Ctrl-C cannot interrupt a
+    # restore that is already underway.  The EXIT trap still runs, and
+    # restore_state is idempotent.
+    trap 'trap - INT TERM HUP; restore_state; exit 1' INT TERM HUP
     arm_safety_net
     stop_camera_service
     report_power_state
