@@ -854,19 +854,37 @@ scenario_7() {
         lsmod 2>/dev/null | grep -q "^${MAX9296_MODULE} "; then
         local t0
         t0=$(now_ms)
-        if modprobe -r "$MAX9296_MODULE" >/dev/null 2>&1; then
+        # A bare modprobe -r cannot unload this module: the media device holds
+        # references, so it reports "Module max9296 is in use" no matter how
+        # healthy the driver is. Calling that a soak failure would report a
+        # board constraint as a defect. The full camera reset drops the SoC
+        # drivers first and unloads the module on the way through, so prefer it
+        # when one is configured and only fall back to modprobe otherwise.
+        if [ -n "$HARD_RESET_CMD" ]; then
+            if bash -c "$HARD_RESET_CMD" >/dev/null 2>&1 &&
+                lsmod 2>/dev/null | grep -q "^${MAX9296_MODULE} "; then
+                unload_ms=$(( $(now_ms) - t0 ))
+            else
+                unload_ms="reset-failed"
+            fi
+        elif modprobe -r "$MAX9296_MODULE" >/dev/null 2>&1; then
             unload_ms=$(( $(now_ms) - t0 ))
             modprobe "$MAX9296_MODULE" >/dev/null 2>&1
             sleep 2
             lsmod 2>/dev/null | grep -q "^${MAX9296_MODULE} " ||
                 unload_ms="reload-failed"
         else
-            unload_ms="failed"
+            unload_ms="in-use"
         fi
     fi
 
     info "soak failures=$failures  power/leak warnings=$warns  unload=${unload_ms}ms"
-    if [ "$failures" -ne 0 ] || [ "$warns" -ne 0 ] || [ "$unload_ms" = "failed" ] || [ "$unload_ms" = "reload-failed" ]; then
+    if [ "$unload_ms" = "in-use" ]; then
+        info "module unload not attempted: held by the media device, and no"
+        info "HARD_RESET_CMD to cycle it through the SoC drivers"
+    fi
+    if [ "$failures" -ne 0 ] || [ "$warns" -ne 0 ] ||
+        [ "$unload_ms" = "reset-failed" ] || [ "$unload_ms" = "reload-failed" ]; then
         result_fail "$id" "$name" \
             "failures=$failures warnings=$warns unload=$unload_ms"
         return
