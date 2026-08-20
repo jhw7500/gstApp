@@ -26,6 +26,7 @@ CSI1_NODE="/sys/bus/i2c/devices/1-0048/prepare"
 : "${FIRST_FRAME_TIMEOUT_S:=30}"
 : "${MAX9296_MODULE:=max9296}"
 : "${HARD_RESET_CMD:=}"
+: "${SOAK_ITERATIONS:=100}"
 
 SCENARIOS="fast"
 ALLOW_DESTRUCTIVE=0
@@ -39,6 +40,7 @@ SKIP_COUNT=0
 FAILED_LIST=""
 
 RUN_DIR=""
+UNBIND_MARKER=""
 SERVICE_WAS_ACTIVE=0
 CLOCK_SOURCE="unknown"
 SAMPLE_COST_MS="?"
@@ -66,6 +68,7 @@ Options:
 Environment overrides:
   GSTAPP_BIN CAM_SERVICE CAM_WIDTH CAM_HEIGHT DUAL_MASK SINGLE_MASK
   GSTAPP_EXTRA_ARGS FIRST_FRAME_TIMEOUT_S MAX9296_MODULE HARD_RESET_CMD
+  SOAK_ITERATIONS (scenario 7 restart count, default 100)
 
 HARD_RESET_CMD runs when the shared power refcount is not 0, e.g.
   HARD_RESET_CMD='/root/tools/cam_hard_reset.sh -s'
@@ -139,7 +142,7 @@ detect_clock() {
 # proxy for "real video data came out": it counts completions in the capture
 # path itself, independent of any GStreamer sink or downstream negotiation.
 isi_total() {
-    awk 'tolower($0) ~ /isi/ {
+    awk '$1 ~ /^[0-9]+:$/ && tolower($NF) ~ /\.isi$/ {
              for (i = 2; i <= NF; i++) {
                  if ($i ~ /^[0-9]+$/) s += $i; else break
              }
@@ -150,7 +153,7 @@ isi_total() {
 # Frames the deserializer pushed over MIPI.  Used to tell "source never sent"
 # apart from "source sent, nothing landed".
 csi_total() {
-    awk 'tolower($0) ~ /csi/ {
+    awk '$1 ~ /^[0-9]+:$/ && tolower($NF) ~ /\.csi$/ {
              for (i = 2; i <= NF; i++) {
                  if ($i ~ /^[0-9]+$/) s += $i; else break
              }
@@ -242,6 +245,7 @@ field() {
 # --------------------------------------------------------------- log access --
 
 LOG_READER=""
+LOG_MARK=""
 
 detect_log_reader() {
     if command -v journalctl >/dev/null 2>&1; then
@@ -257,16 +261,37 @@ detect_log_reader() {
     fi
 }
 
+# Only journalctl can be asked for "lines since time T".  logread and the plain
+# files cannot, and reading them whole would let one scenario count another
+# scenario's lines -- scenario 2 asserts on how many domains reported WARM, so a
+# stale line from scenario 1 turns a real failure into a pass.  Drop a unique
+# marker into syslog instead and read from the last one.
+log_mark() {
+    LOG_MARK="max9296-board-test-mark-$$-$1"
+    command -v logger >/dev/null 2>&1 && logger -p local0.notice "$LOG_MARK"
+    return 0
+}
+
 # app_log <since-epoch-seconds> -> gstApp syslog lines
 app_log() {
     local since="$1"
     case "$LOG_READER" in
         journalctl) journalctl --since "@${since}" --no-pager 2>/dev/null ;;
-        logread) logread 2>/dev/null ;;
-        messages) cat /var/log/messages 2>/dev/null ;;
-        syslog) cat /var/log/syslog 2>/dev/null ;;
+        logread) logread 2>/dev/null | mark_tail ;;
+        messages) mark_tail </var/log/messages 2>/dev/null ;;
+        syslog) mark_tail </var/log/syslog 2>/dev/null ;;
         *) return 1 ;;
     esac
+}
+
+# Everything after the last marker, or everything when no marker was written.
+mark_tail() {
+    if [ -z "${LOG_MARK:-}" ]; then
+        cat
+        return 0
+    fi
+    awk -v m="$LOG_MARK" '$0 ~ m { out = "" ; next } { out = out $0 "\n" }
+                          END { printf "%s", out }'
 }
 
 prepare_log() { app_log "$1" | grep 'MAX9296_PREPARE' ; }
@@ -293,13 +318,18 @@ resolve_gstapp() {
 }
 
 kill_gstapp() {
-    pkill -x gstApp >/dev/null 2>&1
+    # Match the binary actually under test, not the literal "gstApp": a run
+    # pointed at a renamed build would otherwise leave it alive and break
+    # isolation between scenarios.
+    local name
+    name=$(basename "${GSTAPP_BIN:-gstApp}")
+    pkill -x "$name" >/dev/null 2>&1
     local i
     for i in $(seq 1 50); do
-        pgrep -x gstApp >/dev/null 2>&1 || return 0
+        pgrep -x "$name" >/dev/null 2>&1 || return 0
         sleep 0.2
     done
-    pkill -9 -x gstApp >/dev/null 2>&1
+    pkill -9 -x "$name" >/dev/null 2>&1
     sleep 1
     return 0
 }
@@ -318,8 +348,9 @@ start_gstapp() {
 
 # wait_first_frame <timeout-s> -> echoes elapsed ms, or "timeout"
 wait_first_frame() {
-    local timeout_s="$1" base_isi deadline cur
+    local timeout_s="$1" base_isi base_csi deadline cur
     base_isi=$(isi_total)
+    base_csi=$(csi_total)
     deadline=$(( $(now_ms) + timeout_s * 1000 ))
     while :; do
         cur=$(isi_total)
@@ -332,9 +363,21 @@ wait_first_frame() {
             return 1
         fi
         if [ "$(now_ms)" -ge "$deadline" ]; then
-            printf 'timeout\n'
+            # Say which half of the path stalled: MIPI frames arriving with
+            # nothing written to memory is a different fault from no frames
+            # leaving the deserializer at all.
+            if [ "$(csi_total)" -gt "$base_csi" ]; then
+                printf 'timeout(csi-only)\n'
+            else
+                printf 'timeout(no-csi)\n'
+            fi
             return 1
         fi
+        # Yield.  Each iteration already forks awk, so the loop is CPU-bound
+        # without this; on a board that also matters for what is being measured
+        # -- a harness saturating a core perturbs gstApp's own startup.  The
+        # sampler costs milliseconds anyway, so the added latency is noise.
+        sleep 0.01
     done
 }
 
@@ -370,16 +413,27 @@ check_cmdline_hazard() {
 
 # A SIGKILL leaves no chance to run the EXIT trap, so restoration cannot depend
 # on this process surviving.  Hand it to a detached child that watches the
-# parent and restores the service once it is gone.  It self-disarms: a clean
-# exit restores the service first, and the child then finds it already active.
+# parent and restores the service once it is gone.
+#
+# Restoring the service is not enough on its own.  Scenario 6 unbinds an i2c
+# device to hide an ABI node; a kill in that window would leave the node gone
+# and the service would come back to hardware it cannot reach.  The child
+# cannot read this shell's variables, so the unbind is recorded in a marker
+# file that the child rebinds from.  Both steps self-disarm: a clean exit
+# rebinds and restores first, and the child then finds nothing left to do.
 arm_safety_net() {
     [ "$KEEP_SERVICE" -eq 1 ] && return 0
     command -v systemctl >/dev/null 2>&1 || return 0
     setsid bash -c "
         while kill -0 $$ 2>/dev/null; do sleep 5; done
+        if [ -s '$UNBIND_MARKER' ]; then
+            read -r dev drv < '$UNBIND_MARKER'
+            [ -n \"\$dev\" ] && [ -w \"\$drv/bind\" ] && printf '%s\\n' \"\$dev\" > \"\$drv/bind\"
+            sleep 3
+        fi
         systemctl is-active --quiet '$CAM_SERVICE' || systemctl start '$CAM_SERVICE'
     " >/dev/null 2>&1 </dev/null &
-    say "safety net armed: $CAM_SERVICE is restored even if this run is killed"
+    say "safety net armed: $CAM_SERVICE and any unbound node are restored even if this run is killed"
 }
 
 stop_camera_service() {
@@ -421,7 +475,7 @@ scenario_1() {
     local id="1" name="cold dual-CSI"
     kill_gstapp
     local since
-    since=$(date +%s)
+    since=$(date +%s); log_mark s1
     start_gstapp "s1" "$DUAL_MASK"
     local first
     first=$(wait_first_frame "$FIRST_FRAME_TIMEOUT_S")
@@ -475,10 +529,11 @@ scenario_1() {
             ;;
     esac
 
-    if [ "$first" = "timeout" ] || [ "$first" = "died" ]; then
+    case "$first" in [0-9]*) ;; *)
         result_fail "$id" "$name" "no video data after prepare (first-frame=$first)"
         return
-    fi
+        ;;
+    esac
 
     result_pass "$id" "$name"
 }
@@ -496,7 +551,7 @@ scenario_2() {
     sleep 3
 
     local since dmesg_before
-    since=$(date +%s)
+    since=$(date +%s); log_mark s2
     dmesg_before=$(dmesg 2>/dev/null | wc -l)
     start_gstapp "s2b" "$DUAL_MASK"
     local first
@@ -523,10 +578,11 @@ scenario_2() {
             "expected every domain WARM_REUSED (action=2), got $warm of $total"
         return
     fi
-    if [ "$first" = "timeout" ] || [ "$first" = "died" ]; then
+    case "$first" in [0-9]*) ;; *)
         result_fail "$id" "$name" "warm reuse did not recover frames (first-frame=$first)"
         return
-    fi
+        ;;
+    esac
     result_pass "$id" "$name"
 }
 
@@ -571,10 +627,11 @@ scenario_3() {
     local retry
     retry=$(wait_first_frame "$FIRST_FRAME_TIMEOUT_S")
     kill_gstapp
-    if [ "$retry" = "timeout" ] || [ "$retry" = "died" ]; then
+    case "$retry" in [0-9]*) ;; *)
         result_fail "$id" "$name" "retry after first exit failed (first-frame=$retry)"
         return
-    fi
+        ;;
+    esac
     result_pass "$id" "$name"
 }
 
@@ -682,6 +739,7 @@ restore_abi_nodes() {
         printf '%s\n' "$dev" >/sys/bus/i2c/drivers_probe 2>/dev/null
     fi
     HIDDEN_NODE=""
+    [ -n "$UNBIND_MARKER" ] && rm -f "$UNBIND_MARKER"
     return 0
 }
 
@@ -703,6 +761,8 @@ scenario_6() {
     kill_gstapp
     printf '%s\n' "$dev" >"$driver_dir/unbind" 2>/dev/null
     HIDDEN_NODE="$CSI1_NODE"
+    # Tell the detached safety net what to rebind if this process is killed.
+    printf '%s %s\n' "$dev" "$driver_dir" >"$UNBIND_MARKER"
     sleep 1
 
     if [ -e "$CSI1_NODE" ]; then
@@ -712,7 +772,7 @@ scenario_6() {
     fi
 
     local since
-    since=$(date +%s)
+    since=$(date +%s); log_mark s6
     "$GSTAPP_BIN" --channel "$DUAL_MASK" --width "$CAM_WIDTH" --height "$CAM_HEIGHT" \
         >"$RUN_DIR/s6.out" 2>&1
     local rc=$?
@@ -750,7 +810,7 @@ scenario_7() {
         return
     fi
 
-    local iterations="${SOAK_ITERATIONS:-100}"
+    local iterations="$SOAK_ITERATIONS"
     local i failures=0
     say "       soak: $iterations restarts, this takes a while"
     for i in $(seq 1 "$iterations"); do
@@ -758,10 +818,13 @@ scenario_7() {
         start_gstapp "s7" "$DUAL_MASK"
         local r
         r=$(wait_first_frame "$FIRST_FRAME_TIMEOUT_S")
-        if [ "$r" = "timeout" ] || [ "$r" = "died" ]; then
+        case "$r" in
+            [0-9]*) ;;
+            *)
             failures=$((failures + 1))
             info "iteration $i: first-frame=$r"
-        fi
+            ;;
+        esac
         kill_gstapp
         [ $((i % 10)) -eq 0 ] && info "iteration $i/$iterations, failures=$failures"
     done
@@ -779,13 +842,15 @@ scenario_7() {
             unload_ms=$(( $(now_ms) - t0 ))
             modprobe "$MAX9296_MODULE" >/dev/null 2>&1
             sleep 2
+            lsmod 2>/dev/null | grep -q "^${MAX9296_MODULE} " ||
+                unload_ms="reload-failed"
         else
             unload_ms="failed"
         fi
     fi
 
     info "soak failures=$failures  power/leak warnings=$warns  unload=${unload_ms}ms"
-    if [ "$failures" -ne 0 ] || [ "$warns" -ne 0 ] || [ "$unload_ms" = "failed" ]; then
+    if [ "$failures" -ne 0 ] || [ "$warns" -ne 0 ] || [ "$unload_ms" = "failed" ] || [ "$unload_ms" = "reload-failed" ]; then
         result_fail "$id" "$name" \
             "failures=$failures warnings=$warns unload=$unload_ms"
         return
@@ -805,7 +870,7 @@ measure_startup() {
         kill_gstapp
         sleep 1
         local since
-        since=$(date +%s)
+        since=$(date +%s); log_mark "s8-$tag-$i"
         start_gstapp "s8-$tag-$i" "$mask"
         local ms
         ms=$(wait_first_frame "$FIRST_FRAME_TIMEOUT_S")
@@ -952,10 +1017,15 @@ main() {
 
     RUN_DIR="/tmp/max9296-board-test.$(date +%Y%m%d-%H%M%S)"
     mkdir -p "$RUN_DIR" || exit 2
+    UNBIND_MARKER="$RUN_DIR/unbound-device"
     say "  logs      : $RUN_DIR"
     say ""
 
-    trap restore_state EXIT INT TERM HUP
+    # A signal trap runs the handler and RESUMES; only EXIT is terminal.
+    # Without an explicit exit, Ctrl-C during the soak loop would restore the
+    # production service and then keep restarting gstApp against it.
+    trap restore_state EXIT
+    trap 'restore_state; exit 1' INT TERM HUP
     arm_safety_net
     stop_camera_service
     report_power_state
