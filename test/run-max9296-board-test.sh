@@ -186,24 +186,37 @@ global_power_users() {
 report_power_state() {
     local users
     users=$(global_power_users)
-    if [ -z "$users" ]; then
-        info "shared power refcount: not observable in the kernel log"
-        return 0
-    fi
 
-    if [ "$users" != "0" ] && [ -n "$HARD_RESET_CMD" ]; then
-        say "shared power refcount is $users; running HARD_RESET_CMD"
+    # An unreadable count is not evidence of a cold board, and treating it as
+    # one skipped the reset entirely -- the hardware stayed programmed with the
+    # previous tuple and every prepare came back ESTALE.  Reset whenever one is
+    # configured and the board cannot be shown to be cold.
+    if [ -n "$HARD_RESET_CMD" ] && [ "$users" != "0" ]; then
+        say "shared power refcount is ${users:-unreadable}; running HARD_RESET_CMD"
         bash -c "$HARD_RESET_CMD"
         sleep 3
         users=$(global_power_users)
     fi
 
-    info "shared power refcount: $users"
-    if [ "$users" != "0" ]; then
-        info "cold-start scenarios run on top of a leaked reference; a driver"
-        info "that adopts it prepares normally, one that gates on it returns"
-        info "EBUSY.  For a true cold baseline, hard reset first:"
-        info "  HARD_RESET_CMD='/root/tools/cam_hard_reset.sh -s' $0 --scenario 1"
+    info "shared power refcount: ${users:-not observable in the kernel log}"
+
+    # The driver's own guidance for a cold baseline: after the reset the node
+    # must read IDLE with no generation.  A leftover generation means the
+    # hardware is still owned by the previous tuple, and a topology change will
+    # be refused with ESTALE.
+    local cold
+    cold=$(read_prepare_node "$CSI0_NODE" || true)
+    if [ -n "$cold" ]; then
+        local st gen
+        st=$(field "$cold" state)
+        gen=$(field "$cold" generation)
+        info "CSI0 baseline: state=${st:-?} generation=${gen:-?}"
+        if [ "$(printf '%s' "$st" | tr '[:upper:]' '[:lower:]')" != "idle" ] ||
+            [ "${gen:-0}" != "0" ]; then
+            info "not a cold baseline; a topology change will return ESTALE."
+            info "hard reset first:"
+            info "  HARD_RESET_CMD='/root/tools/cam_hard_reset.sh -s' $0 --scenario 1"
+        fi
     fi
     return 0
 }
