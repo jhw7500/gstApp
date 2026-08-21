@@ -193,7 +193,12 @@ report_power_state() {
     # configured and the board cannot be shown to be cold.
     if [ -n "$HARD_RESET_CMD" ] && [ "$users" != "0" ]; then
         say "shared power refcount is ${users:-unreadable}; running HARD_RESET_CMD"
-        bash -c "$HARD_RESET_CMD"
+        # The widened condition runs this far more often, and the script has no
+        # errexit.  A failed reset leaves the board warm; say so rather than
+        # letting the run continue as though it were cold.
+        if ! bash -c "$HARD_RESET_CMD"; then
+            info "HARD_RESET_CMD failed; the board is probably still warm"
+        fi
         sleep 3
         users=$(global_power_users)
     fi
