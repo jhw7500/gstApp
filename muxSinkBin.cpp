@@ -174,6 +174,13 @@ void MuxSinkBin::handleFragmentOpened(const gchar *location, GstClockTime runnin
 
   // 시작 시간 기록
   muxSinkData.last_running_time = running_time;
+
+  /* [채널 간 스큐 판정용] splitCheck() 는 이 값으로 채널 간 어긋남을 잰다.
+   * 파일이 열린 벽시계(split_msec)가 아니라 조각 첫 내용의 running-time 이므로,
+   * 스트리밍 스레드 스케줄링 지연이 판정에 섞이지 않는다. */
+  muxSinkData.split_running_time = running_time;
+  /* 이 조각의 running-time 이 도착했다 -> 비교에 쓸 수 있다 */
+  g_atomic_int_set(&muxSinkData.split_rt_stale, 0);
 }
 
 void MuxSinkBin::handleFragmentClosed(const gchar *location, GstClockTime running_time, GstClockTime duration) {
@@ -495,6 +502,20 @@ void MuxSinkBin::setLastRunningTime(GstClockTime rt) {
 
 gint MuxSinkBin::getSplitMsec() { return muxSinkData.split_msec; }
 
+GstClockTime MuxSinkBin::getSplitRunningTime() {
+  return muxSinkData.split_running_time;
+}
+
+void MuxSinkBin::setSplitRunningTime(GstClockTime rt) {
+  muxSinkData.split_running_time = rt;
+  g_atomic_int_set(&muxSinkData.split_rt_stale,
+                   GST_CLOCK_TIME_IS_VALID(rt) ? 0 : 1);
+}
+
+gboolean MuxSinkBin::isSplitRunningTimeFresh() {
+  return g_atomic_int_get(&muxSinkData.split_rt_stale) == 0;
+}
+
 gchararray format_location(GstElement *sink, guint arg0, gpointer data) {
   MuxSinkData *info = (MuxSinkData *)data;
   GDateTime *datetime = g_date_time_new_now_local();
@@ -511,6 +532,13 @@ gchararray format_location(GstElement *sink, guint arg0, gpointer data) {
    * 한 채널만 살아 있어도 마커가 계속 기록된다. (아래 marker_claim 참조) */
 
   info->split_msec = sec * 1000 + usec / 1000;
+
+  /* 새 조각이 열리는 중이다. split_msec 은 여기서(스트리밍 스레드) 즉시 갱신되지만
+   * split_running_time 은 fragment-opened 버스 메시지를 메인 루프가 처리할 때까지
+   * '이전 조각' 값으로 남는다. 그 사이에 splitCheck(500ms 타이머, 메인 루프)가 끼면
+   * 채널마다 다른 조각의 running-time 을 비교해 분 단위 가짜 스큐 -> 불필요한 강제 분할이
+   * 발생한다. 짝이 맞을 때까지 stale 로 표시해 벽시계 기준으로 안전하게 되돌린다. */
+  g_atomic_int_set(&info->split_rt_stale, 1);
 
   if (cmdArg.audio_en && info->split_msec >= cmdArg.split_audio_min_msec) {
     __LOG(LOG_NOTICE, "[GST][%s:%d] audio limit %d msec over..", _FILE_,
@@ -662,6 +690,8 @@ MuxSinkBin::MuxSinkBin() {
   be.bin = NULL;
   muxSinkData.start_f = 0;
   muxSinkData.split_msec = 0;
+  muxSinkData.split_running_time = GST_CLOCK_TIME_NONE;
+  muxSinkData.split_rt_stale = 1;  /* 아직 조각이 열리지 않았다 */
   muxSinkData.last_timestamp = NULL;
   muxSinkData.last_running_time = GST_CLOCK_TIME_NONE;
   muxSinkData.last_end_time = GST_CLOCK_TIME_NONE;
