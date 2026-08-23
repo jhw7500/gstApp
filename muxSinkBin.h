@@ -36,6 +36,9 @@ typedef struct _MuxSinkData
     GstClockTime last_running_time; // 이전 분할 시점의 running-time
     GstClockTime last_end_time;     // 마지막으로 닫힌 파일의 종료 시간
     GstClockTime last_duration;     // 마지막으로 닫힌 파일의 실제 녹화 길이
+    /* 새 조각이 열린 시점의 running-time. 파이프라인 공통 시간축 위의 '내용' 시각이라
+     * 채널 간 직접 비교가 가능하다. split_msec(벽시계)과 달리 콜백 처리 지연이 섞이지 않는다. */
+    GstClockTime split_running_time;
 } MuxSinkData;
 
 void setSplitTargetEpoch(gint64 epoch_sec);
@@ -58,6 +61,8 @@ public :
     gint getSplitMsec();
     void setSplitMsec(gint msec);
     void setLastRunningTime(GstClockTime rt);
+    GstClockTime getSplitRunningTime();
+    void setSplitRunningTime(GstClockTime rt);
     void handle_last_sample();
     void handleFragmentOpened(const gchar *location, GstClockTime running_time);
     void handleFragmentClosed(const gchar *location, GstClockTime running_time, GstClockTime duration);

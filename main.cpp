@@ -505,6 +505,11 @@ static void splitCheck(gpointer data, guint8 startSec) {
   if (diff >= 0) {
     gboolean is_fully_aligned = TRUE;
     gint splitMax = G_MININT, splitMin = G_MAXINT;
+    /* [내용 기준 스큐] fragment-opened 의 running-time 은 파이프라인 공통 시간축이라
+     * 채널 간 직접 비교가 된다. 집계 채널 중 하나라도 값이 없으면 rt_usable 이 꺾이고
+     * 기존 벽시계 기준으로 되돌아간다. */
+    GstClockTime rtMax = 0, rtMin = G_MAXUINT64;
+    gboolean rt_usable = TRUE;
     gint active_count = 0;
 
     for (i = 0; i < MAX_CHANNEL; i++) {
@@ -529,13 +534,54 @@ static void splitCheck(gpointer data, guint8 startSec) {
 
       // 채널 간 스큐는 부호 있는 값으로 비교해야 분 경계에서 뒤집히지 않는다.
       // (raw 비교 시 59900 과 100 의 차이가 170ms 가 아니라 59800ms 로 계산됨)
+      // 이 값은 이제 fallback 이며, 아래 running-time 기준이 우선한다.
       if (signed_ms > splitMax) splitMax = signed_ms;
       if (signed_ms < splitMin) splitMin = signed_ms;
+
+      GstClockTime rt = muxSinkBin[i].getSplitRunningTime();
+      if (GST_CLOCK_TIME_IS_VALID(rt)) {
+        if (rt > rtMax) rtMax = rt;
+        if (rt < rtMin) rtMin = rt;
+      } else {
+        rt_usable = FALSE;
+      }
     }
 
-    // 채널 간 스큐(Skew) 확인
-    if (active_count > 1 && (splitMax - splitMin >= cmdArg.split_diff_msec)) {
+    /* 채널 간 스큐(Skew) 확인.
+     * 판정 대상은 '파일 내용의 경계'이므로 running-time 을 기준으로 삼는다.
+     * 벽시계 split_msec 은 파일이 열린 '시각' 이라 스트리밍 스레드 스케줄링 지연을
+     * 그대로 담는다. 즉 네 채널 내용이 완전히 정렬돼 있어도 임계를 넘겨
+     * 불필요한 강제 분할(스냅백)을 유발할 수 있다.
+     * running-time 을 얻지 못한 채널이 있으면 기존 벽시계 기준으로 되돌린다. */
+    gint wall_skew_ms = (active_count > 1) ? (splitMax - splitMin) : 0;
+    gint skew_ms = wall_skew_ms;
+    const gchar *skew_basis = "wall-clock";
+    if (active_count > 1 && rt_usable) {
+      skew_ms = (gint)((rtMax - rtMin) / GST_MSECOND);
+      skew_basis = "running-time";
+    }
+    if (active_count > 1 && skew_ms >= cmdArg.split_diff_msec) {
       is_fully_aligned = FALSE;
+    }
+    /* 판정 기준을 현장에서 확인할 수 있어야 한다. 운영 log_level 은 NOTICE(5) 이므로
+     * DEBUG 로 남기면 타겟에 보이지 않는다(실측 확인). 다만 매분 찍으면 로그가 더러워지므로
+     * '기준이 바뀌는 순간'만 사건으로 보고 최초 1회 포함해 NOTICE 로 남긴다.
+     * running-time -> wall-clock 으로 떨어지는 순간이 곧 조사 대상이다. */
+    static const gchar *reported_basis = NULL;
+    static gint reported_active = -1;
+    if (active_count > 1 &&
+        (g_strcmp0(reported_basis, skew_basis) != 0 ||
+         reported_active != active_count)) {
+      __LOG(LOG_NOTICE,
+            "[GST][%s:%d] skew basis: %s (skew:%dms, wall-skew:%dms, active:%d)",
+            _FILE_, __LINE__, skew_basis, skew_ms, wall_skew_ms, active_count);
+      reported_basis = skew_basis;
+      reported_active = active_count;
+    }
+    if (diff < 5 && active_count > 1) {
+      __LOG(LOG_DEBUG,
+            "[GST][%s:%d] skew:%dms (%s), wall-skew:%dms, active:%d",
+            _FILE_, __LINE__, skew_ms, skew_basis, wall_skew_ms, active_count);
     }
 
     if (is_fully_aligned) {
@@ -545,6 +591,7 @@ static void splitCheck(gpointer data, guint8 startSec) {
           if ((g_link_disconnect_mask >> i) & 1) continue;
           muxSinkBin[i].splitNow(NULL, FALSE);
           muxSinkBin[i].setSplitMsec(SPLIT_MSEC_UNSET);
+          muxSinkBin[i].setSplitRunningTime(GST_CLOCK_TIME_NONE);
         }
         need_first_split = FALSE;
       }
@@ -580,8 +627,11 @@ static void splitCheck(gpointer data, guint8 startSec) {
     }
 
     if (do_force) {
-      __LOG(LOG_ERR, "[GST][%s:%d] Snap-back split (diff:%ds, smMax:%dms, skew:%dms)", 
-            _FILE_, __LINE__, diff, splitMax, (active_count > 1 ? splitMax - splitMin : 0));
+      /* 두 기준을 함께 남긴다: 현장 로그만으로 '실제 어긋남'과
+       * '벽시계 프록시 잡음'을 사후 분리할 수 있어야 한다. */
+      __LOG(LOG_ERR,
+            "[GST][%s:%d] Snap-back split (diff:%ds, smMax:%dms, skew:%dms/%s, wall-skew:%dms)",
+            _FILE_, __LINE__, diff, splitMax, skew_ms, skew_basis, wall_skew_ms);
       
       if (cmdArg.dual_enc == FALSE && eBin != NULL) {
         for (i = 0; i < MAX_CHANNEL; i++) {
@@ -600,6 +650,7 @@ static void splitCheck(gpointer data, guint8 startSec) {
         if ((g_link_disconnect_mask >> i) & 1) continue;
         muxSinkBin[i].splitNow(NULL, FALSE);
         muxSinkBin[i].setSplitMsec(SPLIT_MSEC_UNSET);
+        muxSinkBin[i].setSplitRunningTime(GST_CLOCK_TIME_NONE);
       }
       target_min = (target_min + cmdArg.duration) % 60;
       last_split_ts = g_get_monotonic_time();

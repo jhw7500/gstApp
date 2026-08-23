@@ -174,6 +174,11 @@ void MuxSinkBin::handleFragmentOpened(const gchar *location, GstClockTime runnin
 
   // 시작 시간 기록
   muxSinkData.last_running_time = running_time;
+
+  /* [채널 간 스큐 판정용] splitCheck() 는 이 값으로 채널 간 어긋남을 잰다.
+   * 파일이 열린 벽시계(split_msec)가 아니라 조각 첫 내용의 running-time 이므로,
+   * 스트리밍 스레드 스케줄링 지연이 판정에 섞이지 않는다. */
+  muxSinkData.split_running_time = running_time;
 }
 
 void MuxSinkBin::handleFragmentClosed(const gchar *location, GstClockTime running_time, GstClockTime duration) {
@@ -495,6 +500,14 @@ void MuxSinkBin::setLastRunningTime(GstClockTime rt) {
 
 gint MuxSinkBin::getSplitMsec() { return muxSinkData.split_msec; }
 
+GstClockTime MuxSinkBin::getSplitRunningTime() {
+  return muxSinkData.split_running_time;
+}
+
+void MuxSinkBin::setSplitRunningTime(GstClockTime rt) {
+  muxSinkData.split_running_time = rt;
+}
+
 gchararray format_location(GstElement *sink, guint arg0, gpointer data) {
   MuxSinkData *info = (MuxSinkData *)data;
   GDateTime *datetime = g_date_time_new_now_local();
@@ -662,6 +675,7 @@ MuxSinkBin::MuxSinkBin() {
   be.bin = NULL;
   muxSinkData.start_f = 0;
   muxSinkData.split_msec = 0;
+  muxSinkData.split_running_time = GST_CLOCK_TIME_NONE;
   muxSinkData.last_timestamp = NULL;
   muxSinkData.last_running_time = GST_CLOCK_TIME_NONE;
   muxSinkData.last_end_time = GST_CLOCK_TIME_NONE;
