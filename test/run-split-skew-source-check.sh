@@ -81,4 +81,55 @@ if bad:
 print("  reset pairing ok (%d sites)" % len(unset))
 PY
 
+# 8. 자동 롤오버 짝 맞춤 — 7번(강제 분할 경로)만으로는 못 잡는 구멍이다.
+#    splitmuxsink 가 max-size-time 으로 스스로 조각을 넘길 때는 splitNow() 를 거치지 않으므로
+#    7번의 리셋 지점이 실행되지 않는다. 그때 format_location(스트리밍 스레드)은 split_msec 을
+#    즉시 갱신하지만 split_running_time 은 fragment-opened 를 메인 루프가 처리할 때까지
+#    '이전 조각' 값으로 남는다. 채널마다 이 타이밍이 다르면 splitCheck 가 서로 다른 조각의
+#    running-time 을 비교해 분 단위 가짜 스큐를 만든다(PR #53 Codex P1).
+grep -q 'gint split_rt_stale;' muxSinkBin.h || fail "split_rt_stale 필드 없음"
+grep -q 'gboolean isSplitRunningTimeFresh();' muxSinkBin.h || fail "isSplitRunningTimeFresh 선언 없음"
+grep -q 'isSplitRunningTimeFresh()' main.cpp || fail "splitCheck 가 fresh 여부를 검사하지 않음"
+
+python3 - <<'PYCHK'
+import re, sys
+from pathlib import Path
+src = Path('muxSinkBin.cpp').read_text(encoding='utf-8')
+
+# format_location 본문 안에서 split_msec 갱신과 stale 표시가 함께 있어야 한다
+m = re.search(r'gchararray\s+format_location\s*\([^)]*\)\s*\{', src)
+if not m:
+    print("split skew source contract: format_location 정의를 찾지 못함", file=sys.stderr); sys.exit(1)
+depth, i = 0, m.end() - 1
+while i < len(src):
+    if src[i] == '{': depth += 1
+    elif src[i] == '}':
+        depth -= 1
+        if depth == 0: break
+    i += 1
+body = src[m.end():i]
+if 'split_msec =' not in body:
+    print("split skew source contract: format_location 이 split_msec 을 갱신하지 않음", file=sys.stderr); sys.exit(1)
+if 'split_rt_stale' not in body:
+    print("split skew source contract: format_location 이 split_msec 만 갱신하고 split_rt_stale 을 "
+          "표시하지 않는다 - 자동 롤오버에서 조각이 섞여 가짜 스큐가 발생한다", file=sys.stderr); sys.exit(1)
+
+# handleFragmentOpened 는 running-time 을 채운 뒤 fresh 로 되돌려야 한다
+h = re.search(r'void\s+MuxSinkBin::handleFragmentOpened\s*\([^)]*\)\s*\{', src)
+if not h:
+    print("split skew source contract: handleFragmentOpened 정의를 찾지 못함", file=sys.stderr); sys.exit(1)
+depth, i = 0, h.end() - 1
+while i < len(src):
+    if src[i] == '{': depth += 1
+    elif src[i] == '}':
+        depth -= 1
+        if depth == 0: break
+    i += 1
+hbody = src[h.end():i]
+if 'split_running_time = running_time' not in hbody or 'split_rt_stale, 0' not in hbody:
+    print("split skew source contract: handleFragmentOpened 가 running-time 저장과 fresh 복귀를 "
+          "함께 하지 않는다", file=sys.stderr); sys.exit(1)
+print("  fragment pairing ok (format_location marks stale, fragment-opened clears)")
+PYCHK
+
 echo "split skew source contract: PASSED"

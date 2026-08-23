@@ -538,8 +538,11 @@ static void splitCheck(gpointer data, guint8 startSec) {
       if (signed_ms > splitMax) splitMax = signed_ms;
       if (signed_ms < splitMin) splitMin = signed_ms;
 
+      /* fresh 하지 않으면(= 새 조각의 fragment-opened 가 아직 안 왔으면) 이 값은
+       * 이전 조각 것이다. 채널 간 조각이 섞이면 분 단위 가짜 스큐가 나오므로
+       * 그 라운드는 벽시계 기준으로 되돌린다. */
       GstClockTime rt = muxSinkBin[i].getSplitRunningTime();
-      if (GST_CLOCK_TIME_IS_VALID(rt)) {
+      if (muxSinkBin[i].isSplitRunningTimeFresh() && GST_CLOCK_TIME_IS_VALID(rt)) {
         if (rt > rtMax) rtMax = rt;
         if (rt < rtMin) rtMin = rt;
       } else {
