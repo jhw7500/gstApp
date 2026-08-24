@@ -92,6 +92,12 @@ See `projects/GITLAB_PUBLISH.md`.
 ### Logging
 - Use existing logging macros and categories (`__LOG`, `LOG_*`).
 - Keep log messages consistent with the prefix format: `[TAG][file:line] ...`.
+- Operator-facing logs — state changes, mode switches, decision baselines — must be
+  `LOG_NOTICE` or above. The deployed `log_level` is NOTICE(5), so anything emitted at
+  `DEBUG` is invisible on target (verified in the field). `DEBUG` is for developer tracing only.
+- Gate repeated lines on change-only emission: log the moment a value changes (including the
+  first observation), not once per cycle. See the `skew_basis` reporting in `main.cpp` for the
+  pattern — `static` last-reported state, compared before emitting.
 
 ### Concurrency & Signals
 - Signal handlers log via `__LOG` and signal the GStreamer pipeline.
