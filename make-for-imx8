@@ -21,3 +21,17 @@ export PKG_CONFIG_DIR=''
 
 make "$@"
 
+
+# --- clangd: compile_commands.json 자동 갱신 ---------------------------------
+# kbuild 가 아니라 .cmd 가 없다. compiledb 로 make -n 출력을 파싱한다 (컴파일 없음).
+# 설치: python3 -m pip install --user compiledb
+_cc_rc=$?
+if [ "$_cc_rc" -eq 0 ] && command -v compiledb >/dev/null 2>&1 \
+   && ! printf '%s\n' "$@" | grep -qxE 'clean|distclean'; then
+    if compiledb -n make >/dev/null 2>&1; then
+        echo "compile_commands.json 갱신됨 (clangd)"
+    else
+        echo "compile_commands.json 갱신 실패 — 빌드 자체는 정상" >&2
+    fi
+fi
+exit "$_cc_rc"
