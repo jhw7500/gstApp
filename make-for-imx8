@@ -25,12 +25,24 @@ make "$@"
 # --- clangd: compile_commands.json 자동 갱신 ---------------------------------
 # kbuild 가 아니라 .cmd 가 없다. compiledb 로 make -n 출력을 파싱한다 (컴파일 없음).
 # 설치: python3 -m pip install --user compiledb
+#
+# 빌드에 넘긴 "$@" 를 그대로 넘긴다 — 빠뜨리면 방금 빌드한 타겟이 아니라
+# 기본 타겟의 DB 가 만들어진다.
+# 임시 파일에 생성한 뒤 "file" 키를 확인하고서야 교체한다 — 정리 타겟 등으로
+# 빈 DB 가 나와도 기존 파일을 덮지 않는다.
 _cc_rc=$?
-if [ "$_cc_rc" -eq 0 ] && command -v compiledb >/dev/null 2>&1 \
-   && ! printf '%s\n' "$@" | grep -qxE 'clean|distclean'; then
-    if compiledb -n make >/dev/null 2>&1; then
+_cc_skip=0
+for _cc_a in "$@"; do
+    case "$_cc_a" in clean|distclean|mrproper|realclean) _cc_skip=1 ;; esac
+done
+if [ "$_cc_rc" -eq 0 ] && [ "$_cc_skip" -eq 0 ] && command -v compiledb >/dev/null 2>&1; then
+    _cc_tmp=".compile_commands.json.tmp"
+    if compiledb -n -o "$_cc_tmp" make "$@" >/dev/null 2>&1 \
+       && grep -q '"file"' "$_cc_tmp" 2>/dev/null; then
+        mv -f "$_cc_tmp" compile_commands.json
         echo "compile_commands.json 갱신됨 (clangd)"
     else
+        rm -f "$_cc_tmp"
         echo "compile_commands.json 갱신 실패 — 빌드 자체는 정상" >&2
     fi
 fi
