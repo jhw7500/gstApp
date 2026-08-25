@@ -1,14 +1,16 @@
 #!/bin/bash
+# source 로 부르면 exit 가 호출한 셸을 죽인다. 실행이면 exit, source 면 return 한다.
+if [ "${BASH_SOURCE[0]}" != "${0}" ]; then _mfi_end='return'; else _mfi_end='exit'; fi
 [ "$SDK_LOC" ] || SDK_LOC=/shared/fsl-imx-xwayland/5.10-hardknott
 [ "$SDK_NAME" ] || SDK_NAME=cortexa53-crypto-poky-linux
 
 [ ! -e "${SDK_LOC}/environment-setup-${SDK_NAME}" ] && {
     echo "Sorry, please verify: ${SDK_LOC}/environment-setup-${SDK_NAME}"
-    exit 1
+    "$_mfi_end" 1
 }
 
 # shellcheck disable=SC1090
-. "${SDK_LOC}/environment-setup-${SDK_NAME}" || exit $?
+. "${SDK_LOC}/environment-setup-${SDK_NAME}" || "$_mfi_end" $?
 #. ./environment-setup-${SDK_NAME}
 
 SYSROOT="${SDK_LOC}/sysroots/${SDK_NAME}"
@@ -48,8 +50,4 @@ if [ "$_cc_rc" -eq 0 ] && [ "$_cc_skip" -eq 0 ] && command -v compiledb >/dev/nu
         echo "compile_commands.json 갱신 실패 — 빌드 자체는 정상" >&2
     fi
 fi
-# source 로 부르면 exit 가 호출한 셸을 죽인다. 실행일 때만 exit 한다.
-if [ "${BASH_SOURCE[0]}" != "${0}" ]; then
-    return "$_cc_rc"
-fi
-exit "$_cc_rc"
+"$_mfi_end" "$_cc_rc"
