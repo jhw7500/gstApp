@@ -12,6 +12,7 @@ SDK_ENV="$SDK_LOC/environment-setup-$SDK_NAME"
 FAKE_BIN="$TEST_DIR/fake-bin"
 WORK_DIR="$TEST_DIR/work"
 CAPTURE_FILE="$TEST_DIR/make-capture"
+COMPILEDB_CAPTURE_FILE="$TEST_DIR/compiledb-capture"
 EXPECTED_FILE="$TEST_DIR/expected-capture"
 
 mkdir -p "$SDK_LOC/sysroots/$SDK_NAME/usr/lib/pkgconfig" "$FAKE_BIN" "$WORK_DIR"
@@ -37,11 +38,38 @@ cat > "$FAKE_BIN/make" <<'MAKE_EOF'
 MAKE_EOF
 chmod +x "$FAKE_BIN/make"
 
+# make-for-imx8 는 빌드 후 compiledb 로 compile_commands.json 을 갱신한다.
+# 실제 compiledb 는 make 를 한 번 더 부르므로, 여기서는 argv 만 기록하는 가짜를
+# 둔다. 그래야 위의 make 캡처가 "빌드 1회" 계약을 그대로 검증한다.
+cat > "$FAKE_BIN/compiledb" <<'COMPILEDB_EOF'
+#!/bin/bash
+{
+    printf 'argc=%s\n' "$#"
+    for arg in "$@"
+    do
+        printf 'arg=%s\n' "$arg"
+    done
+} > "$COMPILEDB_CAPTURE_FILE"
+
+# -o 로 지정된 경로에 최소한의 유효 DB 를 만든다. 이래야 래퍼의 성공 경로
+# (grep '"file"' -> mv) 까지 실제로 검증된다.
+_out=""
+while [ $# -gt 0 ]
+do
+    case "$1" in
+        -o) _out="$2"; shift 2 ;;
+        *) shift ;;
+    esac
+done
+[ -n "$_out" ] && printf '[{"directory":"/tmp","file":"fake.c","command":"cc -c fake.c"}]\n' > "$_out"
+COMPILEDB_EOF
+chmod +x "$FAKE_BIN/compiledb"
+
 touch "$WORK_DIR/literal-expanded.target"
 
 (
     cd "$WORK_DIR"
-    export SDK_LOC SDK_NAME FAKE_BIN CAPTURE_FILE
+    export SDK_LOC SDK_NAME FAKE_BIN CAPTURE_FILE COMPILEDB_CAPTURE_FILE
     unset PKG_CONFIG_SYSROOT_DIR PKG_CONFIG_PATH PKG_CONFIG_DIR SDK_ENV_SOURCED
     "$ROOT_DIR/make-for-imx8" 'target with spaces' 'literal-*.target'
 )
@@ -66,13 +94,51 @@ then
     exit 1
 fi
 
+COMPILEDB_EXPECTED_FILE="$TEST_DIR/compiledb-expected"
+{
+    printf 'argc=6\n'
+    printf 'arg=-n\n'
+    printf 'arg=-o\n'
+    printf 'arg=TMPFILE\n'
+    printf 'arg=make\n'
+    printf 'arg=%s\n' 'target with spaces'
+    printf 'arg=%s\n' 'literal-*.target'
+} > "$COMPILEDB_EXPECTED_FILE"
+
+# mktemp 로 만든 임시 경로는 실행마다 다르므로 자리표시자로 바꾸고 비교한다.
+COMPILEDB_NORMALIZED_FILE="$TEST_DIR/compiledb-normalized"
+sed 's|^arg=\./\.compile_commands\.json\.[A-Za-z0-9]\{6\}$|arg=TMPFILE|' \
+    "$COMPILEDB_CAPTURE_FILE" > "$COMPILEDB_NORMALIZED_FILE"
+
+if ! cmp -s "$COMPILEDB_EXPECTED_FILE" "$COMPILEDB_NORMALIZED_FILE"
+then
+    printf 'FAIL: compile_commands.json 갱신이 빌드 인자를 그대로 넘기지 않았다\n' >&2
+    printf '%s\n' '--- expected' >&2
+    cat "$COMPILEDB_EXPECTED_FILE" >&2
+    printf '%s\n' '--- actual' >&2
+    cat "$COMPILEDB_NORMALIZED_FILE" 2>/dev/null >&2 || printf '(캡처 없음)\n' >&2
+    exit 1
+fi
+
+if [ ! -s "$WORK_DIR/compile_commands.json" ]
+then
+    printf 'FAIL: 성공 경로가 compile_commands.json 을 만들지 않았다\n' >&2
+    exit 1
+fi
+
+if ls "$WORK_DIR"/.compile_commands.json.?????? >/dev/null 2>&1
+then
+    printf 'FAIL: 임시 파일이 남았다\n' >&2
+    exit 1
+fi
+
 ZERO_CAPTURE_FILE="$TEST_DIR/zero-argv-capture"
 ZERO_EXPECTED_FILE="$TEST_DIR/zero-argv-expected"
 
 (
     cd "$WORK_DIR"
     CAPTURE_FILE="$ZERO_CAPTURE_FILE"
-    export SDK_LOC SDK_NAME FAKE_BIN CAPTURE_FILE
+    export SDK_LOC SDK_NAME FAKE_BIN CAPTURE_FILE COMPILEDB_CAPTURE_FILE
     unset PKG_CONFIG_SYSROOT_DIR PKG_CONFIG_PATH PKG_CONFIG_DIR SDK_ENV_SOURCED
     "$ROOT_DIR/make-for-imx8"
 )
@@ -110,7 +176,7 @@ set +e
     cd "$WORK_DIR"
     SDK_LOC="$FAIL_SDK_LOC"
     CAPTURE_FILE="$FAIL_CAPTURE_FILE"
-    export SDK_LOC SDK_NAME FAKE_BIN CAPTURE_FILE
+    export SDK_LOC SDK_NAME FAKE_BIN CAPTURE_FILE COMPILEDB_CAPTURE_FILE
     export PATH="$FAKE_BIN:$PATH"
     unset PKG_CONFIG_SYSROOT_DIR PKG_CONFIG_PATH PKG_CONFIG_DIR SDK_ENV_SOURCED
     "$ROOT_DIR/make-for-imx8"

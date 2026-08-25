@@ -1,14 +1,16 @@
 #!/bin/bash
+# source 로 부르면 exit 가 호출한 셸을 죽인다. 실행이면 exit, source 면 return 한다.
+if [ "${BASH_SOURCE[0]}" != "${0}" ]; then _mfi_end='return'; else _mfi_end='exit'; fi
 [ "$SDK_LOC" ] || SDK_LOC=/shared/fsl-imx-xwayland/5.10-hardknott
 [ "$SDK_NAME" ] || SDK_NAME=cortexa53-crypto-poky-linux
 
 [ ! -e "${SDK_LOC}/environment-setup-${SDK_NAME}" ] && {
     echo "Sorry, please verify: ${SDK_LOC}/environment-setup-${SDK_NAME}"
-    exit 1
+    "$_mfi_end" 1
 }
 
 # shellcheck disable=SC1090
-. "${SDK_LOC}/environment-setup-${SDK_NAME}" || exit $?
+. "${SDK_LOC}/environment-setup-${SDK_NAME}" || "$_mfi_end" $?
 #. ./environment-setup-${SDK_NAME}
 
 SYSROOT="${SDK_LOC}/sysroots/${SDK_NAME}"
@@ -21,3 +23,31 @@ export PKG_CONFIG_DIR=''
 
 make "$@"
 
+
+# --- clangd: compile_commands.json 자동 갱신 ---------------------------------
+# kbuild 가 아니라 .cmd 가 없다. compiledb 로 make -n 출력을 파싱한다 (컴파일 없음).
+# 설치: python3 -m pip install --user compiledb
+#
+# 빌드에 넘긴 "$@" 를 그대로 넘긴다 — 빠뜨리면 방금 빌드한 타겟이 아니라
+# 기본 타겟의 DB 가 만들어진다.
+# 임시 파일에 생성한 뒤 "file" 키를 확인하고서야 교체한다 — 정리 타겟 등으로
+# 빈 DB 가 나와도 기존 파일을 덮지 않는다.
+_cc_rc=$?
+_cc_skip=0
+for _cc_a in "$@"; do
+    case "$_cc_a" in clean|distclean|mrproper|realclean) _cc_skip=1 ;; esac
+done
+if [ "$_cc_rc" -eq 0 ] && [ "$_cc_skip" -eq 0 ] && command -v compiledb >/dev/null 2>&1; then
+    # 고정 이름은 동시 실행 시 서로 덮어쓴다. mktemp 로 고유하게 만든다.
+    _cc_tmp="$(mktemp "./.compile_commands.json.XXXXXX" 2>/dev/null)" || _cc_tmp=""
+    if [ -n "$_cc_tmp" ] \
+       && compiledb -n -o "$_cc_tmp" make "$@" >/dev/null 2>&1 \
+       && grep -q '"file"' "$_cc_tmp" 2>/dev/null \
+       && mv -f "$_cc_tmp" compile_commands.json; then
+        echo "compile_commands.json 갱신됨 (clangd)"
+    else
+        rm -f "$_cc_tmp"
+        echo "compile_commands.json 갱신 실패 — 빌드 자체는 정상" >&2
+    fi
+fi
+"$_mfi_end" "$_cc_rc"
