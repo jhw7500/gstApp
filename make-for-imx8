@@ -46,4 +46,8 @@ if [ "$_cc_rc" -eq 0 ] && [ "$_cc_skip" -eq 0 ] && command -v compiledb >/dev/nu
         echo "compile_commands.json 갱신 실패 — 빌드 자체는 정상" >&2
     fi
 fi
+# source 로 부르면 exit 가 호출한 셸을 죽인다. 실행일 때만 exit 한다.
+if [ "${BASH_SOURCE[0]}" != "${0}" ]; then
+    return "$_cc_rc"
+fi
 exit "$_cc_rc"
