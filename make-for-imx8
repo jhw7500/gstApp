@@ -36,10 +36,12 @@ for _cc_a in "$@"; do
     case "$_cc_a" in clean|distclean|mrproper|realclean) _cc_skip=1 ;; esac
 done
 if [ "$_cc_rc" -eq 0 ] && [ "$_cc_skip" -eq 0 ] && command -v compiledb >/dev/null 2>&1; then
-    _cc_tmp=".compile_commands.json.tmp"
-    if compiledb -n -o "$_cc_tmp" make "$@" >/dev/null 2>&1 \
-       && grep -q '"file"' "$_cc_tmp" 2>/dev/null; then
-        mv -f "$_cc_tmp" compile_commands.json
+    # 고정 이름은 동시 실행 시 서로 덮어쓴다. mktemp 로 고유하게 만든다.
+    _cc_tmp="$(mktemp "./.compile_commands.json.XXXXXX" 2>/dev/null)" || _cc_tmp=""
+    if [ -n "$_cc_tmp" ] \
+       && compiledb -n -o "$_cc_tmp" make "$@" >/dev/null 2>&1 \
+       && grep -q '"file"' "$_cc_tmp" 2>/dev/null \
+       && mv -f "$_cc_tmp" compile_commands.json; then
         echo "compile_commands.json 갱신됨 (clangd)"
     else
         rm -f "$_cc_tmp"

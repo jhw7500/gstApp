@@ -50,6 +50,18 @@ cat > "$FAKE_BIN/compiledb" <<'COMPILEDB_EOF'
         printf 'arg=%s\n' "$arg"
     done
 } > "$COMPILEDB_CAPTURE_FILE"
+
+# -o 로 지정된 경로에 최소한의 유효 DB 를 만든다. 이래야 래퍼의 성공 경로
+# (grep '"file"' -> mv) 까지 실제로 검증된다.
+_out=""
+while [ $# -gt 0 ]
+do
+    case "$1" in
+        -o) _out="$2"; shift 2 ;;
+        *) shift ;;
+    esac
+done
+[ -n "$_out" ] && printf '[{"directory":"/tmp","file":"fake.c","command":"cc -c fake.c"}]\n' > "$_out"
 COMPILEDB_EOF
 chmod +x "$FAKE_BIN/compiledb"
 
@@ -87,19 +99,36 @@ COMPILEDB_EXPECTED_FILE="$TEST_DIR/compiledb-expected"
     printf 'argc=6\n'
     printf 'arg=-n\n'
     printf 'arg=-o\n'
-    printf 'arg=.compile_commands.json.tmp\n'
+    printf 'arg=TMPFILE\n'
     printf 'arg=make\n'
     printf 'arg=%s\n' 'target with spaces'
     printf 'arg=%s\n' 'literal-*.target'
 } > "$COMPILEDB_EXPECTED_FILE"
 
-if ! cmp -s "$COMPILEDB_EXPECTED_FILE" "$COMPILEDB_CAPTURE_FILE"
+# mktemp 로 만든 임시 경로는 실행마다 다르므로 자리표시자로 바꾸고 비교한다.
+COMPILEDB_NORMALIZED_FILE="$TEST_DIR/compiledb-normalized"
+sed 's|^arg=\./\.compile_commands\.json\.[A-Za-z0-9]\{6\}$|arg=TMPFILE|' \
+    "$COMPILEDB_CAPTURE_FILE" > "$COMPILEDB_NORMALIZED_FILE"
+
+if ! cmp -s "$COMPILEDB_EXPECTED_FILE" "$COMPILEDB_NORMALIZED_FILE"
 then
     printf 'FAIL: compile_commands.json 갱신이 빌드 인자를 그대로 넘기지 않았다\n' >&2
     printf '%s\n' '--- expected' >&2
     cat "$COMPILEDB_EXPECTED_FILE" >&2
     printf '%s\n' '--- actual' >&2
-    cat "$COMPILEDB_CAPTURE_FILE" 2>/dev/null >&2 || printf '(캡처 없음)\n' >&2
+    cat "$COMPILEDB_NORMALIZED_FILE" 2>/dev/null >&2 || printf '(캡처 없음)\n' >&2
+    exit 1
+fi
+
+if [ ! -s "$WORK_DIR/compile_commands.json" ]
+then
+    printf 'FAIL: 성공 경로가 compile_commands.json 을 만들지 않았다\n' >&2
+    exit 1
+fi
+
+if ls "$WORK_DIR"/.compile_commands.json.?????? >/dev/null 2>&1
+then
+    printf 'FAIL: 임시 파일이 남았다\n' >&2
     exit 1
 fi
 
