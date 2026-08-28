@@ -93,6 +93,48 @@ static void test_builds_hd_dual_target(void)
     CHECK(strcmp(target[1].table, "dual") == 0);
 }
 
+static void test_builds_360p_dual_and_single_targets(void)
+{
+    Max9296PrepareInput dual_input = base_input();
+    dual_input.width = 640;
+    dual_input.height = 360;
+    dual_input.channel_enabled[0] = 1;
+    dual_input.channel_enabled[1] = 1;
+    Max9296PrepareTarget dual_target[2] = {};
+
+    const int dual_result =
+        max9296_prepare_build_targets(&dual_input, dual_target);
+    CHECK(dual_result == 0);
+    if (dual_result == 0) {
+        CHECK(dual_target[0].active);
+        CHECK(dual_target[0].width == 1280 && dual_target[0].height == 360);
+        CHECK(dual_target[0].enable == 3);
+        CHECK(strcmp(dual_target[0].mode, "dual-wide") == 0);
+        CHECK(strcmp(dual_target[0].table, "dual") == 0);
+    }
+
+    for (unsigned side = 0; side < 2; ++side) {
+        Max9296PrepareInput single_input = base_input();
+        single_input.width = 640;
+        single_input.height = 360;
+        single_input.channel_enabled[2 + side] = 1;
+        Max9296PrepareTarget single_target[2] = {};
+
+        const int single_result =
+            max9296_prepare_build_targets(&single_input, single_target);
+        CHECK(single_result == 0);
+        if (single_result == 0) {
+            CHECK(single_target[1].active);
+            CHECK(single_target[1].width == 640 &&
+                  single_target[1].height == 360);
+            CHECK(single_target[1].enable == (1U << side));
+            CHECK(strcmp(single_target[1].mode, "single") == 0);
+            CHECK(strcmp(single_target[1].table,
+                         side == 0 ? "left" : "right") == 0);
+        }
+    }
+}
+
 static void test_builds_left_and_right_single_targets(void)
 {
     for (unsigned csi = 0; csi < 2; ++csi) {
@@ -1163,6 +1205,7 @@ int main(void)
 {
     test_builds_dual_and_single_targets();
     test_builds_hd_dual_target();
+    test_builds_360p_dual_and_single_targets();
     test_builds_left_and_right_single_targets();
     test_accepts_disabled_csi_with_unusable_fps();
     test_rejects_invalid_request_tuples();
