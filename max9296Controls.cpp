@@ -111,8 +111,11 @@ int max9296_crop_build_control_batch(
     max9296_zoom_center_sanitize(&sanitized_centers[1]);
 
     batch->enable = {V4L2_CID_CROP_ENABLE, crop_enable ? 1 : 0};
+    /* The driver clusters dz and both channel centers.  Always submit the
+     * complete five-control tuple so a single S_EXT_CTRLS transaction cannot
+     * observe a mixture of old and new center values, even in single mode. */
     batch->tuple_count = max9296_zoom_build_controls(
-        enabled_slots, sanitized_dz, sanitized_centers, batch->tuple);
+        0x03, sanitized_dz, sanitized_centers, batch->tuple);
     return batch->tuple_count ? 0 : -1;
 }
 

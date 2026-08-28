@@ -147,10 +147,12 @@ static void test_builds_enable_first_and_sanitized_crop_tuple(void)
 
     CHECK(max9296_crop_build_control_batch(0, 2, 99, centers, &batch) == 0);
     check_control(batch.enable, 0x0098192b, 0);
-    CHECK(batch.tuple_count == 3);
+    CHECK(batch.tuple_count == 5);
     check_control(batch.tuple[0], 0x00981922, 100);
-    check_control(batch.tuple[1], 0x00981928, 3000);
-    check_control(batch.tuple[2], 0x0098192a, 4000);
+    check_control(batch.tuple[1], 0x00981927, 1000);
+    check_control(batch.tuple[2], 0x00981929, 2000);
+    check_control(batch.tuple[3], 0x00981928, 3000);
+    check_control(batch.tuple[4], 0x0098192a, 4000);
 
     const Max9296ZoomCenter invalid_centers[2] = {
         {70000, 70001},
@@ -158,9 +160,12 @@ static void test_builds_enable_first_and_sanitized_crop_tuple(void)
     };
     CHECK(max9296_crop_build_control_batch(
               1, 1, 400, invalid_centers, &batch) == 0);
+    CHECK(batch.tuple_count == 5);
     check_control(batch.tuple[0], 0x00981922, 100);
     check_control(batch.tuple[1], 0x00981927, 32768);
     check_control(batch.tuple[2], 0x00981929, 32768);
+    check_control(batch.tuple[3], 0x00981928, 32768);
+    check_control(batch.tuple[4], 0x0098192a, 32768);
 
     CHECK(max9296_crop_build_control_batch(1, 0, 100, centers, &batch) == -1);
     CHECK(max9296_crop_build_control_batch(1, 4, 100, centers, &batch) == -1);

@@ -11,6 +11,7 @@
  */
 
 #include "videoBin.h"
+#include "max9296Controls.h"
 #include <errno.h>
 #include <fcntl.h>
 #include <linux/videodev2.h>
@@ -274,6 +275,103 @@ static int set_v4l2_subdev_control(int csiNum, unsigned int ctrl_id,
 
   close(fd);
   return ret;
+}
+
+static int apply_crop_v4l2(int csi_num, guint8 enabled_slots,
+                           guint8 ch0, guint8 ch1) {
+  const Max9296ZoomCenter centers[2] = {
+      {cmdArg.cam[ch0].dz_x, cmdArg.cam[ch0].dz_y},
+      {cmdArg.cam[ch1].dz_x, cmdArg.cam[ch1].dz_y},
+  };
+  const guint common_dz = cmdArg.dz[csi_num];
+  Max9296CropControlBatch batch = {};
+  char dev_path[32];
+  int result = 0;
+  int saved_errno = 0;
+  guint error_idx = 0;
+  const char *failed_stage = "none";
+
+  if (max9296_crop_build_control_batch(
+          cmdArg.crop_enable[csi_num] ? 1 : 0, enabled_slots, common_dz,
+          centers, &batch) < 0) {
+    errno = EINVAL;
+    __LOG(LOG_ERR,
+          "[MAX9296_CROP] csi=%d enable=%d slots=0x%x dz=%u "
+          "ch%d_center=%u/%u ch%d_center=%u/%u stage=build "
+          "error_idx=0 errno=%d(%s)",
+          csi_num, cmdArg.crop_enable[csi_num] ? 1 : 0, enabled_slots,
+          common_dz, ch0, centers[0].x, centers[0].y, ch1, centers[1].x,
+          centers[1].y, errno, strerror(errno));
+    return -1;
+  }
+
+  const guint effective_dz = static_cast<guint>(batch.tuple[0].value);
+  const guint effective_x0 = static_cast<guint>(batch.tuple[1].value);
+  const guint effective_y0 = static_cast<guint>(batch.tuple[2].value);
+  const guint effective_x1 = static_cast<guint>(batch.tuple[3].value);
+  const guint effective_y1 = static_cast<guint>(batch.tuple[4].value);
+  const int subdev_idx =
+      csi_num == 0 ? cmdArg.v4l_subdev_csi0 : cmdArg.v4l_subdev_csi1;
+  log_v4l_subdev_name_once(subdev_idx);
+  snprintf(dev_path, sizeof(dev_path), "/dev/v4l-subdev%d", subdev_idx);
+
+  const int fd = open(dev_path, O_RDWR);
+  if (fd < 0) {
+    __LOG(LOG_ERR,
+          "[MAX9296_CROP] csi=%d enable=%d slots=0x%x dz=%u "
+          "ch%d_center=%u/%u ch%d_center=%u/%u stage=open "
+          "error_idx=0 errno=%d(%s)",
+          csi_num, batch.enable.value, enabled_slots, effective_dz, ch0,
+          effective_x0, effective_y0, ch1, effective_x1, effective_y1, errno,
+          strerror(errno));
+    return -1;
+  }
+
+  struct v4l2_control enable_ctrl = {};
+  struct v4l2_ext_control tuple[5] = {};
+  struct v4l2_ext_controls ext_ctrls = {};
+  enable_ctrl.id = batch.enable.id;
+  enable_ctrl.value = batch.enable.value;
+  if (ioctl(fd, VIDIOC_S_CTRL, &enable_ctrl) < 0) {
+    result = -1;
+    saved_errno = errno;
+    failed_stage = "enable";
+    goto out;
+  }
+
+  for (size_t i = 0; i < batch.tuple_count; ++i) {
+    tuple[i].id = batch.tuple[i].id;
+    tuple[i].value = batch.tuple[i].value;
+  }
+
+  ext_ctrls.ctrl_class = V4L2_CTRL_CLASS_USER;
+  ext_ctrls.count = static_cast<__u32>(batch.tuple_count);
+  ext_ctrls.controls = tuple;
+  if (ioctl(fd, VIDIOC_S_EXT_CTRLS, &ext_ctrls) < 0) {
+    result = -1;
+    saved_errno = errno;
+    error_idx = ext_ctrls.error_idx;
+    failed_stage = "tuple";
+  }
+
+out:
+  if (close(fd) < 0 && result == 0) {
+    result = -1;
+    saved_errno = errno;
+    failed_stage = "close";
+  }
+
+  __LOG(result < 0 ? LOG_ERR : LOG_NOTICE,
+        "[MAX9296_CROP] csi=%d enable=%d slots=0x%x dz=%u "
+        "ch%d_center=%u/%u ch%d_center=%u/%u stage=%s "
+        "error_idx=%u errno=%d(%s)",
+        csi_num, batch.enable.value, enabled_slots, effective_dz, ch0,
+        effective_x0, effective_y0, ch1, effective_x1, effective_y1,
+        failed_stage, error_idx, saved_errno,
+        saved_errno ? strerror(saved_errno) : "none");
+  if (saved_errno)
+    errno = saved_errno;
+  return result;
 }
 
 /* Apply LED flash for one channel slot.
@@ -624,6 +722,39 @@ gboolean VideoBin::init(guint8 csiNum) {
     return 1;
   }
 
+  // csiNum 0 -> channels 0,1 / csiNum 1 -> channels 2,3
+  const guint8 ch_base = csiNum * 2;
+  const guint8 ch0 = ch_base;
+  const guint8 ch1 = ch_base + 1;
+  const gboolean ch0_enabled = cmdArg.cam[ch0].enable;
+  const gboolean ch1_enabled = cmdArg.cam[ch1].enable;
+  const gboolean dual_mode = ch0_enabled && ch1_enabled;
+  const guint8 enabled_slots = (ch0_enabled ? 0x01 : 0) |
+                               (ch1_enabled ? 0x02 : 0);
+  const guint8 auto_ae_slots =
+      (ch0_enabled && cmdArg.cam[ch0].ae_on ? 0x01 : 0) |
+      (ch1_enabled && cmdArg.cam[ch1].ae_on ? 0x02 : 0);
+  const Max9296ExposurePlan exposure_plan = max9296_exposure_plan(
+      cmdArg.main_fps[csiNum], enabled_slots, auto_ae_slots);
+
+  if (exposure_plan == MAX9296_REJECT_MANUAL_EXPOSURE) {
+    __LOG(LOG_CRIT,
+          "[MAX9296_EXPOSURE] reject csi=%u channels=%u/%u "
+          "mode=%ux%u fps=%u requested_exp=%u/%u safe_fps_max=30 "
+          "reason=manual-exposure-above-safe-range",
+          csiNum, ch0, ch1, cmdArg.width, cmdArg.height,
+          cmdArg.main_fps[csiNum], cmdArg.cam[ch0].exp_time,
+          cmdArg.cam[ch1].exp_time);
+    return FALSE;
+  }
+
+  if (apply_crop_v4l2(csiNum, enabled_slots, ch0, ch1) < 0) {
+    __LOG(LOG_CRIT,
+          "[MAX9296_CROP] csi=%u initialization failed before prepare",
+          csiNum);
+    return FALSE;
+  }
+
   if ((cmdArg.cam[0].enable || cmdArg.cam[1].enable) &&
       (cmdArg.cam[2].enable || cmdArg.cam[3].enable))
     wdt_timeout = cmdArg.wdt_timeout_long;
@@ -682,22 +813,19 @@ gboolean VideoBin::init(guint8 csiNum) {
                LEAKY_DOWNSTREAM, NULL);
   g_object_set(be.watchdog, "timeout", wdt_timeout, NULL);
 
-  // V4L2 controls setup - per-channel settings in dual mode
-  // csiNum 0 -> channels 0,1 / csiNum 1 -> channels 2,3
-  guint8 ch_base = csiNum * 2;
-  guint8 ch0 = ch_base;
-  guint8 ch1 = ch_base + 1;
-  gboolean ch0_enabled = cmdArg.cam[ch0].enable;
-  gboolean ch1_enabled = cmdArg.cam[ch1].enable;
-  gboolean dual_mode = ch0_enabled && ch1_enabled;
-
 #if 1
   // Exposure time is shared (global) across both channels
-  if (ch0_enabled || ch1_enabled) {
+  if (exposure_plan == MAX9296_WRITE_EXPOSURE_SEED) {
     // Use ext_time from i2c config (shared between channels)
     guint32 ext_time =
         ch0_enabled ? cmdArg.cam[ch0].exp_time : cmdArg.cam[ch1].exp_time;
     set_v4l2_subdev_control(csiNum, V4L2_CID_EXT_TIME, ext_time);
+  } else {
+    __LOG(LOG_NOTICE,
+          "[MAX9296_EXPOSURE] skip seed csi=%u channels=%u/%u "
+          "mode=%ux%u fps=%u policy=auto-ae-high-fps",
+          csiNum, ch0, ch1, cmdArg.width, cmdArg.height,
+          cmdArg.main_fps[csiNum]);
   }
 
   if (dual_mode) {
@@ -763,7 +891,6 @@ gboolean VideoBin::init(guint8 csiNum) {
     // channel
     CamConfig *cam_cfg = ch0_enabled ? &cmdArg.cam[ch0] : &cmdArg.cam[ch1];
     guint8 active_ch = ch0_enabled ? ch0 : ch1;
-    guint32 ext_time = cam_cfg->exp_time;
     int ae_on = cam_cfg->ae_on ? 1 : 0; // 1=auto, 0=manual
     // Single-channel mode: max9296 driver's apply_cached_controls() reads
     // only ctrl_cache.ch0 regardless of the physical channel, so target the
@@ -777,7 +904,6 @@ gboolean VideoBin::init(guint8 csiNum) {
     __LOG(LOG_NOTICE, "[GST][%s:%d] Single-channel mode for csi%d (ch%d)",
           _FILE_, __LINE__, csiNum, active_ch);
 
-    set_v4l2_subdev_control(csiNum, V4L2_CID_EXT_TIME, ext_time);
     set_v4l2_subdev_control(csiNum, ae_ctrl_id, ae_on);
     set_v4l2_subdev_control(csiNum, autogain_id, cam_cfg->ae_on ? 1 : 0);
     set_v4l2_subdev_control(csiNum, gain_id, cam_cfg->ae_gain);
@@ -792,7 +918,8 @@ gboolean VideoBin::init(guint8 csiNum) {
           "[GST][%s:%d] ch%d controls (single, csi%d CH0 slot): ae_on=%d "
           "gain=%d exp_time=%u awb=%s(0x%x) hflip=%d vflip=%d",
           _FILE_, __LINE__, active_ch, csiNum, ae_on, cam_cfg->ae_gain,
-          ext_time, cam_cfg->awb, awb_auto, cam_cfg->hflip, cam_cfg->vflip);
+          cam_cfg->exp_time, cam_cfg->awb, awb_auto, cam_cfg->hflip,
+          cam_cfg->vflip);
 
     /* single mode:
      *   - led_flash: CH0 slot CID (firmware routes via AP1302 global addr).
@@ -804,6 +931,7 @@ gboolean VideoBin::init(guint8 csiNum) {
                          mcp_wiper_id,
                          V4L2_CID_LED_FLASH_CH0);
   }
+
 #endif
   if (cmdArg.levelMode == MODE_TEST) {
     // GstPad *srcpad = gst_element_get_static_pad(be.src, "src");
