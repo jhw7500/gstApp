@@ -132,6 +132,8 @@ typedef struct {
     guint iso;
     guint32 exp_time;
     const gchar *awb;
+    guint dz_x;
+    guint dz_y;
     /* LED flash (max9296 driver: mcp4018_power_chX + mcp4018_wiper_chX + led_flash_chX) */
     gboolean led_flash_enable;  /* gates MCP4018 VCC (MFP4 GPIO) + AR0234 0x3270 bit8 */
     guint    led_flash_wiper;   /* 0..127 MCP4018 wiper step */
@@ -175,6 +177,10 @@ typedef struct _CmdArg
     guint16 ch_rotate;
     ResMode resMode;
     gint main_fps[MAX_VIDEO_SRC];
+    /* Digital zoom factor is common to both channels on each CSI/MAX9296. */
+    guint dz[MAX_VIDEO_SRC];
+    /* AP1302 hardware crop gate; separate from GStreamer crop_en below. */
+    gboolean crop_enable[MAX_VIDEO_SRC];
     gint play_delay;
     gint config_delay;
     gboolean fault;

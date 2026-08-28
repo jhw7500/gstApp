@@ -20,6 +20,7 @@
 #include "rtspServerBin.h"
 #include "videoBin.h"
 #include "cfgjson.h"
+#include "max9296Controls.h"
 
 #define LOG_KEY "CFG"
 
@@ -323,6 +324,11 @@ void ParserClass::init_arg(gchar *argv) {
   arg.ipc_en = FALSE;
   arg.ipc_mid = DEFAULT_IPC_MID;
 
+  for (guint8 csi = 0; csi < MAX_VIDEO_SRC; csi++) {
+    arg.dz[csi] = MAX9296_DZ_DEFAULT;
+    arg.crop_enable[csi] = FALSE;
+  }
+
   for (guint8 i = 0; i < MAX_CHANNEL; i++) {
     arg.cam[i].enable = FALSE;
     arg.cam[i].hflip = FALSE;
@@ -345,6 +351,8 @@ void ParserClass::init_arg(gchar *argv) {
     arg.cam[i].iso = DEFAULT_ISO;
     arg.cam[i].lsc = DEFAULT_LSC;
     arg.cam[i].exp_time = DEFAULT_EXP_TIME;
+    arg.cam[i].dz_x = MAX9296_DZ_X_DEFAULT;
+    arg.cam[i].dz_y = MAX9296_DZ_Y_DEFAULT;
     arg.cam[i].led_flash_enable = FALSE;
     arg.cam[i].led_flash_wiper = 63;   /* MCP4018 mid-scale (matches driver default) */
     arg.cam[i].led_flash_delay = 0;    /* AR0234 0x3270 bit7:0 */
@@ -700,6 +708,37 @@ gint ParserClass::json_parser(const gchar *path, const gchar *header) {
       gchar *i2c_key = g_strdup_printf("i2c%d", i / 2 ? 1 : 2);
       sobj = json_object_object_get(hobj, i2c_key);
       g_free(i2c_key);
+      if ((i & 1U) == 0) {
+        const guint8 csi = i / 2;
+        json_object *crop_obj =
+            sobj ? json_object_object_get(sobj, "crop_enable") : NULL;
+        const uint8_t present = crop_obj ? 1 : 0;
+        const uint8_t boolean_type =
+            crop_obj && json_object_get_type(crop_obj) == json_type_boolean;
+        const int crop_value = boolean_type
+                                   ? json_object_get_boolean(crop_obj)
+                                   : 0;
+        uint8_t invalid = 0;
+
+        json_get_uint(sobj, "dz", &arg.dz[i / 2]);
+        arg.crop_enable[csi] = max9296_crop_enable_normalize(
+            present, boolean_type, crop_value, &invalid);
+        if (!present) {
+          __LOG(LOG_NOTICE,
+                "[CFG][%s:%d] i2c%d.crop_enable missing; effective false",
+                _FILE_, __LINE__, i / 2 ? 1 : 2);
+        } else if (invalid) {
+          __LOG(LOG_ERR,
+                "[CFG][%s:%d] i2c%d.crop_enable must be JSON boolean; "
+                "effective false",
+                _FILE_, __LINE__, i / 2 ? 1 : 2);
+          g_cfg_errors++;
+        } else {
+          __LOG(LOG_INFO, "[CFG][%s:%d] i2c%d.crop_enable : %s", _FILE_,
+                __LINE__, i / 2 ? 1 : 2,
+                arg.crop_enable[csi] ? "true" : "false");
+        }
+      }
       /* Accept both ext_time and exp_time for backward compatibility. */
       {
         json_object *ext_obj = json_object_object_get(sobj, "ext_time");
@@ -733,6 +772,15 @@ gint ParserClass::json_parser(const gchar *path, const gchar *header) {
                          sizeof(arg.cam[i].qp_max) / sizeof(arg.cam[i].qp_max[0]));
       json_object_get_value(vobj, "ae_on", &arg.cam[i].ae_on);
       json_get_uint(vobj, "ae_gain", &arg.cam[i].ae_gain);
+      if (vobj && json_object_object_get(vobj, "dz")) {
+        __LOG(LOG_CRIT,
+              "[CFG][%s:%d] i2c%d.ch%d.dz is no longer supported; move dz "
+              "to i2c%d so both channels use one factor",
+              _FILE_, __LINE__, i / 2 ? 1 : 2, i, i / 2 ? 1 : 2);
+        return -1;
+      }
+      json_get_uint(vobj, "dz_x", &arg.cam[i].dz_x);
+      json_get_uint(vobj, "dz_y", &arg.cam[i].dz_y);
       /* Optional: AWB preset name. Falls back to DEFAULT_AWB when absent. */
       {
         json_object *awb_obj = json_object_object_get(vobj, "awb");
@@ -825,9 +873,9 @@ gint ParserClass::arg_parser(int *argc, char **argv[]) {
       {"mnt", 'O', 0, G_OPTION_ARG_STRING, &arg.mntDir,
        "save video & audio file to directory, default(/mnt/sd_cam)", "STRING"},
       {"width", 'w', 0, G_OPTION_ARG_INT, &arg.width,
-       "cam width HD(1280), FHD(1920), default(1920)", "INT"},
+       "cam width 360p(640), HD(1280), FHD(1920), default(1920)", "INT"},
       {"height", 'h', 0, G_OPTION_ARG_INT, &arg.height,
-       "cam height HD(720), FHD(1080), default(1080)", "INT"},
+       "cam height 360p(360), HD(720), FHD(1080), default(1080)", "INT"},
       {"oht", 'n', 0, G_OPTION_ARG_STRING, &arg.ohtName,
        "oht name, default(APPNAME)", "STRING"},
       {"delay", 'd', 0, G_OPTION_ARG_INT, &arg.play_delay,
@@ -1195,15 +1243,49 @@ gint ParserClass::check_arg() {
         arg.dual_enc, arg.input_en, arg.overlay_en, arg.tcp_en, arg.tcp_port,
         arg.ipc_en, arg.ipc_mid);
 
+  for (gint csi = 0; csi < MAX_VIDEO_SRC; csi++) {
+    const guint configured_dz = arg.dz[csi];
+    uint32_t common_dz = configured_dz;
+    if (max9296_dz_sanitize(&common_dz) & MAX9296_ZOOM_INVALID_DZ)
+      __LOG(LOG_ERR,
+            "[%s][%s:%d] csi%d invalid common dz %u (expected %u..%u), "
+            "fallback to %u",
+            LOG_KEY, _FILE_, __LINE__, csi, configured_dz, MAX9296_DZ_MIN,
+            MAX9296_DZ_MAX, MAX9296_DZ_DEFAULT);
+    arg.dz[csi] = common_dz;
+    __LOG(LOG_NOTICE, "[%s][%s:%d] csi%d common dz:%u", LOG_KEY, _FILE_,
+          __LINE__, csi, arg.dz[csi]);
+  }
+
   for (i = 0; i < MAX_CHANNEL; i++) {
+    const guint configured_dz_x = arg.cam[i].dz_x;
+    const guint configured_dz_y = arg.cam[i].dz_y;
+    Max9296ZoomCenter center = {configured_dz_x, configured_dz_y};
+    const uint32_t invalid_zoom =
+        max9296_zoom_center_sanitize(&center);
+    if (invalid_zoom & MAX9296_ZOOM_INVALID_X)
+      __LOG(LOG_ERR,
+            "[%s][%s:%d] ch%d invalid dz_x %u (expected 0..%u), fallback to %u",
+            LOG_KEY, _FILE_, __LINE__, i, configured_dz_x,
+            MAX9296_DZ_CENTER_MAX, MAX9296_DZ_X_DEFAULT);
+    if (invalid_zoom & MAX9296_ZOOM_INVALID_Y)
+      __LOG(LOG_ERR,
+            "[%s][%s:%d] ch%d invalid dz_y %u (expected 0..%u), fallback to %u",
+            LOG_KEY, _FILE_, __LINE__, i, configured_dz_y,
+            MAX9296_DZ_CENTER_MAX, MAX9296_DZ_Y_DEFAULT);
+    arg.cam[i].dz_x = center.x;
+    arg.cam[i].dz_y = center.y;
+
     __LOG(LOG_NOTICE,
           "[%s][%s:%d] ch%d en:%s, vflip:%s, hflip:%s, bps:%d,%d, ae_on:%d, "
-          "ae_gain:%d, exp_time:%d, led_flash:%s(wiper=%u delay=%u)",
+          "ae_gain:%d, exp_time:%d, common_dz:%u dz_x:%u dz_y:%u, "
+          "led_flash:%s(wiper=%u delay=%u)",
           LOG_KEY, _FILE_, __LINE__, i, arg.cam[i].enable ? "true" : "false",
           arg.cam[i].vflip ? "true" : "false",
           arg.cam[i].hflip ? "true" : "false", arg.cam[i].bps[STREAM_REC],
           arg.cam[i].bps[STREAM_RTSP], arg.cam[i].ae_on, arg.cam[i].ae_gain,
-          arg.cam[i].exp_time,
+          arg.cam[i].exp_time, arg.dz[i / 2], arg.cam[i].dz_x,
+          arg.cam[i].dz_y,
           arg.cam[i].led_flash_enable ? "true" : "false",
           arg.cam[i].led_flash_wiper, arg.cam[i].led_flash_delay);
 
@@ -1429,23 +1511,18 @@ gint ParserClass::check_arg() {
     return -1;
   }
 
-  if (arg.width == 1280 && arg.height == 720) {
-    if (total_fps > MAX_FPS_HD) {
-      __LOG(LOG_CRIT,
-            "[%s][%s:%d] HD max fps over : total_fps(%d) > MAX_FPS_HD(%d)",
-            LOG_KEY, _FILE_, __LINE__, total_fps, MAX_FPS_HD);
-      return -1;
-    }
-  } else if (arg.width == 1920 && arg.height == 1080) {
-    if (total_fps > MAX_FPS_FHD) {
-      __LOG(LOG_CRIT,
-            "[%s][%s:%d] FHD max fps over : total_fps(%d) > MAX_FPS_FHD(%d)",
-            LOG_KEY, _FILE_, __LINE__, total_fps, MAX_FPS_FHD);
-      return -1;
-    }
-  } else {
-    __LOG(LOG_CRIT, "[%s][%s:%d] width %d not supported", LOG_KEY, _FILE_,
-          __LINE__, arg.width);
+  const uint32_t mode_fps_limit =
+      max9296_mode_total_fps_limit(arg.width, arg.height);
+  if (mode_fps_limit == 0) {
+    __LOG(LOG_CRIT, "[%s][%s:%d] resolution %dx%d not supported", LOG_KEY,
+          _FILE_, __LINE__, arg.width, arg.height);
+    return -1;
+  }
+  if ((uint32_t)total_fps > mode_fps_limit) {
+    __LOG(LOG_CRIT,
+          "[%s][%s:%d] %dx%d max fps over: total_fps(%d) > limit(%u)",
+          LOG_KEY, _FILE_, __LINE__, arg.width, arg.height, total_fps,
+          mode_fps_limit);
     return -1;
   }
 
