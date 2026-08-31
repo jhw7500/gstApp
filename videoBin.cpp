@@ -355,11 +355,7 @@ static int apply_crop_v4l2(int csi_num, guint8 enabled_slots,
   }
 
 out:
-  if (close(fd) < 0 && result == 0) {
-    result = -1;
-    saved_errno = errno;
-    failed_stage = "close";
-  }
+  close(fd);
 
   __LOG(result < 0 ? LOG_ERR : LOG_NOTICE,
         "[MAX9296_CROP] csi=%d enable=%d slots=0x%x dz=%u "

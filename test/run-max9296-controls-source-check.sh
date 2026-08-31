@@ -47,6 +47,8 @@ main = function_body(main_source, 'gint main(')
 
 if crop.count('open(') != 1 or crop.count('close(fd)') != 1:
     fail('crop helper must open one subdev fd and close it exactly once')
+if re.search(r'if\s*\(\s*close\s*\(\s*fd\s*\)', crop):
+    fail('crop helper must not invalidate successful ioctls on close EINTR')
 if crop.count('VIDIOC_S_CTRL') != 1:
     fail('crop helper must issue exactly one S_CTRL for crop_enable')
 if crop.count('VIDIOC_S_EXT_CTRLS') != 1:
