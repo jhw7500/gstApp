@@ -13,11 +13,11 @@ CfgArrStatus cfg_get_int_array(json_object *obj, const char *name, gint *out,
   if (!obj || !name || !out || n == 0)
     return CFG_ARR_MISSING;
 
-  json_object *vobj = json_object_object_get(obj, name);
-  if (!vobj)
+  json_object *vobj = NULL;
+  if (!json_object_object_get_ex(obj, name, &vobj))
     return CFG_ARR_MISSING;
 
-  if (json_object_get_type(vobj) != json_type_array)
+  if (!vobj || json_object_get_type(vobj) != json_type_array)
     return CFG_ARR_NOT_ARRAY;
 
   array_list *arr = json_object_get_array(vobj);

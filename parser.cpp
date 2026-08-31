@@ -126,37 +126,40 @@ static void json_object_get_bool_optional(json_object *obj,
 }
 
 /* Wrapper over cfg_get_int_array (cfgjson.cpp): preserves the original logging
- * and counts config errors so the parser can emit a loud post-parse summary.
+ * and counts malformed explicit arrays for the startup-fatal parse summary.
  * Silent keep-defaults hides real edgeconf mistakes — e.g. a bps array length
  * mismatch left the record bitrate stuck at the 4096 default. */
-static void json_get_int_array(json_object *obj, const gchar *name, gint *out,
-                               gsize n) {
+static gboolean json_get_int_array(json_object *obj, const gchar *name,
+                                   gint *out, gsize n, guint8 channel) {
   CfgArrStatus st = cfg_get_int_array(obj, name, out, n);
   switch (st) {
   case CFG_ARR_OK:
     for (gsize i = 0; i < n; i++)
       __LOG(LOG_INFO, "[CFG][%s:%d] %s[%zu] : %d", _FILE_, __LINE__, name, i,
             out[i]);
-    break;
+    return FALSE;
   case CFG_ARR_MISSING:
-    break; /* optional key absent — keep defaults silently */
+    return FALSE; /* optional key absent — keep defaults silently */
   case CFG_ARR_NOT_ARRAY:
-    __LOG(LOG_ERR, "[CFG][%s:%d] %s: not a JSON array, keep defaults", _FILE_,
-          __LINE__, name);
-    g_cfg_errors++;
-    break;
+    __LOG(LOG_CRIT,
+          "[CFG][%s:%d] ch%d %s: malformed array (expected=%zu, "
+          "error=not-array), keep defaults",
+          _FILE_, __LINE__, channel, name, n);
+    return TRUE;
   case CFG_ARR_BAD_LEN:
-    __LOG(LOG_ERR,
-          "[CFG][%s:%d] %s: array length mismatch (expected %zu), keep defaults",
-          _FILE_, __LINE__, name, n);
-    g_cfg_errors++;
-    break;
+    __LOG(LOG_CRIT,
+          "[CFG][%s:%d] ch%d %s: malformed array (expected=%zu, "
+          "error=bad-length), keep defaults",
+          _FILE_, __LINE__, channel, name, n);
+    return TRUE;
   case CFG_ARR_BAD_ELEM:
-    __LOG(LOG_ERR, "[CFG][%s:%d] %s: non-int element, keep defaults", _FILE_,
-          __LINE__, name);
-    g_cfg_errors++;
-    break;
+    __LOG(LOG_CRIT,
+          "[CFG][%s:%d] ch%d %s: malformed array (expected=%zu, "
+          "error=bad-element), keep defaults",
+          _FILE_, __LINE__, channel, name, n);
+    return TRUE;
   }
+  return FALSE;
 }
 
 /* Range sanity for one per-stream vpuenc_h264 knob. Same policy as bps: never
@@ -538,6 +541,7 @@ gint ParserClass::json_sub_object_get_value(const gchar *file,
 
 gint ParserClass::json_parser(const gchar *path, const gchar *header) {
   gint ret = -1;
+  gint array_errors = 0;
 
   json_object *jobj = NULL;
   json_object *hobj = NULL;
@@ -756,20 +760,26 @@ gint ParserClass::json_parser(const gchar *path, const gchar *header) {
       json_object_get_value(vobj, "enable", &arg.cam[i].enable);
       json_object_get_value(vobj, "hflip", &arg.cam[i].hflip);
       json_object_get_value(vobj, "vflip", &arg.cam[i].vflip);
-      json_get_int_array(vobj, "bps", arg.cam[i].bps,
-                         sizeof(arg.cam[i].bps) / sizeof(arg.cam[i].bps[0]));
+      array_errors += json_get_int_array(
+          vobj, "bps", arg.cam[i].bps,
+          sizeof(arg.cam[i].bps) / sizeof(arg.cam[i].bps[0]), i);
       /* vpuenc_h264 tuning, all [rec, rtsp] pairs like bps. Absent keys keep
        * the init_arg defaults, which mirror the plugin's own defaults. */
-      json_get_int_array(vobj, "gop", arg.cam[i].gop,
-                         sizeof(arg.cam[i].gop) / sizeof(arg.cam[i].gop[0]));
-      json_get_int_array(vobj, "profile", arg.cam[i].profile,
-                         sizeof(arg.cam[i].profile) / sizeof(arg.cam[i].profile[0]));
-      json_get_int_array(vobj, "quant", arg.cam[i].quant,
-                         sizeof(arg.cam[i].quant) / sizeof(arg.cam[i].quant[0]));
-      json_get_int_array(vobj, "qp_min", arg.cam[i].qp_min,
-                         sizeof(arg.cam[i].qp_min) / sizeof(arg.cam[i].qp_min[0]));
-      json_get_int_array(vobj, "qp_max", arg.cam[i].qp_max,
-                         sizeof(arg.cam[i].qp_max) / sizeof(arg.cam[i].qp_max[0]));
+      array_errors += json_get_int_array(
+          vobj, "gop", arg.cam[i].gop,
+          sizeof(arg.cam[i].gop) / sizeof(arg.cam[i].gop[0]), i);
+      array_errors += json_get_int_array(
+          vobj, "profile", arg.cam[i].profile,
+          sizeof(arg.cam[i].profile) / sizeof(arg.cam[i].profile[0]), i);
+      array_errors += json_get_int_array(
+          vobj, "quant", arg.cam[i].quant,
+          sizeof(arg.cam[i].quant) / sizeof(arg.cam[i].quant[0]), i);
+      array_errors += json_get_int_array(
+          vobj, "qp_min", arg.cam[i].qp_min,
+          sizeof(arg.cam[i].qp_min) / sizeof(arg.cam[i].qp_min[0]), i);
+      array_errors += json_get_int_array(
+          vobj, "qp_max", arg.cam[i].qp_max,
+          sizeof(arg.cam[i].qp_max) / sizeof(arg.cam[i].qp_max[0]), i);
       json_object_get_value(vobj, "ae_on", &arg.cam[i].ae_on);
       json_get_uint(vobj, "ae_gain", &arg.cam[i].ae_gain);
       if (vobj && json_object_object_get(vobj, "dz")) {
@@ -834,6 +844,13 @@ gint ParserClass::json_parser(const gchar *path, const gchar *header) {
 
   // ret = json_object_put(jobj);
   // ret = json_object_put(hobj);
+
+  if (array_errors > 0) {
+    __LOG(LOG_CRIT,
+          "[%s][%s:%d] !!! %d fatal edgeconf array error(s): startup aborted",
+          LOG_KEY, _FILE_, __LINE__, array_errors);
+    return -1;
+  }
 
   return 0;
 }
