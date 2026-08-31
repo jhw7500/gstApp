@@ -415,7 +415,8 @@ int max9296_prepare_build_targets(const Max9296PrepareInput *input,
                                   Max9296PrepareTarget targets[2])
 {
     if (!input || !targets || input->generation == 0 ||
-        !((input->width == 1280 && input->height == 720) ||
+        !((input->width == 640 && input->height == 360) ||
+          (input->width == 1280 && input->height == 720) ||
           (input->width == 1920 && input->height == 1080)))
         return -EINVAL;
 

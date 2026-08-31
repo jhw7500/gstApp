@@ -11,6 +11,7 @@
  */
 
 #include "videoBin.h"
+#include "max9296Controls.h"
 #include <errno.h>
 #include <fcntl.h>
 #include <linux/videodev2.h>
@@ -276,17 +277,108 @@ static int set_v4l2_subdev_control(int csiNum, unsigned int ctrl_id,
   return ret;
 }
 
+static int apply_crop_v4l2(int csi_num, guint8 enabled_slots,
+                           guint8 ch0, guint8 ch1) {
+  const Max9296ZoomCenter centers[2] = {
+      {cmdArg.cam[ch0].dz_x, cmdArg.cam[ch0].dz_y},
+      {cmdArg.cam[ch1].dz_x, cmdArg.cam[ch1].dz_y},
+  };
+  const guint common_dz = cmdArg.dz[csi_num];
+  Max9296CropControlBatch batch = {};
+  char dev_path[32];
+  int result = 0;
+  int saved_errno = 0;
+  guint error_idx = 0;
+  const char *failed_stage = "none";
+
+  if (max9296_crop_build_control_batch(
+          cmdArg.crop_enable[csi_num] ? 1 : 0, enabled_slots, common_dz,
+          centers, &batch) < 0) {
+    errno = EINVAL;
+    __LOG(LOG_ERR,
+          "[MAX9296_CROP] csi=%d enable=%d slots=0x%x dz=%u "
+          "ch%d_center=%u/%u ch%d_center=%u/%u stage=build "
+          "error_idx=0 errno=%d(%s)",
+          csi_num, cmdArg.crop_enable[csi_num] ? 1 : 0, enabled_slots,
+          common_dz, ch0, centers[0].x, centers[0].y, ch1, centers[1].x,
+          centers[1].y, errno, strerror(errno));
+    return -1;
+  }
+
+  const guint effective_dz = static_cast<guint>(batch.tuple[0].value);
+  const guint effective_x0 = static_cast<guint>(batch.tuple[1].value);
+  const guint effective_y0 = static_cast<guint>(batch.tuple[2].value);
+  const guint effective_x1 = static_cast<guint>(batch.tuple[3].value);
+  const guint effective_y1 = static_cast<guint>(batch.tuple[4].value);
+  const int subdev_idx =
+      csi_num == 0 ? cmdArg.v4l_subdev_csi0 : cmdArg.v4l_subdev_csi1;
+  log_v4l_subdev_name_once(subdev_idx);
+  snprintf(dev_path, sizeof(dev_path), "/dev/v4l-subdev%d", subdev_idx);
+
+  const int fd = open(dev_path, O_RDWR);
+  if (fd < 0) {
+    __LOG(LOG_ERR,
+          "[MAX9296_CROP] csi=%d enable=%d slots=0x%x dz=%u "
+          "ch%d_center=%u/%u ch%d_center=%u/%u stage=open "
+          "error_idx=0 errno=%d(%s)",
+          csi_num, batch.enable.value, enabled_slots, effective_dz, ch0,
+          effective_x0, effective_y0, ch1, effective_x1, effective_y1, errno,
+          strerror(errno));
+    return -1;
+  }
+
+  struct v4l2_control enable_ctrl = {};
+  struct v4l2_ext_control tuple[5] = {};
+  struct v4l2_ext_controls ext_ctrls = {};
+  enable_ctrl.id = batch.enable.id;
+  enable_ctrl.value = batch.enable.value;
+  if (ioctl(fd, VIDIOC_S_CTRL, &enable_ctrl) < 0) {
+    result = -1;
+    saved_errno = errno;
+    failed_stage = "enable";
+    goto out;
+  }
+
+  for (size_t i = 0; i < batch.tuple_count; ++i) {
+    tuple[i].id = batch.tuple[i].id;
+    tuple[i].value = batch.tuple[i].value;
+  }
+
+  ext_ctrls.ctrl_class = V4L2_CTRL_CLASS_USER;
+  ext_ctrls.count = static_cast<__u32>(batch.tuple_count);
+  ext_ctrls.controls = tuple;
+  if (ioctl(fd, VIDIOC_S_EXT_CTRLS, &ext_ctrls) < 0) {
+    result = -1;
+    saved_errno = errno;
+    error_idx = ext_ctrls.error_idx;
+    failed_stage = "tuple";
+  }
+
+out:
+  close(fd);
+
+  __LOG(result < 0 ? LOG_ERR : LOG_NOTICE,
+        "[MAX9296_CROP] csi=%d enable=%d slots=0x%x dz=%u "
+        "ch%d_center=%u/%u ch%d_center=%u/%u stage=%s "
+        "error_idx=%u errno=%d(%s)",
+        csi_num, batch.enable.value, enabled_slots, effective_dz, ch0,
+        effective_x0, effective_y0, ch1, effective_x1, effective_y1,
+        failed_stage, error_idx, saved_errno,
+        saved_errno ? strerror(saved_errno) : "none");
+  if (saved_errno)
+    errno = saved_errno;
+  return result;
+}
+
 /* Apply LED flash for one channel slot.
  *
  * Driver owns the MCP4018 I2C-bus gate (MAX9295 MFP4 GPIO) — it opens,
  * writes wiper, closes atomically within the wiper s_ctrl handler.
  * Userspace therefore needs only two ioctls per channel.
  *
- * Caller selects the correct wiper_id:
- *   - firmware-routed controls (led_flash) always use the CH0 slot CID
- *     in single mode (driver single-path); per-slot CIDs in dual mode.
- *   - MCP4018 is hardware-direct, so in single mode pick the CID
- *     matching the active local port (Port A = CH0, Port B = CH1).
+ * Caller selects both IDs from the active cache slot. The firmware-routed
+ * led_flash control and the hardware-direct MCP4018 control must agree with
+ * the slot that the driver restores during cold prepare.
  */
 static void apply_led_flash_v4l2(int csiNum, guint8 ch_idx,
                                  unsigned int wiper_id,
@@ -624,6 +716,39 @@ gboolean VideoBin::init(guint8 csiNum) {
     return 1;
   }
 
+  // csiNum 0 -> channels 0,1 / csiNum 1 -> channels 2,3
+  const guint8 ch_base = csiNum * 2;
+  const guint8 ch0 = ch_base;
+  const guint8 ch1 = ch_base + 1;
+  const gboolean ch0_enabled = cmdArg.cam[ch0].enable;
+  const gboolean ch1_enabled = cmdArg.cam[ch1].enable;
+  const gboolean dual_mode = ch0_enabled && ch1_enabled;
+  const guint8 enabled_slots = (ch0_enabled ? 0x01 : 0) |
+                               (ch1_enabled ? 0x02 : 0);
+  const guint8 auto_ae_slots =
+      (ch0_enabled && cmdArg.cam[ch0].ae_on ? 0x01 : 0) |
+      (ch1_enabled && cmdArg.cam[ch1].ae_on ? 0x02 : 0);
+  const Max9296ExposurePlan exposure_plan = max9296_exposure_plan(
+      cmdArg.main_fps[csiNum], enabled_slots, auto_ae_slots);
+
+  if (exposure_plan == MAX9296_REJECT_MANUAL_EXPOSURE) {
+    __LOG(LOG_CRIT,
+          "[MAX9296_EXPOSURE] reject csi=%u channels=%u/%u "
+          "mode=%ux%u fps=%u requested_exp=%u/%u safe_fps_max=30 "
+          "reason=manual-exposure-above-safe-range",
+          csiNum, ch0, ch1, cmdArg.width, cmdArg.height,
+          cmdArg.main_fps[csiNum], cmdArg.cam[ch0].exp_time,
+          cmdArg.cam[ch1].exp_time);
+    return FALSE;
+  }
+
+  if (apply_crop_v4l2(csiNum, enabled_slots, ch0, ch1) < 0) {
+    __LOG(LOG_CRIT,
+          "[MAX9296_CROP] csi=%u initialization failed before prepare",
+          csiNum);
+    return FALSE;
+  }
+
   if ((cmdArg.cam[0].enable || cmdArg.cam[1].enable) &&
       (cmdArg.cam[2].enable || cmdArg.cam[3].enable))
     wdt_timeout = cmdArg.wdt_timeout_long;
@@ -682,22 +807,19 @@ gboolean VideoBin::init(guint8 csiNum) {
                LEAKY_DOWNSTREAM, NULL);
   g_object_set(be.watchdog, "timeout", wdt_timeout, NULL);
 
-  // V4L2 controls setup - per-channel settings in dual mode
-  // csiNum 0 -> channels 0,1 / csiNum 1 -> channels 2,3
-  guint8 ch_base = csiNum * 2;
-  guint8 ch0 = ch_base;
-  guint8 ch1 = ch_base + 1;
-  gboolean ch0_enabled = cmdArg.cam[ch0].enable;
-  gboolean ch1_enabled = cmdArg.cam[ch1].enable;
-  gboolean dual_mode = ch0_enabled && ch1_enabled;
-
 #if 1
   // Exposure time is shared (global) across both channels
-  if (ch0_enabled || ch1_enabled) {
+  if (exposure_plan == MAX9296_WRITE_EXPOSURE_SEED) {
     // Use ext_time from i2c config (shared between channels)
     guint32 ext_time =
         ch0_enabled ? cmdArg.cam[ch0].exp_time : cmdArg.cam[ch1].exp_time;
     set_v4l2_subdev_control(csiNum, V4L2_CID_EXT_TIME, ext_time);
+  } else {
+    __LOG(LOG_NOTICE,
+          "[MAX9296_EXPOSURE] skip seed csi=%u channels=%u/%u "
+          "mode=%ux%u fps=%u policy=auto-ae-high-fps",
+          csiNum, ch0, ch1, cmdArg.width, cmdArg.height,
+          cmdArg.main_fps[csiNum]);
   }
 
   if (dual_mode) {
@@ -761,23 +883,37 @@ gboolean VideoBin::init(guint8 csiNum) {
   } else {
     // Single-channel mode: use per-channel custom controls on the active
     // channel
+    const int active_slot = max9296_single_active_slot(enabled_slots);
+    if (active_slot < 0) {
+      __LOG(LOG_CRIT,
+            "[MAX9296_CONTROLS] invalid single-channel slots csi=%u slots=0x%x",
+            csiNum, enabled_slots);
+      return FALSE;
+    }
     CamConfig *cam_cfg = ch0_enabled ? &cmdArg.cam[ch0] : &cmdArg.cam[ch1];
     guint8 active_ch = ch0_enabled ? ch0 : ch1;
-    guint32 ext_time = cam_cfg->exp_time;
     int ae_on = cam_cfg->ae_on ? 1 : 0; // 1=auto, 0=manual
-    // Single-channel mode: max9296 driver's apply_cached_controls() reads
-    // only ctrl_cache.ch0 regardless of the physical channel, so target the
-    // CH0 slot. The i2c write still goes to the subdev's single address.
-    unsigned int ae_ctrl_id  = V4L2_CID_EXPOSURE_AUTO_CH0;
-    unsigned int autogain_id = V4L2_CID_AUTOGAIN_CH0;
-    unsigned int gain_id     = V4L2_CID_GAIN_CH0;
-    unsigned int awb_id      = V4L2_CID_AUTO_WHITE_BALANCE_CH0;
-    unsigned int hflip_id    = V4L2_CID_HFLIP_CH0;
-    unsigned int vflip_id    = V4L2_CID_VFLIP_CH0;
+    // The driver restores the cache slot selected by enable (left=CH0,
+    // right=CH1) during cold prepare. Use that same slot for every AP1302
+    // control so the cached and live-I2C paths have identical behavior.
+    unsigned int ae_ctrl_id = active_slot == 0
+                                  ? V4L2_CID_EXPOSURE_AUTO_CH0
+                                  : V4L2_CID_EXPOSURE_AUTO_CH1;
+    unsigned int autogain_id = active_slot == 0
+                                    ? V4L2_CID_AUTOGAIN_CH0
+                                    : V4L2_CID_AUTOGAIN_CH1;
+    unsigned int gain_id = active_slot == 0 ? V4L2_CID_GAIN_CH0
+                                             : V4L2_CID_GAIN_CH1;
+    unsigned int awb_id = active_slot == 0
+                              ? V4L2_CID_AUTO_WHITE_BALANCE_CH0
+                              : V4L2_CID_AUTO_WHITE_BALANCE_CH1;
+    unsigned int hflip_id = active_slot == 0 ? V4L2_CID_HFLIP_CH0
+                                              : V4L2_CID_HFLIP_CH1;
+    unsigned int vflip_id = active_slot == 0 ? V4L2_CID_VFLIP_CH0
+                                              : V4L2_CID_VFLIP_CH1;
     __LOG(LOG_NOTICE, "[GST][%s:%d] Single-channel mode for csi%d (ch%d)",
           _FILE_, __LINE__, csiNum, active_ch);
 
-    set_v4l2_subdev_control(csiNum, V4L2_CID_EXT_TIME, ext_time);
     set_v4l2_subdev_control(csiNum, ae_ctrl_id, ae_on);
     set_v4l2_subdev_control(csiNum, autogain_id, cam_cfg->ae_on ? 1 : 0);
     set_v4l2_subdev_control(csiNum, gain_id, cam_cfg->ae_gain);
@@ -789,21 +925,24 @@ gboolean VideoBin::init(guint8 csiNum) {
     set_v4l2_subdev_control(csiNum, vflip_id, cam_cfg->vflip ? 1 : 0);
 
     __LOG(LOG_NOTICE,
-          "[GST][%s:%d] ch%d controls (single, csi%d CH0 slot): ae_on=%d "
+          "[GST][%s:%d] ch%d controls (single, csi%d CH%d slot): ae_on=%d "
           "gain=%d exp_time=%u awb=%s(0x%x) hflip=%d vflip=%d",
-          _FILE_, __LINE__, active_ch, csiNum, ae_on, cam_cfg->ae_gain,
-          ext_time, cam_cfg->awb, awb_auto, cam_cfg->hflip, cam_cfg->vflip);
+          _FILE_, __LINE__, active_ch, csiNum, active_slot, ae_on,
+          cam_cfg->ae_gain, cam_cfg->exp_time, cam_cfg->awb, awb_auto,
+          cam_cfg->hflip, cam_cfg->vflip);
 
-    /* single mode:
-     *   - led_flash: CH0 slot CID (firmware routes via AP1302 global addr).
-     *   - MCP4018: hardware-direct, pick CID matching the active local port
-     *     (Port A = local CH0, Port B = local CH1). ch0_enabled distinguishes. */
-    unsigned int mcp_wiper_id = ch0_enabled ? V4L2_CID_MCP4018_WIPER_CH0
-                                            : V4L2_CID_MCP4018_WIPER_CH1;
-    apply_led_flash_v4l2(csiNum, active_ch,
-                         mcp_wiper_id,
-                         V4L2_CID_LED_FLASH_CH0);
+    /* Both controls must use the active cache slot. AP1302 uses its global
+     * address in single mode, while MCP4018 is routed through the matching
+     * physical port (Port A = CH0, Port B = CH1). */
+    unsigned int mcp_wiper_id = active_slot == 0
+                                    ? V4L2_CID_MCP4018_WIPER_CH0
+                                    : V4L2_CID_MCP4018_WIPER_CH1;
+    unsigned int flash_id = active_slot == 0 ? V4L2_CID_LED_FLASH_CH0
+                                              : V4L2_CID_LED_FLASH_CH1;
+    apply_led_flash_v4l2(csiNum, active_ch, mcp_wiper_id,
+                         flash_id);
   }
+
 #endif
   if (cmdArg.levelMode == MODE_TEST) {
     // GstPad *srcpad = gst_element_get_static_pad(be.src, "src");

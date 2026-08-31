@@ -54,7 +54,7 @@ CXXFLAGS += $(ALL_CFLAGS) $(CPP_PERF_FLAGS)
 
 ALLFLAGS=$(ALL_CFLAGS) $(ALL_LDFLAGS) -lturbojpeg
 #OBJS = videoBin.o recordBin.o muxSinkBin.o rtspServerBin.o audioBin.o muxBin.o
-OBJS = videoBin.o recordBin.o muxSinkBin.o rtspServerBin.o rtspSync.o testBin.o captureBin.o util.o parser.o cfgjson.o aes.o tcpServer.o audioBin.o ipc.o encoderBin.o encoderStat.o healthProducer.o max9296Prepare.o
+OBJS = videoBin.o recordBin.o muxSinkBin.o rtspServerBin.o rtspSync.o testBin.o captureBin.o util.o parser.o cfgjson.o aes.o tcpServer.o audioBin.o ipc.o encoderBin.o encoderStat.o healthProducer.o max9296Prepare.o max9296Controls.o
 
 $(OUTPUT)/gstApp : $(OBJS) main.cpp | $(OUTPUT) $(OBJ)
 	$(CXX) $(CPP_PERF_FLAGS) -o $@ $^ $(ALLFLAGS)
@@ -89,10 +89,15 @@ $(OUTPUT)/testMax9296Prepare : test/test_max9296Prepare.cpp \
 	$(CXX) -Wall -Wextra $(CPP_PERF_FLAGS) -pthread -o $@ \
 	  test/test_max9296Prepare.cpp max9296Prepare.cpp
 
+$(OUTPUT)/testMax9296Controls : test/test_max9296Controls.cpp \
+                               max9296Controls.cpp max9296Controls.h | $(OUTPUT)
+	$(CXX) -Wall -Wextra $(CPP_PERF_FLAGS) -o $@ \
+	  test/test_max9296Controls.cpp max9296Controls.cpp
+
 $(OUTPUT) $(OBJ) :
 	mkdir -p $@
 
-videoBin.o : videoBin.cpp videoBin.h
+videoBin.o : videoBin.cpp videoBin.h max9296Controls.h
 	$(CXX) $(CXXFLAGS) -c videoBin.cpp
 
 recordBin.o : recordBin.cpp recordBin.h
@@ -119,7 +124,7 @@ captureBin.o : captureBin.cpp captureBin.h
 util.o : util.cpp util.h
 	$(CXX) $(CXXFLAGS) -c util.cpp
 
-parser.o : parser.cpp parser.h cfgjson.h
+parser.o : parser.cpp parser.h cfgjson.h max9296Controls.h
 	$(CXX) $(CXXFLAGS) -c parser.cpp
 
 cfgjson.o : cfgjson.cpp cfgjson.h
@@ -145,6 +150,9 @@ encoderStat.o : encoderStat.cpp encoderStat.h
 
 max9296Prepare.o : max9296Prepare.cpp max9296Prepare.h
 	$(CXX) $(CXXFLAGS) -c max9296Prepare.cpp
+
+max9296Controls.o : max9296Controls.cpp max9296Controls.h
+	$(CXX) $(CXXFLAGS) -c max9296Controls.cpp
 
 #json_c.o : json_c.cpp json_c.h
 #	$(CXX) $(ALLFLAGS) -c json_c.cpp
