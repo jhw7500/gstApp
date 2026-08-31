@@ -63,6 +63,15 @@ arg_failure_gate = re.search(
 if not arg_failure_gate:
     fail('FALSE arg_parser result must exit nonzero before owner lock/sysfs')
 
+json_failure_gate = re.search(
+    r'if\s*\(\s*parser->json_parser\([^;]+\)\s*<\s*0\s*\)\s*'
+    r'return\s+(?:-1|EXIT_FAILURE)\s*;',
+    main_body)
+if not json_failure_gate:
+    fail('negative json_parser result must exit before owner lock/sysfs')
+if main_body.count('parser->json_parser(') != 1:
+    fail('main startup must contain exactly one json_parser call')
+
 for forbidden in ('safe_write_file', 'DEFAULT_ENABLE_PATH_',
                   'DEFAULT_ROTATE_PATH_'):
     if forbidden in arg_parser:
@@ -90,7 +99,7 @@ if safe_write.count('fclose(fp)') != 1:
 if 'errno = first_errno;' not in safe_write:
     fail('safe_write_file must preserve the first write/close errno')
 
-json_pos = main_body.find('parser->json_parser(')
+json_pos = json_failure_gate.start()
 arg_pos = main_body.find('parser->arg_parser(')
 check_pos = main_body.find('parser->check_arg(')
 last_copy_pos = main_body.rfind('cmdArg = parser->arg;')
