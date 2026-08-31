@@ -380,11 +380,9 @@ out:
  * writes wiper, closes atomically within the wiper s_ctrl handler.
  * Userspace therefore needs only two ioctls per channel.
  *
- * Caller selects the correct wiper_id:
- *   - firmware-routed controls (led_flash) always use the CH0 slot CID
- *     in single mode (driver single-path); per-slot CIDs in dual mode.
- *   - MCP4018 is hardware-direct, so in single mode pick the CID
- *     matching the active local port (Port A = CH0, Port B = CH1).
+ * Caller selects both IDs from the active cache slot. The firmware-routed
+ * led_flash control and the hardware-direct MCP4018 control must agree with
+ * the slot that the driver restores during cold prepare.
  */
 static void apply_led_flash_v4l2(int csiNum, guint8 ch_idx,
                                  unsigned int wiper_id,
@@ -889,18 +887,34 @@ gboolean VideoBin::init(guint8 csiNum) {
   } else {
     // Single-channel mode: use per-channel custom controls on the active
     // channel
+    const int active_slot = max9296_single_active_slot(enabled_slots);
+    if (active_slot < 0) {
+      __LOG(LOG_CRIT,
+            "[MAX9296_CONTROLS] invalid single-channel slots csi=%u slots=0x%x",
+            csiNum, enabled_slots);
+      return FALSE;
+    }
     CamConfig *cam_cfg = ch0_enabled ? &cmdArg.cam[ch0] : &cmdArg.cam[ch1];
     guint8 active_ch = ch0_enabled ? ch0 : ch1;
     int ae_on = cam_cfg->ae_on ? 1 : 0; // 1=auto, 0=manual
-    // Single-channel mode: max9296 driver's apply_cached_controls() reads
-    // only ctrl_cache.ch0 regardless of the physical channel, so target the
-    // CH0 slot. The i2c write still goes to the subdev's single address.
-    unsigned int ae_ctrl_id  = V4L2_CID_EXPOSURE_AUTO_CH0;
-    unsigned int autogain_id = V4L2_CID_AUTOGAIN_CH0;
-    unsigned int gain_id     = V4L2_CID_GAIN_CH0;
-    unsigned int awb_id      = V4L2_CID_AUTO_WHITE_BALANCE_CH0;
-    unsigned int hflip_id    = V4L2_CID_HFLIP_CH0;
-    unsigned int vflip_id    = V4L2_CID_VFLIP_CH0;
+    // The driver restores the cache slot selected by enable (left=CH0,
+    // right=CH1) during cold prepare. Use that same slot for every AP1302
+    // control so the cached and live-I2C paths have identical behavior.
+    unsigned int ae_ctrl_id = active_slot == 0
+                                  ? V4L2_CID_EXPOSURE_AUTO_CH0
+                                  : V4L2_CID_EXPOSURE_AUTO_CH1;
+    unsigned int autogain_id = active_slot == 0
+                                    ? V4L2_CID_AUTOGAIN_CH0
+                                    : V4L2_CID_AUTOGAIN_CH1;
+    unsigned int gain_id = active_slot == 0 ? V4L2_CID_GAIN_CH0
+                                             : V4L2_CID_GAIN_CH1;
+    unsigned int awb_id = active_slot == 0
+                              ? V4L2_CID_AUTO_WHITE_BALANCE_CH0
+                              : V4L2_CID_AUTO_WHITE_BALANCE_CH1;
+    unsigned int hflip_id = active_slot == 0 ? V4L2_CID_HFLIP_CH0
+                                              : V4L2_CID_HFLIP_CH1;
+    unsigned int vflip_id = active_slot == 0 ? V4L2_CID_VFLIP_CH0
+                                              : V4L2_CID_VFLIP_CH1;
     __LOG(LOG_NOTICE, "[GST][%s:%d] Single-channel mode for csi%d (ch%d)",
           _FILE_, __LINE__, csiNum, active_ch);
 
@@ -915,21 +929,22 @@ gboolean VideoBin::init(guint8 csiNum) {
     set_v4l2_subdev_control(csiNum, vflip_id, cam_cfg->vflip ? 1 : 0);
 
     __LOG(LOG_NOTICE,
-          "[GST][%s:%d] ch%d controls (single, csi%d CH0 slot): ae_on=%d "
+          "[GST][%s:%d] ch%d controls (single, csi%d CH%d slot): ae_on=%d "
           "gain=%d exp_time=%u awb=%s(0x%x) hflip=%d vflip=%d",
-          _FILE_, __LINE__, active_ch, csiNum, ae_on, cam_cfg->ae_gain,
-          cam_cfg->exp_time, cam_cfg->awb, awb_auto, cam_cfg->hflip,
-          cam_cfg->vflip);
+          _FILE_, __LINE__, active_ch, csiNum, active_slot, ae_on,
+          cam_cfg->ae_gain, cam_cfg->exp_time, cam_cfg->awb, awb_auto,
+          cam_cfg->hflip, cam_cfg->vflip);
 
-    /* single mode:
-     *   - led_flash: CH0 slot CID (firmware routes via AP1302 global addr).
-     *   - MCP4018: hardware-direct, pick CID matching the active local port
-     *     (Port A = local CH0, Port B = local CH1). ch0_enabled distinguishes. */
-    unsigned int mcp_wiper_id = ch0_enabled ? V4L2_CID_MCP4018_WIPER_CH0
-                                            : V4L2_CID_MCP4018_WIPER_CH1;
-    apply_led_flash_v4l2(csiNum, active_ch,
-                         mcp_wiper_id,
-                         V4L2_CID_LED_FLASH_CH0);
+    /* Both controls must use the active cache slot. AP1302 uses its global
+     * address in single mode, while MCP4018 is routed through the matching
+     * physical port (Port A = CH0, Port B = CH1). */
+    unsigned int mcp_wiper_id = active_slot == 0
+                                    ? V4L2_CID_MCP4018_WIPER_CH0
+                                    : V4L2_CID_MCP4018_WIPER_CH1;
+    unsigned int flash_id = active_slot == 0 ? V4L2_CID_LED_FLASH_CH0
+                                              : V4L2_CID_LED_FLASH_CH1;
+    apply_led_flash_v4l2(csiNum, active_ch, mcp_wiper_id,
+                         flash_id);
   }
 
 #endif

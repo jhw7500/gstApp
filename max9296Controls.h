@@ -55,6 +55,7 @@ uint8_t max9296_crop_enable_normalize(uint8_t present,
 int max9296_crop_build_control_batch(
     uint8_t crop_enable, uint8_t enabled_slots, uint32_t common_dz,
     const Max9296ZoomCenter centers[2], Max9296CropControlBatch *batch);
+int max9296_single_active_slot(uint8_t enabled_slots);
 Max9296ExposurePlan max9296_exposure_plan(uint32_t fps,
                                           uint8_t enabled_slots,
                                           uint8_t auto_ae_slots);

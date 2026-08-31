@@ -191,6 +191,14 @@ static void test_selects_high_fps_exposure_policy(void)
           MAX9296_REJECT_MANUAL_EXPOSURE);
 }
 
+static void test_single_isp_controls_follow_active_local_slot(void)
+{
+    CHECK(max9296_single_active_slot(0x01) == 0);
+    CHECK(max9296_single_active_slot(0x02) == 1);
+    CHECK(max9296_single_active_slot(0x00) == -1);
+    CHECK(max9296_single_active_slot(0x03) == -1);
+}
+
 int main(void)
 {
     test_sanitizes_common_factor_and_channel_center_independently();
@@ -201,6 +209,7 @@ int main(void)
     test_normalizes_strict_crop_enable_boolean();
     test_builds_enable_first_and_sanitized_crop_tuple();
     test_selects_high_fps_exposure_policy();
+    test_single_isp_controls_follow_active_local_slot();
     printf("max9296 controls test: %d checks, %d failures -> %s\n", checks,
            failures, failures ? "FAILED" : "PASSED");
     return failures ? 1 : 0;

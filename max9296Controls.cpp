@@ -119,6 +119,15 @@ int max9296_crop_build_control_batch(
     return batch->tuple_count ? 0 : -1;
 }
 
+int max9296_single_active_slot(uint8_t enabled_slots)
+{
+    if (enabled_slots == 0x01)
+        return 0;
+    if (enabled_slots == 0x02)
+        return 1;
+    return -1;
+}
+
 Max9296ExposurePlan max9296_exposure_plan(uint32_t fps,
                                           uint8_t enabled_slots,
                                           uint8_t auto_ae_slots)
