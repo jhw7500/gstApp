@@ -144,6 +144,16 @@ int main(void) {
     json_object_put(o);
   }
 
+  /* 15. Explicit array null is present, not missing → NOT_ARRAY + unchanged */
+  {
+    json_object *o = J("{\"bps\":null}");
+    gint out[2] = {4096, 1024};
+    CHECK(cfg_get_int_array(o, "bps", out, 2) == CFG_ARR_NOT_ARRAY);
+    CHECK(out[0] == 4096);
+    CHECK(out[1] == 1024);
+    json_object_put(o);
+  }
+
   printf("\ncfgjson test: %d checks, %d failures -> %s\n", g_checks, g_failures,
          g_failures ? "FAILED" : "PASSED");
   return g_failures ? 1 : 0;
