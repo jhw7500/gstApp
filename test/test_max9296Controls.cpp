@@ -184,11 +184,11 @@ static void test_selects_high_fps_exposure_policy(void)
     CHECK(max9296_exposure_plan(120, 2, 2) ==
           MAX9296_SKIP_EXPOSURE_SEED);
     CHECK(max9296_exposure_plan(31, 3, 1) ==
-          MAX9296_REJECT_MANUAL_EXPOSURE);
+          MAX9296_WARN_AND_WRITE_EXPOSURE_SEED);
     CHECK(max9296_exposure_plan(60, 1, 0) ==
-          MAX9296_REJECT_MANUAL_EXPOSURE);
+          MAX9296_WARN_AND_WRITE_EXPOSURE_SEED);
     CHECK(max9296_exposure_plan(120, 2, 0) ==
-          MAX9296_REJECT_MANUAL_EXPOSURE);
+          MAX9296_WARN_AND_WRITE_EXPOSURE_SEED);
 }
 
 static void test_single_isp_controls_follow_active_local_slot(void)

@@ -202,6 +202,28 @@ static void test_rejects_invalid_request_tuples(void)
     CHECK(max9296_prepare_build_targets(&input, target) == -EINVAL);
 }
 
+static void test_applies_resolution_specific_fps_limits(void)
+{
+    Max9296PrepareInput input = base_input();
+    Max9296PrepareTarget target[2] = {};
+
+    input.channel_enabled[0] = 1;
+    input.fps[0] = 31;
+    CHECK(max9296_prepare_build_targets(&input, target) == -EINVAL);
+
+    input.width = 1280;
+    input.height = 720;
+    CHECK(max9296_prepare_build_targets(&input, target) == -EINVAL);
+
+    input.width = 640;
+    input.height = 360;
+    input.fps[0] = 120;
+    CHECK(max9296_prepare_build_targets(&input, target) == 0);
+
+    input.fps[0] = 121;
+    CHECK(max9296_prepare_build_targets(&input, target) == -EINVAL);
+}
+
 static const char ready_sample[] =
     "state=READY generation=77 epoch=9 mode=dual-wide table=dual width=3840 "
     "height=1080 fps=15 code=0x2006 enable=3 errno=0 worker_errno=0 "
@@ -1209,6 +1231,7 @@ int main(void)
     test_builds_left_and_right_single_targets();
     test_accepts_disabled_csi_with_unusable_fps();
     test_rejects_invalid_request_tuples();
+    test_applies_resolution_specific_fps_limits();
     test_parses_ready_and_consumed_samples();
     test_parses_reordered_future_and_idle_samples();
     test_rejects_malformed_status_samples();

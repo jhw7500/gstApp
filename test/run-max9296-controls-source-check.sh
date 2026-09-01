@@ -69,14 +69,14 @@ if not re.search(r'if\s*\([^)]*VIDIOC_S_EXT_CTRLS[^)]*\)\s*<\s*0\s*\)', crop):
 enabled_pos = init.find('enabled_slots =')
 auto_pos = init.find('auto_ae_slots =')
 plan_pos = init.find('max9296_exposure_plan(')
-reject_pos = init.find('MAX9296_REJECT_MANUAL_EXPOSURE')
+warn_pos = init.find('MAX9296_WARN_AND_WRITE_EXPOSURE_SEED')
 crop_call_pos = init.find('apply_crop_v4l2(')
 first_regular_ctrl = init.find('set_v4l2_subdev_control(')
 ordered = (
     ('enabled slot mask', enabled_pos),
     ('auto-AE slot mask', auto_pos),
     ('exposure policy', plan_pos),
-    ('manual exposure rejection', reject_pos),
+    ('manual exposure warning', warn_pos),
     ('atomic crop apply', crop_call_pos),
     ('ordinary camera controls', first_regular_ctrl),
 )
@@ -87,10 +87,15 @@ for (left_label, left), (right_label, right) in zip(ordered, ordered[1:]):
     if left >= right:
         fail(f'VideoBin order violation: {left_label} must precede {right_label}')
 
-if not re.search(
-        r'if\s*\(\s*exposure_plan\s*==\s*MAX9296_REJECT_MANUAL_EXPOSURE\s*\)'
-        r'\s*\{.*?return\s+FALSE\s*;', init, flags=re.DOTALL):
-    fail('unsafe manual exposure must fail VideoBin::init before any ioctl')
+warning_branch = re.search(
+    r'if\s*\(\s*exposure_plan\s*==\s*MAX9296_WARN_AND_WRITE_EXPOSURE_SEED\s*\)'
+    r'\s*\{(?P<body>.*?)\}', init, flags=re.DOTALL)
+if not warning_branch or 'LOG_WARNING' not in warning_branch.group('body'):
+    fail('high-FPS manual exposure must emit an operator-visible warning')
+if not warning_branch or 'over_period' not in warning_branch.group('body'):
+    fail('high-FPS manual exposure warning must report frame-period overflow')
+if 'return FALSE' in warning_branch.group('body'):
+    fail('high-FPS manual exposure warning must not abort VideoBin::init')
 if not re.search(
         r'if\s*\(\s*apply_crop_v4l2\([^;]+\)\s*<\s*0\s*\)'
         r'\s*\{.*?return\s+FALSE\s*;', init, flags=re.DOTALL):
@@ -98,9 +103,9 @@ if not re.search(
 if init.count('V4L2_CID_EXT_TIME') != 1:
     fail('VideoBin::init must have exactly one exposure seed call')
 if not re.search(
-        r'if\s*\(\s*exposure_plan\s*==\s*MAX9296_WRITE_EXPOSURE_SEED\s*\)'
+        r'if\s*\(\s*exposure_plan\s*!=\s*MAX9296_SKIP_EXPOSURE_SEED\s*\)'
         r'\s*\{[^{}]*V4L2_CID_EXT_TIME', init, flags=re.DOTALL):
-    fail('exposure seed must only be written by the <=30fps policy branch')
+    fail('exposure seed must be written for safe and warned-manual policies')
 
 video_init_pos = main.find('videoBin[csiNum].init(')
 prepare_pos = main.find('max9296_prepare_all(')

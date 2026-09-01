@@ -731,15 +731,20 @@ gboolean VideoBin::init(guint8 csiNum) {
   const Max9296ExposurePlan exposure_plan = max9296_exposure_plan(
       cmdArg.main_fps[csiNum], enabled_slots, auto_ae_slots);
 
-  if (exposure_plan == MAX9296_REJECT_MANUAL_EXPOSURE) {
-    __LOG(LOG_CRIT,
-          "[MAX9296_EXPOSURE] reject csi=%u channels=%u/%u "
-          "mode=%ux%u fps=%u requested_exp=%u/%u safe_fps_max=30 "
-          "reason=manual-exposure-above-safe-range",
+  if (exposure_plan == MAX9296_WARN_AND_WRITE_EXPOSURE_SEED) {
+    const guint32 frame_period_us =
+        cmdArg.main_fps[csiNum] ? 1000000U / cmdArg.main_fps[csiNum] : 0U;
+    const guint32 requested_exp =
+        ch0_enabled ? cmdArg.cam[ch0].exp_time : cmdArg.cam[ch1].exp_time;
+
+    __LOG(LOG_WARNING,
+          "[MAX9296_EXPOSURE] warning csi=%u channels=%u/%u "
+          "mode=%ux%u fps=%u requested_exp=%u/%u frame_period_us=%u "
+          "over_period=%u safe_fps_max=30 action=write",
           csiNum, ch0, ch1, cmdArg.width, cmdArg.height,
           cmdArg.main_fps[csiNum], cmdArg.cam[ch0].exp_time,
-          cmdArg.cam[ch1].exp_time);
-    return FALSE;
+          cmdArg.cam[ch1].exp_time, frame_period_us,
+          (frame_period_us && requested_exp >= frame_period_us) ? 1U : 0U);
   }
 
   if (apply_crop_v4l2(csiNum, enabled_slots, ch0, ch1) < 0) {
@@ -809,7 +814,7 @@ gboolean VideoBin::init(guint8 csiNum) {
 
 #if 1
   // Exposure time is shared (global) across both channels
-  if (exposure_plan == MAX9296_WRITE_EXPOSURE_SEED) {
+  if (exposure_plan != MAX9296_SKIP_EXPOSURE_SEED) {
     // Use ext_time from i2c config (shared between channels)
     guint32 ext_time =
         ch0_enabled ? cmdArg.cam[ch0].exp_time : cmdArg.cam[ch1].exp_time;

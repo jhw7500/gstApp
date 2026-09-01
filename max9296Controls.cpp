@@ -138,6 +138,6 @@ Max9296ExposurePlan max9296_exposure_plan(uint32_t fps,
     enabled_slots &= 0x03;
     auto_ae_slots &= 0x03;
     if (enabled_slots & static_cast<uint8_t>(~auto_ae_slots))
-        return MAX9296_REJECT_MANUAL_EXPOSURE;
+        return MAX9296_WARN_AND_WRITE_EXPOSURE_SEED;
     return MAX9296_SKIP_EXPOSURE_SEED;
 }

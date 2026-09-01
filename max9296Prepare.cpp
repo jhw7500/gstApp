@@ -19,6 +19,9 @@ const char *const kPreparePaths[2] = {
     "/sys/bus/i2c/devices/1-0048/prepare",
 };
 
+const uint32_t kMaxFpsHdFhd = 30;
+const uint32_t kMaxFps360p = 120;
+
 enum StatusField {
     FIELD_STATE,
     FIELD_GENERATION,
@@ -420,6 +423,10 @@ int max9296_prepare_build_targets(const Max9296PrepareInput *input,
           (input->width == 1920 && input->height == 1080)))
         return -EINVAL;
 
+    const uint32_t max_fps = input->width == 640 && input->height == 360
+                                 ? kMaxFps360p
+                                 : kMaxFpsHdFhd;
+
     for (unsigned channel = 0; channel < 4; ++channel)
         if (input->channel_enabled[channel] > 1)
             return -EINVAL;
@@ -441,7 +448,7 @@ int max9296_prepare_build_targets(const Max9296PrepareInput *input,
                                    : (enable == 1 ? "left"
                                                   : (enable == 2 ? "right"
                                                                  : "none"));
-        if (target.active && (target.fps == 0 || target.fps > 120))
+        if (target.active && (target.fps == 0 || target.fps > max_fps))
             return -EINVAL;
     }
 
