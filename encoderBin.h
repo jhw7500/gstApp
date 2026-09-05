@@ -62,7 +62,9 @@ public :
     void getGop();
     void getKeyframe();
     void setkeyframe(guint16 data);
-    void forceKeyframe();
+    /* running_time 을 주면 그 시점의 프레임을 IDR 로 만든다. GST_CLOCK_TIME_NONE 이면
+     * '각 인코더가 이 이벤트를 처리하는 시점' 이라 채널마다 다른 프레임에 박힐 수 있다. */
+    void forceKeyframe(GstClockTime running_time = GST_CLOCK_TIME_NONE);
     void setDualBps(gboolean val);
     gboolean addBinRtspSrcPad();
     GstPad* getBinRtspSrcPad();
