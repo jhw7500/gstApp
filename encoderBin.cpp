@@ -973,15 +973,17 @@ void EncoderBin::setkeyframe(guint16 data)
     g_print("rec ch%d set keyframe : %d\n", encData.ch, key);
 }
 
-void EncoderBin::forceKeyframe()
+void EncoderBin::forceKeyframe(GstClockTime running_time)
 {
     if (re.enc == NULL) return;
 
-    // 업스트림 방향으로 force-keyunit 이벤트 전송
-    // timestamp: GST_CLOCK_TIME_NONE (현재 시점), count: 1 (즉시), flags: 0
-    GstEvent *event = gst_video_event_new_upstream_force_key_unit(GST_CLOCK_TIME_NONE, TRUE, 0);
+    /* 업스트림 force-keyunit. running_time 을 주면 네 인코더가 '같은 내용 지점' 을 IDR 로
+     * 만들므로 채널 간 GOP 격자가 어긋나지 않는다. GST_CLOCK_TIME_NONE 이면 종전 동작
+     * (각 인코더가 이벤트를 처리하는 시점)으로 되돌아간다. */
+    GstEvent *event = gst_video_event_new_upstream_force_key_unit(running_time, TRUE, 0);
     if (gst_element_send_event(re.enc, event)) {
-        __LOG(LOG_INFO, "[GST][%s:%d] ch%d Force keyframe event sent", _FILE_, __LINE__, encData.ch);
+        __LOG(LOG_INFO, "[GST][%s:%d] ch%d Force keyframe event sent (rt:%" G_GUINT64_FORMAT ")",
+              _FILE_, __LINE__, encData.ch, (guint64) running_time);
     } else {
         __LOG(LOG_ERR, "[GST][%s:%d] ch%d Failed to send force keyframe event", _FILE_, __LINE__, encData.ch);
     }

@@ -462,6 +462,26 @@ static void check_terminal_input(
   return;
 }
 
+/* 강제 분할의 공통 기준점을 지금으로부터 얼마나 앞에 둘 것인가.
+ * 너무 짧으면 이미 지나친 채널이 생겨 다음 자연 키프레임(GOP=1초)까지 밀리고,
+ * 너무 길면 정각 대비 분할이 그만큼 늦어진다. 15fps 기준 3프레임. */
+#define SPLIT_COMMON_RT_MARGIN_MS 200
+
+/* 파이프라인 공통 running-time. 네 채널이 한 파이프라인에 있으므로 이 값 하나로
+ * 강제 IDR 과 조각 경계를 같은 내용 지점에 맞출 수 있다.
+ * 클럭이 아직 없으면(PLAYING 전) NONE 을 돌려 호출부가 종전 동작으로 되돌아간다. */
+static GstClockTime split_common_running_time(void) {
+  if (pipeline == NULL) return GST_CLOCK_TIME_NONE;
+  GstClock *clk = gst_element_get_clock(pipeline);
+  if (clk == NULL) return GST_CLOCK_TIME_NONE;
+  GstClockTime now = gst_clock_get_time(clk);
+  GstClockTime base = gst_element_get_base_time(pipeline);
+  gst_object_unref(clk);
+  if (!GST_CLOCK_TIME_IS_VALID(now) || !GST_CLOCK_TIME_IS_VALID(base) || now < base)
+    return GST_CLOCK_TIME_NONE;
+  return (now - base) + (SPLIT_COMMON_RT_MARGIN_MS * GST_MSECOND);
+}
+
 static void splitCheck(gpointer data, guint8 startSec) {
   ThreadArgs *tArgs = (ThreadArgs *)data;
   MuxSinkBin *muxSinkBin = (MuxSinkBin *)tArgs->arg3;
@@ -589,10 +609,11 @@ static void splitCheck(gpointer data, guint8 startSec) {
 
     if (is_fully_aligned) {
       if (need_first_split) {
+        GstClockTime split_rt = split_common_running_time();
         for (i = 0; i < MAX_CHANNEL; i++) {
           if (!cmdArg.cam[i].enable) continue;
           if ((g_link_disconnect_mask >> i) & 1) continue;
-          muxSinkBin[i].splitNow(NULL, FALSE);
+          muxSinkBin[i].splitNow(NULL, FALSE, split_rt);
           muxSinkBin[i].setSplitMsec(SPLIT_MSEC_UNSET);
           muxSinkBin[i].setSplitRunningTime(GST_CLOCK_TIME_NONE);
         }
@@ -636,11 +657,19 @@ static void splitCheck(gpointer data, guint8 startSec) {
             "[GST][%s:%d] Snap-back split (diff:%ds, smMax:%dms, skew:%dms/%s, wall-skew:%dms)",
             _FILE_, __LINE__, diff, splitMax, skew_ms, skew_basis, wall_skew_ms);
       
+      /* 강제 IDR 과 조각 경계가 '같은' 내용 지점을 가리켜야 한다. 하나라도 어긋나면
+       * split-at-running-time 이 다음 자연 키프레임까지 기다린다. */
+      GstClockTime split_rt = split_common_running_time();
+      __LOG(LOG_NOTICE, "[GST][%s:%d] forced split at running-time %" G_GUINT64_FORMAT
+            " (margin %dms)%s", _FILE_, __LINE__, (guint64) split_rt,
+            SPLIT_COMMON_RT_MARGIN_MS,
+            GST_CLOCK_TIME_IS_VALID(split_rt) ? "" : " -> INVALID, split-after 로 폴백");
+
       if (cmdArg.dual_enc == FALSE && eBin != NULL) {
         for (i = 0; i < MAX_CHANNEL; i++) {
           if (!cmdArg.cam[i].enable) continue;
           if ((g_link_disconnect_mask >> i) & 1) continue;
-          eBin[i].forceKeyframe();
+          eBin[i].forceKeyframe(split_rt);
         }
       }
 
@@ -651,7 +680,7 @@ static void splitCheck(gpointer data, guint8 startSec) {
       for (i = 0; i < MAX_CHANNEL; i++) {
         if (!cmdArg.cam[i].enable) continue;
         if ((g_link_disconnect_mask >> i) & 1) continue;
-        muxSinkBin[i].splitNow(NULL, FALSE);
+        muxSinkBin[i].splitNow(NULL, FALSE, split_rt);
         muxSinkBin[i].setSplitMsec(SPLIT_MSEC_UNSET);
         muxSinkBin[i].setSplitRunningTime(GST_CLOCK_TIME_NONE);
       }

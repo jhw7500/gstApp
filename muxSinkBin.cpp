@@ -474,16 +474,23 @@ guint8 MuxSinkBin::getStartFlag() {
   return muxSinkData.start_f;
 }
 
-gboolean MuxSinkBin::splitNow(gpointer data, gboolean timer_en) {
+gboolean MuxSinkBin::splitNow(gpointer data, gboolean timer_en,
+                              GstClockTime running_time) {
   // MuxBin* muxBin = MuxBin::getInstance();
   // MuxBin* muxBin = (MuxBin *)data;
 
   //__LOG(LOG_NOTICE, "[GST][%s:%d] %s ch : %d", _FILE_, __LINE__, __FUNCTION__,
   //muxSinkData.ch);
 
-  // g_signal_emit_by_name (be.sink, "split-at-running-time");
-  g_signal_emit_by_name(be.sink, "split-after");
-  // g_signal_emit_by_name (be.sink, "split-now");
+  /* split-after 는 '이 sink 가 지금 처리 중인 버퍼 다음' 이라 기준점이 채널마다 다르다.
+   * 네 채널의 스트리밍 스레드 위치가 한 프레임 어긋나면 조각 경계도 한 프레임 어긋난다
+   * (실측: 스냅백 2회 중 1회, docs/CAMERA_SYNC_VALIDATION.md §3.31).
+   * running_time 을 받으면 네 sink 가 같은 내용 지점에서 자른다. */
+  if (GST_CLOCK_TIME_IS_VALID(running_time)) {
+    g_signal_emit_by_name(be.sink, "split-at-running-time", (guint64) running_time);
+  } else {
+    g_signal_emit_by_name(be.sink, "split-after");
+  }
 
   if (timer_en) {
     __LOG(LOG_NOTICE, "[GST][%s:%d] split timer start ch : %d", _FILE_,
