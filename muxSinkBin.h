@@ -61,7 +61,10 @@ public :
     GstPad* getBinPad();
     GstPad* getBinVideoSinkPad();
     GstPad* getBinAudioSinkPad();
-    gboolean splitNow(gpointer data, gboolean timer_en);
+    /* running_time 이 유효하면 split-at-running-time 으로 '공통 내용 지점' 에서 자른다.
+     * 무효면 종전 split-after (= 이 채널이 지금 처리 중인 버퍼 다음) 로 되돌아간다. */
+    gboolean splitNow(gpointer data, gboolean timer_en,
+                      GstClockTime running_time = GST_CLOCK_TIME_NONE);
     gboolean addBinAudioSinkPad();
     gboolean addBinVideoSinkPad();
     guint8 getStartFlag();

@@ -63,6 +63,14 @@ restore() {
   log "  운영 prepare: $(prep 2-0048 | grep -oE 'state=[A-Z]+|width=[0-9]+|height=[0-9]+|fps=[0-9]+|errno=[-0-9]+' | tr '\n' ' ')"
   log "=== restore 완료 ==="
 }
+# 동시 실행 방지 — 두 러너가 겹치면 서로의 gstApp 을 pkill 하고 config/하드리셋이 엉킨다.
+# trap 설치 '전에' 잡는다. 락 실패로 빠질 때 restore 가 돌면 남의 런을 망친다.
+exec 9>"$D/.runner.lock"
+if ! flock -n 9; then
+  echo "[$(date -Is)] 다른 러너가 실행 중이다 — 중단 (락: $D/.runner.lock)" | tee -a "$RUNLOG"
+  exit 9
+fi
+
 trap restore EXIT INT TERM
 
 # ── 1. 원본 백업 (최초 1회, 절대 덮지 않음) ──────────────────────────────────
@@ -99,11 +107,16 @@ pkill -x gstApp 2>/dev/null; pkill -x killcam 2>/dev/null; sleep 3
 hard_reset "pre-run" || { log "!!! 하드 리셋 실패 — 중단"; exit 7; }
 
 cp -f "$TESTCONF" "$CONF"; sync; log "시험 config 투입"
-cp -f /usr/local/bin/gstApp "$BIN"; log "바이너리 md5 $(md5of "$BIN")"
+# 기본은 운영 바이너리. SKEW55A_SRC_BIN 으로 시험 빌드를 지정할 수 있다.
+SRC_BIN="${SKEW55A_SRC_BIN:-/usr/local/bin/gstApp}"
+[ -x "$SRC_BIN" ] || { log "시험 바이너리 없음: $SRC_BIN"; exit 8; }
+cp -f "$SRC_BIN" "$BIN"; log "바이너리 $SRC_BIN md5 $(md5of "$BIN")"
 
 touch "$MARKER"; ISI0=$(isi); T0=$(date +%s)
 cd /root || { log "cd /root 실패"; exit 10; }
-setsid "$BIN" -d 5 -m 4 -g 7 </dev/null >"$LOG" 2>&1 &
+# SKEW55A_EXTRA_ARGS 로 추가 인자를 줄 수 있다(예: -X 100 으로 스냅백을 강제 유발).
+# shellcheck disable=SC2086  # 인자 분리가 의도다
+setsid "$BIN" -d 5 -m 4 -g 7 ${SKEW55A_EXTRA_ARGS:-} </dev/null >"$LOG" 2>&1 &
 APP_PID=$!
 log "기동 pid=$APP_PID log=$LOG"
 
@@ -134,6 +147,12 @@ ISI1=$(isi); T1=$(date +%s); EL=$((T1-T0)); DI=$((ISI1-ISI0))
 log "=== 결과 $TAG ==="
 # ISI 는 CSI 당 '결합 프레임'(2채널이 한 프레임) 하나를 센다 → 기대값은 fps x CSI수(2)
 log "  경과 ${EL}s  ISI 증가 ${DI}  → 실측 $(awk -v d=$DI -v e=$EL 'BEGIN{if(e>0)printf "%.2f",d/e; else print "?"}') /s (기대 fps x CSI2 = $((FPS*2)))"
+log "  스냅백 발생: $(grep -ac "Snap-back" "$LOG") 회 / 그중 forced-rt 로그: $(grep -ac "forced split at running-time" "$LOG") 회"
+# wall-skew: 를 먼저 지운다 — 안 그러면 'wall-skew:264ms' 가 'skew:264ms' 로 잡혀 오집계된다.
+# 부호도 받는다. 현재 코드에서 skew 는 rtMax-rtMin 이라 음수가 나올 수 없지만, 아래 분포
+# 줄은 skew:[0-9-]*ms 로 음수를 잡으므로 여기서만 못 잡으면 두 출력이 어긋난다.
+# 검증 도구가 특정 값 부류를 조용히 빠뜨리는 것은 이 스크립트의 목적과 정반대다.
+log "  0 이 아닌 skew 표본: $(sed -E 's/\x1b\[[0-9;]*m//g; s/wall-skew:-?[0-9]+ms//g' "$LOG" | grep -aoE 'skew:-?[0-9]+ms' | grep -cvE 'skew:-?0ms') 건"
 log "  skew 표본 분포:"
 grep -ao 'skew:[0-9-]*ms[^,]*, wall-skew:[0-9-]*ms, active:[0-9]*' "$LOG" | sort | uniq -c | sort -rn | head -15 | sed 's/^/    /' | tee -a "$RUNLOG"
 # 앱을 먼저 정상 종료해 마지막 조각까지 닫는다 (감시자 정지 중이라 .part 가 최종본이다)
