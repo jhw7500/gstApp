@@ -149,7 +149,10 @@ log "=== 결과 $TAG ==="
 log "  경과 ${EL}s  ISI 증가 ${DI}  → 실측 $(awk -v d=$DI -v e=$EL 'BEGIN{if(e>0)printf "%.2f",d/e; else print "?"}') /s (기대 fps x CSI2 = $((FPS*2)))"
 log "  스냅백 발생: $(grep -ac "Snap-back" "$LOG") 회 / 그중 forced-rt 로그: $(grep -ac "forced split at running-time" "$LOG") 회"
 # wall-skew: 를 먼저 지운다 — 안 그러면 'wall-skew:264ms' 가 'skew:264ms' 로 잡혀 오집계된다.
-log "  0 이 아닌 skew 표본: $(sed -E 's/\x1b\[[0-9;]*m//g; s/wall-skew:[0-9]+ms//g' "$LOG" | grep -aoE 'skew:[0-9]+ms' | grep -cv 'skew:0ms') 건"
+# 부호도 받는다. 현재 코드에서 skew 는 rtMax-rtMin 이라 음수가 나올 수 없지만, 아래 분포
+# 줄은 skew:[0-9-]*ms 로 음수를 잡으므로 여기서만 못 잡으면 두 출력이 어긋난다.
+# 검증 도구가 특정 값 부류를 조용히 빠뜨리는 것은 이 스크립트의 목적과 정반대다.
+log "  0 이 아닌 skew 표본: $(sed -E 's/\x1b\[[0-9;]*m//g; s/wall-skew:-?[0-9]+ms//g' "$LOG" | grep -aoE 'skew:-?[0-9]+ms' | grep -cvE 'skew:-?0ms') 건"
 log "  skew 표본 분포:"
 grep -ao 'skew:[0-9-]*ms[^,]*, wall-skew:[0-9-]*ms, active:[0-9]*' "$LOG" | sort | uniq -c | sort -rn | head -15 | sed 's/^/    /' | tee -a "$RUNLOG"
 # 앱을 먼저 정상 종료해 마지막 조각까지 닫는다 (감시자 정지 중이라 .part 가 최종본이다)
