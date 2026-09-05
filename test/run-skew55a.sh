@@ -102,7 +102,7 @@ cp -f "$TESTCONF" "$CONF"; sync; log "시험 config 투입"
 cp -f /usr/local/bin/gstApp "$BIN"; log "바이너리 md5 $(md5of "$BIN")"
 
 touch "$MARKER"; ISI0=$(isi); T0=$(date +%s)
-cd /root
+cd /root || { log "cd /root 실패"; exit 10; }
 setsid "$BIN" -d 5 -m 4 -g 7 </dev/null >"$LOG" 2>&1 &
 APP_PID=$!
 log "기동 pid=$APP_PID log=$LOG"
