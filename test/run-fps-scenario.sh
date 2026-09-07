@@ -233,6 +233,9 @@ if [ ! -e "$BACKUP" ]; then
 	md5sum "$BACKUP" | awk '{print $1}' >"$BACKUP.md5"
 fi
 ORIG_MD5=$(cat "$BACKUP.md5")
+# 이 실행이 시작된 시각. 녹화 삭제를 이 시점 이후 파일로만 한정한다 — 고정 10분 창은
+# /dev/shm 과 운영 tmp_path/sd_tmp_path 를 훑어 직전 운영 녹화까지 지웠다.
+RUN_T0=$(date +%s)
 
 WAS_ACTIVE=0
 systemctl is-active --quiet cam-operate.service && WAS_ACTIVE=1
@@ -651,7 +654,7 @@ for combo in $SUPPORTED; do
 		for D in /dev/shm "$(jq -r '.VHL_CAM.tmp_path // empty' "$BACKUP")" \
 			"$(jq -r '.VHL_CAM.sd_tmp_path // empty' "$BACKUP")"; do
 			[ -n "$D" ] && [ -d "$D" ] &&
-				find "$D" -maxdepth 2 -name '*.mp4*' -mmin -10 -delete 2>/dev/null
+				find "$D" -maxdepth 2 -name '*.mp4*' -newermt "@$RUN_T0" -delete 2>/dev/null
 		done
 		sleep 2
 	done

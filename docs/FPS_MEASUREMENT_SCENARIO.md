@@ -613,6 +613,16 @@ fast 계열 0/18 도 p≈0.06 로 경계선이다 — **시사적이나 미확�
 집계는 반드시 `test/classify-freeze.awk` 로 원자료에서 다시 낸다 — 이 분류기는 합성
 양성(중간부터 CSI=0)·음성(원본)·기동실패(전구간 CSI=0) 세 경우로 판별력을 검증했다.
 
+**입력 형식이 하나뿐이다.** 헤더가 정확히 `t_us,a_total,a_cnt,b_total,b_cnt,csi_d` 인
+회차별 CSV, 즉 `fast_*_t<N>.csv` 와 `poll_*_<arm>_t<N>.csv` 만 받는다. `frz_*`(csi_d 가 3번
+필드)와 `frzexp_*`(4번 필드)는 레이아웃이 달라 **쓸 수 없다** — 예전 판은 그런 파일을 먹으면
+exit 0 으로 그럴듯한 오답을 냈다. 지금은 헤더를 검사해 `exit 2` 로 거부하고, 데이터 행이
+없을 때도 기동실패로 오판하지 않고 거부한다.
+
+```bash
+awk -v NAME=poll_slow_t7 -f test/classify-freeze.awk /root/fpsmeas/poll_..._slow_t7.csv
+```
+
 #### 5.8.7 측정 설계 교훈
 
 - **샘플링 오프셋을 반드시 로그에 남긴다.** `which-ch-died.sh` 의 `sleep 15` 가 기록되지 않아
@@ -628,9 +638,22 @@ fast 계열 0/18 도 p≈0.06 로 경계선이다 — **시사적이나 미확�
   (`max9296.c:1968-1969`). 판별은 **펌웨어 로드 후**(스트림 시작 뒤)에 해야 한다. 기동 직후에
   잡으면 `0x3c` 로 잘못 고정돼 두 채널이 같은 디바이스를 읽는다(실측에서 겪음).
 
-측정 도구: `test/probe-transport-t0.sh`(전송 4계층 t=0 프로브), `test/probe-dual-topology.sh`,
-`test/probe-exposure-controlled.sh`, `test/probe-freeze-repeat.sh`, `test/probe-aeon-bisect.sh`,
-`test/probe-aeon-ch23.sh`, `test/probe-default-h265.sh`.
+측정 도구 — **원자료 태그와 함께 전수로 적는다**(이름이 안 적힌 도구는 남기지 않는다):
+
+| 스크립트 | 원자료 태그 | 무엇을 쟀나 |
+|---|---|---|
+| `test/probe-transport-t0.sh` | `transport_` | 전송 4계층을 t=0 부터 (§5.8.1) |
+| `test/probe-dual-topology.sh` | `dualtopo_` | ch2+ch3 듀얼 · 앱 없는 독립 파이프라인 |
+| `test/probe-exposure-controlled.sh` | `expctl_` | 노출·AE 통제 후 재판별 |
+| `test/probe-freeze-repeat.sh` | `freeze_` | 90초 창 반복, 동결 발생률·시각 |
+| `test/probe-aeon-bisect.sh` | `aeon_` | `ae_on` 단일요인 분해 — **근인 확정** (§5.8.2) |
+| `test/probe-aeon-ch23.sh` | `ch23_` | 다른 디시리얼라이저에서 반례 검증 (§5.8.2) |
+| `test/probe-default-h265.sh` | `dflt_` | 패키지 정본 + h265 최종 확인 (§5.8.4) |
+| `test/probe-freeze-forensics.sh` | `frz_` | 동결 순간 레지스터 덤프 + dmesg (§5.8.6 배제 목록) |
+| `test/probe-freeze-exposure.sh` | `frzexp_` | 동결의 노출 의존성 (§5.8.6) |
+| `test/probe-freeze-fastsample.sh` | `fast_` | 50Hz 샘플링 — 이탈 통계 (§5.8.6) |
+| `test/probe-freeze-pollrate.sh` | `poll_` | i2c 폴링 빈도 A/B · 전환 시계열 (§5.8.6) |
+| `test/classify-freeze.awk` | — | 원자료 재분류(아래 주의 참조). 입력은 `fast_*`/`poll_*` 회차별 CSV **뿐** |
 원본(타겟 `/root/fpsmeas/`): `transport_20260907_065027`, `dualtopo_20260907_070933`,
 `expctl_20260907_072630`, `freeze_20260907_074217`, `aeon_20260907_081557`,
 `ch23_20260907_083448`, `dflt_20260907_085621` (각 `.log`/`.csv`/`_summary.csv`).
