@@ -19,7 +19,11 @@ const char *const kPreparePaths[2] = {
     "/sys/bus/i2c/devices/1-0048/prepare",
 };
 
-const uint32_t kMaxFpsHdFhd = 30;
+/* Per-resolution ceilings, mirroring the max9296 driver mode table.  HD and
+ * FHD must stay separate: over-30 FHD requests fall back to integer trigger
+ * division and measure 19.8-21.8 fps, worse than asking for 30. */
+const uint32_t kMaxFpsHd = 60;
+const uint32_t kMaxFpsFhd = 30;
 const uint32_t kMaxFps360p = 120;
 
 enum StatusField {
@@ -425,7 +429,8 @@ int max9296_prepare_build_targets(const Max9296PrepareInput *input,
 
     const uint32_t max_fps = input->width == 640 && input->height == 360
                                  ? kMaxFps360p
-                                 : kMaxFpsHdFhd;
+                                 : (input->height == 720 ? kMaxFpsHd
+                                                         : kMaxFpsFhd);
 
     for (unsigned channel = 0; channel < 4; ++channel)
         if (input->channel_enabled[channel] > 1)

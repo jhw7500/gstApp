@@ -208,11 +208,16 @@ static void test_applies_resolution_specific_fps_limits(void)
     Max9296PrepareTarget target[2] = {};
 
     input.channel_enabled[0] = 1;
+    input.fps[0] = 30;
+    CHECK(max9296_prepare_build_targets(&input, target) == 0);
     input.fps[0] = 31;
     CHECK(max9296_prepare_build_targets(&input, target) == -EINVAL);
 
     input.width = 1280;
     input.height = 720;
+    input.fps[0] = 60;
+    CHECK(max9296_prepare_build_targets(&input, target) == 0);
+    input.fps[0] = 61;
     CHECK(max9296_prepare_build_targets(&input, target) == -EINVAL);
 
     input.width = 640;
