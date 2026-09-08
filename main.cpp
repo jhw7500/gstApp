@@ -482,6 +482,16 @@ static GstClockTime split_common_running_time(void) {
   return (now - base) + (SPLIT_COMMON_RT_MARGIN_MS * GST_MSECOND);
 }
 
+/* 분내 오프셋 sm 을 '목표 초 이후 경과'(0..59999)로 옮긴다. 목표는 분 경계(:00)가
+ * 아니라 startSec 이고, target_min*60 이 분의 정수배이므로 목표의 분내 초는 정확히
+ * startSec % 60 이다 (startSec 은 guint8 이라 0..255 가 올 수 있다).
+ * 전제: sm 은 0..59999. SPLIT_MSEC_UNSET(-1) 은 호출부가 거른다 — 넘기면
+ * 59999 - (startSec%60)*1000 으로 접혀, startSec%60 <= 1 이면 유예가 fail-open 되고
+ * 그 밖에는 30초 안팎의 가짜 drift 를 만들어 오히려 강제 분할을 낸다. */
+static gint split_rel_msec(gint sm, guint8 startSec) {
+  return (sm - (startSec % 60) * 1000 + MILLISECONDS_IN_MINUTE) % MILLISECONDS_IN_MINUTE;
+}
+
 static void splitCheck(gpointer data, guint8 startSec) {
   ThreadArgs *tArgs = (ThreadArgs *)data;
   MuxSinkBin *muxSinkBin = (MuxSinkBin *)tArgs->arg3;
@@ -539,10 +549,11 @@ static void splitCheck(gpointer data, guint8 startSec) {
       if (sm == SPLIT_MSEC_UNSET) continue;  // 새 조각 미개시 → 판단 보류
       active_count++;
 
-      // Wrap-around 보정: 분 경계 기준 '부호 있는' 오차로 환산 (예: 59900 -> -100)
-      gint signed_ms = (sm > MAX_SNAPBACK_DRIFT_MS)
-                           ? (sm - MILLISECONDS_IN_MINUTE)
-                           : sm;
+      // Wrap-around 보정: 목표 초 기준 '부호 있는' 오차로 환산 (예: rel 59900 -> -100)
+      gint rel = split_rel_msec(sm, startSec);
+      gint signed_ms = (rel > MAX_SNAPBACK_DRIFT_MS)
+                           ? (rel - MILLISECONDS_IN_MINUTE)
+                           : rel;
       gint drift_ms = ABS(signed_ms);
 
       if (diff < 5) {
@@ -552,8 +563,8 @@ static void splitCheck(gpointer data, guint8 startSec) {
       // 정시성 판단: 절대 오차가 허용 범위 이내인가?
       if (drift_ms >= cmdArg.split_max_msec) is_fully_aligned = FALSE;
 
-      // 채널 간 스큐는 부호 있는 값으로 비교해야 분 경계에서 뒤집히지 않는다.
-      // (raw 비교 시 59900 과 100 의 차이가 170ms 가 아니라 59800ms 로 계산됨)
+      // 채널 간 스큐는 부호 있는 값으로 비교해야 목표 초에서 뒤집히지 않는다.
+      // (raw 비교 시 rel 59900 과 100 의 차이가 200ms 가 아니라 59800ms 로 계산됨)
       // 이 값은 이제 fallback 이며, 아래 running-time 기준이 우선한다.
       if (signed_ms > splitMax) splitMax = signed_ms;
       if (signed_ms < splitMin) splitMin = signed_ms;
@@ -648,7 +659,8 @@ static void splitCheck(gpointer data, guint8 startSec) {
       if ((g_link_disconnect_mask >> i) & 1) continue;
       gint sm = muxSinkBin[i].getSplitMsec();
       if (sm == SPLIT_MSEC_UNSET) continue;  // 새 조각 미개시 → 유예 판단 제외
-      if (sm >= SNAP_BACK_GRACE_PERIOD_MS && (diff * 1000 < cmdArg.split_max_msec)) {
+      if (split_rel_msec(sm, startSec) >= SNAP_BACK_GRACE_PERIOD_MS &&
+          (diff * 1000 < cmdArg.split_max_msec)) {
         do_force = FALSE; break;
       }
     }
@@ -667,7 +679,7 @@ static void splitCheck(gpointer data, guint8 startSec) {
       /* 두 기준을 함께 남긴다: 현장 로그만으로 '실제 어긋남'과
        * '벽시계 프록시 잡음'을 사후 분리할 수 있어야 한다. */
       __LOG(LOG_ERR,
-            "[GST][%s:%d] Snap-back split (diff:%ds, smMax:%dms, skew:%dms/%s, wall-skew:%dms)",
+            "[GST][%s:%d] Snap-back split (diff:%ds, errMax:%dms, skew:%dms/%s, wall-skew:%dms)",
             _FILE_, __LINE__, diff, splitMax, skew_ms, skew_basis, wall_skew_ms);
       
       /* 강제 IDR 과 조각 경계가 '같은' 내용 지점을 가리켜야 한다. 하나라도 어긋나면
