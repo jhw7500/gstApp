@@ -610,17 +610,20 @@ static void splitCheck(gpointer data, guint8 startSec) {
     if (is_fully_aligned) {
       if (need_first_split) {
         GstClockTime split_rt = split_common_running_time();
-        /* 이 경로는 오래 무로그였다. 그래서 '분할 로그가 없다' 가 '분할하지 않았다' 를
-         * 보장하지 못했고, 이슈 #94 오진의 원인이 됐다. */
-        __LOG(LOG_NOTICE, "[GST][%s:%d] initial alignment split at running-time %"
-              G_GUINT64_FORMAT, _FILE_, __LINE__, (guint64) split_rt);
+        guint issued = 0;
         for (i = 0; i < MAX_CHANNEL; i++) {
           if (!cmdArg.cam[i].enable) continue;
           if ((g_link_disconnect_mask >> i) & 1) continue;
           muxSinkBin[i].splitNow(NULL, FALSE, split_rt);
           muxSinkBin[i].setSplitMsec(SPLIT_MSEC_UNSET);
           muxSinkBin[i].setSplitRunningTime(GST_CLOCK_TIME_NONE);
+          issued++;
         }
+        /* 이 경로는 무로그여서 '분할 로그가 없다' 가 '분할하지 않았다' 로 읽혔다.
+         * 실제로 분할을 낸 채널 수를 함께 남긴다 — 전 채널이 비활성/링크단절이면 0 이다. */
+        __LOG(LOG_NOTICE, "[GST][%s:%d] initial alignment split at running-time %"
+              G_GUINT64_FORMAT " (ch:%u)%s", _FILE_, __LINE__, (guint64) split_rt, issued,
+              GST_CLOCK_TIME_IS_VALID(split_rt) ? "" : " -> INVALID, split-after 로 폴백");
         need_first_split = FALSE;
       }
       target_min = (target_min + cmdArg.duration) % 60;
@@ -688,11 +691,13 @@ static void splitCheck(gpointer data, guint8 startSec) {
         muxSinkBin[i].setSplitMsec(SPLIT_MSEC_UNSET);
         muxSinkBin[i].setSplitRunningTime(GST_CLOCK_TIME_NONE);
       }
-      /* 이 강제 분할이 곧 시작 정렬이다. 여기서 지우지 않으면 need_first_split 이 살아남아
-       * 다음 '정렬됨' 틱에서 불필요한 분할을 한 번 더 낸다. splitmuxsink 의 split-after 는
-       * 즉시가 아니라 다음 GOP 에 발화하므로, 그 분할이 자연 롤오버와 겹치면 한 조각이
-       * 1 GOP 만에 잘리고 파일명(분 단위 반올림)이 충돌해 앞 조각을 덮어쓴다 (이슈 #94). */
-      need_first_split = FALSE;
+      /* 이 강제 분할이 곧 시작 정렬이다. 여기서 소진하지 않으면 다음 '정렬됨' 틱이
+       * 불필요한 분할을 한 번 더 낸다 (이슈 #94). */
+      if (need_first_split) {
+        __LOG(LOG_NOTICE, "[GST][%s:%d] snap-back consumed pending initial alignment",
+              _FILE_, __LINE__);
+        need_first_split = FALSE;
+      }
       target_min = (target_min + cmdArg.duration) % 60;
       last_split_ts = g_get_monotonic_time();
       last_split_min = min;
