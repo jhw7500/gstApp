@@ -610,13 +610,26 @@ static void splitCheck(gpointer data, guint8 startSec) {
     if (is_fully_aligned) {
       if (need_first_split) {
         GstClockTime split_rt = split_common_running_time();
+        guint issued = 0;
         for (i = 0; i < MAX_CHANNEL; i++) {
           if (!cmdArg.cam[i].enable) continue;
           if ((g_link_disconnect_mask >> i) & 1) continue;
           muxSinkBin[i].splitNow(NULL, FALSE, split_rt);
           muxSinkBin[i].setSplitMsec(SPLIT_MSEC_UNSET);
           muxSinkBin[i].setSplitRunningTime(GST_CLOCK_TIME_NONE);
+          issued++;
         }
+        /* 이 경로는 무로그여서 '분할 로그가 없다' 가 '분할하지 않았다' 로 읽혔다.
+         * split:N 은 분할을 지시한 채널 수, act:N 은 정시성 판정에 실제로 쓰인 채널 수다.
+         * 둘은 다르다 — act 는 새 조각을 연 채널만 세므로(sm != SPLIT_MSEC_UNSET),
+         * act:0 이면 아무것도 측정하지 못한 채 초기값 TRUE 로 정렬 판정이 통과한 것이다. */
+        __LOG(LOG_NOTICE, "[GST][%s:%d] initial alignment split at running-time %"
+              G_GUINT64_FORMAT " (split:%u act:%d)%s", _FILE_, __LINE__, (guint64) split_rt,
+              issued, active_count,
+              GST_CLOCK_TIME_IS_VALID(split_rt) ? "" : " -> INVALID, split-after 로 폴백");
+        /* issued == 0 (전 채널 비활성/링크단절) 이어도 소진한다 — master 부터의 동작이다.
+         * 링크가 돌아오면 드리프트가 임계를 넘어 아래 강제 경로가 다시 정렬하므로
+         * 시작 정렬이 영구히 사라지지는 않는다. */
         need_first_split = FALSE;
       }
       target_min = (target_min + cmdArg.duration) % 60;
@@ -661,9 +674,10 @@ static void splitCheck(gpointer data, guint8 startSec) {
        * split-at-running-time 이 다음 자연 키프레임까지 기다린다. */
       GstClockTime split_rt = split_common_running_time();
       __LOG(LOG_NOTICE, "[GST][%s:%d] forced split at running-time %" G_GUINT64_FORMAT
-            " (margin %dms)%s", _FILE_, __LINE__, (guint64) split_rt,
+            " (margin %dms)%s%s", _FILE_, __LINE__, (guint64) split_rt,
             SPLIT_COMMON_RT_MARGIN_MS,
-            GST_CLOCK_TIME_IS_VALID(split_rt) ? "" : " -> INVALID, split-after 로 폴백");
+            GST_CLOCK_TIME_IS_VALID(split_rt) ? "" : " -> INVALID, split-after 로 폴백",
+            need_first_split ? " [consumes pending initial alignment]" : "");
 
       if (cmdArg.dual_enc == FALSE && eBin != NULL) {
         for (i = 0; i < MAX_CHANNEL; i++) {
@@ -684,6 +698,9 @@ static void splitCheck(gpointer data, guint8 startSec) {
         muxSinkBin[i].setSplitMsec(SPLIT_MSEC_UNSET);
         muxSinkBin[i].setSplitRunningTime(GST_CLOCK_TIME_NONE);
       }
+      /* 이 강제 분할이 곧 시작 정렬이다. 여기서 소진하지 않으면 다음 '정렬됨' 틱이
+       * 불필요한 분할을 한 번 더 낸다 (이슈 #94). */
+      need_first_split = FALSE;
       target_min = (target_min + cmdArg.duration) % 60;
       last_split_ts = g_get_monotonic_time();
       last_split_min = min;
