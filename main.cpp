@@ -624,6 +624,9 @@ static void splitCheck(gpointer data, guint8 startSec) {
         __LOG(LOG_NOTICE, "[GST][%s:%d] initial alignment split at running-time %"
               G_GUINT64_FORMAT " (ch:%u)%s", _FILE_, __LINE__, (guint64) split_rt, issued,
               GST_CLOCK_TIME_IS_VALID(split_rt) ? "" : " -> INVALID, split-after 로 폴백");
+        /* issued == 0 (전 채널 비활성/링크단절) 이어도 소진한다 — master 부터의 동작이다.
+         * 링크가 돌아오면 드리프트가 임계를 넘어 아래 강제 경로가 다시 정렬하므로
+         * 시작 정렬이 영구히 사라지지는 않는다. */
         need_first_split = FALSE;
       }
       target_min = (target_min + cmdArg.duration) % 60;
@@ -694,7 +697,9 @@ static void splitCheck(gpointer data, guint8 startSec) {
       /* 이 강제 분할이 곧 시작 정렬이다. 여기서 소진하지 않으면 다음 '정렬됨' 틱이
        * 불필요한 분할을 한 번 더 낸다 (이슈 #94). */
       if (need_first_split) {
-        __LOG(LOG_NOTICE, "[GST][%s:%d] snap-back consumed pending initial alignment",
+        /* 분할 건수는 주장하지 않는다 — 위 'forced split at running-time' 이 그 경로를
+         * 이미 기록한다. 여기서 남기는 것은 '대기 중이던 시작 정렬 플래그를 소진했다' 뿐이다. */
+        __LOG(LOG_NOTICE, "[GST][%s:%d] pending initial alignment flag cleared by snap-back",
               _FILE_, __LINE__);
         need_first_split = FALSE;
       }
