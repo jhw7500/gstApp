@@ -43,6 +43,18 @@ gchar *search_file(const gchar *path, const gchar *prefix,
     return g_fixture_path;
 }
 
+/* check_arg() 를 부르면 --gc-sections 가 그 함수를 더 이상 버리지 않으므로,
+ * 본체(util.cpp)에만 있던 심볼을 시험이 직접 제공한다. mkdir 은 시험 대상이 아니고 시험이
+ * stream_en[STREAM_CAP] 을 끄므로 도달하지 않는다. 링크만 만족시키는 스텁이다. */
+CmdArg cmdArg;
+
+int safe_mkdir_p(const char *path, mode_t mode)
+{
+    (void)path;
+    (void)mode;
+    return 0;
+}
+
 static gchar *channel_json(const gchar *extra)
 {
     return g_strdup_printf(
@@ -195,6 +207,36 @@ static void test_existing_recoverable_errors_remain_nonfatal(void)
     g_free(json);
 }
 
+/* 이슈 #102 — -S 는 범위 검사가 없어 0..59 밖 값이 guint8 로 절단된 채 splitCheck() 로
+ * 들어갔다. check_arg() 가 stdin 경로와 같은 상한(MAX_SPLIT_SEC)으로 되돌리는지 본다.
+ * 반환값이 아니라 클램프된 값을 보는데, 클램프가 check_arg() 의 어떤 return 보다 앞이다.
+ * stream_en 을 모두 끄는 이유: check_arg() 끝의 요약 로그가 init_arg() 이 초기화하지 않는
+ * 필드(arg.rtsp_passwd)를 %s 로 읽어 미정의 동작이 된다. 클램프는 그 블록들보다 앞이다. */
+static void test_out_of_range_split_sec_falls_back_to_default(void)
+{
+    gchar appname[] = "gstApp";
+    const struct { gint in; gint want; } cases[] = {
+        {-1, DEFAULT_SPLIT_SEC}, {60, DEFAULT_SPLIT_SEC},
+        {255, DEFAULT_SPLIT_SEC}, {300, DEFAULT_SPLIT_SEC},
+        {0, 0}, {1, 1}, {30, 30}, {59, 59},
+    };
+    guint i;
+
+    for (i = 0; i < G_N_ELEMENTS(cases); i++) {
+        ParserClass parser;
+        parser.init_arg(appname);
+        parser.arg.stream_en[STREAM_REC] = FALSE;
+        parser.arg.stream_en[STREAM_RTSP] = FALSE;
+        parser.arg.stream_en[STREAM_CAP] = FALSE;
+        parser.arg.split_sec = cases[i].in;
+        (void)parser.check_arg();
+        if (parser.arg.split_sec != cases[i].want)
+            fprintf(stderr, "  case[%u] in=%d want=%d got=%d\n", i, cases[i].in,
+                    cases[i].want, parser.arg.split_sec);
+        CHECK(parser.arg.split_sec == cases[i].want);
+    }
+}
+
 int main(void)
 {
     test_malformed_arrays_fail_after_collecting_all_errors();
@@ -204,6 +246,7 @@ int main(void)
     test_non_integer_array_element_is_fatal();
     test_missing_optional_arrays_keep_defaults_and_succeed();
     test_existing_recoverable_errors_remain_nonfatal();
+    test_out_of_range_split_sec_falls_back_to_default();
 
     printf("\nparser config test: %d checks, %d failures -> %s\n",
            g_checks, g_failures, g_failures ? "FAILED" : "PASSED");

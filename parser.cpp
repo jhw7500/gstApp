@@ -1198,6 +1198,13 @@ gint ParserClass::check_arg() {
   sync_trace_sanity(&arg.channel_sync_trace_sec, "channel_sync_trace_sec");
   sync_trace_sanity(&arg.rtsp_sync_trace_sec, "rtsp_sync_trace_sec");
 
+  // -S 는 gint 를 그대로 받고 splitCheck() 의 guint8 로 조용히 절단된다 (이슈 #102).
+  if (arg.split_sec < 0 || arg.split_sec > MAX_SPLIT_SEC) {
+    __LOG(LOG_ERR, "[CFG][%s:%d] invalid split_sec=%d (valid 0..%d), fallback to %d",
+          _FILE_, __LINE__, arg.split_sec, MAX_SPLIT_SEC, DEFAULT_SPLIT_SEC);
+    arg.split_sec = DEFAULT_SPLIT_SEC;
+  }
+
   const gboolean stall_requested =
       arg.rtsp_test_stall_ch != DEFAULT_RTSP_TEST_STALL_CH ||
       arg.rtsp_test_stall_after_sec != DEFAULT_RTSP_TEST_STALL_AFTER_SEC ||
@@ -2876,7 +2883,7 @@ gint ParserClass::cmd_parser(gchar *buffer, gint len, gpointer data) {
       } else {
         key = charArrayToInt(token);
 
-        if (key < 0 || key > 59) {
+        if (key < 0 || key > MAX_SPLIT_SEC) {
           g_print("set_sec %d not supported\n", key);
           return -1;
         }

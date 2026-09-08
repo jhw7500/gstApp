@@ -137,6 +137,7 @@
 #define CAP_INSTANT_REF   1   // ref-hold: ~0 idle CPU, pins one shared G2D pool buffer
 #define CAP_INSTANT_COPY  2   // deep-copy: no pool pin, per-frame copy cost while enabled
 #define DEFAULT_SPLIT_SEC           0
+#define MAX_SPLIT_SEC               59
 #define DEFAULT_SPLIT_DIFF_MSEC     200
 #define DEFAULT_SPLIT_MAX_MSEC      5000
 #define DEFAULT_SPLIT_AUDIO_MIN_MSEC  59000
