@@ -258,8 +258,9 @@ probe_app() { # $1=라벨 $2=trial $3=fps $4..$7=ch0..ch3 $8=DEVSPEC
 	    | .VHL_CAM.i2c2.ch0.led_flash.enable=false | .VHL_CAM.i2c2.ch1.led_flash.enable=false
 	    | .VHL_CAM.i2c1.ch2.led_flash.enable=false | .VHL_CAM.i2c1.ch3.led_flash.enable=false
 	    ' "$BACKUP" >"$OUT/.dt.json" || return 1
-	cp "$OUT/.dt.json" "$CONF"
+	# cp 도중 죽어도 복원되도록 쓰기 "전"에 세운다
 	CONF_DIRTY=1
+	cp "$OUT/.dt.json" "$CONF"
 
 	"$RESET" -q >>"$LOG" 2>&1
 	sleep 3

@@ -233,6 +233,24 @@ if [ ! -e "$BACKUP" ]; then
 	md5sum "$BACKUP" | awk '{print $1}' >"$BACKUP.md5"
 fi
 ORIG_MD5=$(cat "$BACKUP.md5")
+LIVE_MD5=$(md5sum "$CONF" | awk '{print $1}')
+# 백업은 아무 스크립트도 갱신하지 않으므로, live 가 백업과 다르면 그 사이 운영 설정이 바뀐
+# 것이다. 그대로 진행하면 복원이 그 변경을 조용히 되돌린다. 복원 후 md5 검사는 복사본을
+# 자기 원본과 비교하는 것이라 이 위험을 구조적으로 탐지하지 못한다.
+if [ "$LIVE_MD5" != "$ORIG_MD5" ]; then
+	if [ "${ALLOW_CONF_DRIFT:-0}" = "1" ]; then
+		echo "경고: live($LIVE_MD5) != 백업($ORIG_MD5) — ALLOW_CONF_DRIFT=1 로 진행합니다."
+		echo "      복원 시 현재 운영 설정이 백업 시점으로 되돌아갑니다."
+	else
+		echo "중단: live config 가 백업과 다릅니다."
+		echo "  live  =$LIVE_MD5  ($CONF)"
+		echo "  backup=$ORIG_MD5  ($BACKUP)"
+		echo "  백업을 갱신하거나, 되돌아가도 좋다면 ALLOW_CONF_DRIFT=1 로 다시 실행하세요."
+		exit 2
+	fi
+fi
+# trap 은 첫 config 쓰기보다 먼저 걸리므로, 덮어쓴 회차에서만 복원한다.
+CONF_DIRTY=0
 # 이 실행이 시작된 시각. 녹화 삭제를 이 시점 이후 파일로만 한정한다 — 고정 10분 창은
 # /dev/shm 과 운영 tmp_path/sd_tmp_path 를 훑어 직전 운영 녹화까지 지웠다.
 RUN_T0=$(date +%s)
@@ -256,7 +274,7 @@ restore() {
 	log ""
 	log "### 복구"
 	kill_app
-	if [ -e "$BACKUP" ]; then
+	if [ "$CONF_DIRTY" -eq 1 ]; then
 		cp "$BACKUP" "$CONF"
 		NOW=$(md5sum "$CONF" | awk '{print $1}')
 		if [ "$NOW" = "$ORIG_MD5" ]; then
@@ -265,15 +283,18 @@ restore() {
 			log "!!! 설정 복원 md5 불일치: $NOW != $ORIG_MD5 - 수동 확인 필요 !!!"
 		fi
 	else
-		log "!!! 백업 부재 - 설정을 복원하지 못했다 !!!"
+		log "설정을 덮어쓴 적이 없어 복원을 생략합니다 (live 유지)"
 	fi
 	"$RESET" -q >>"$LOG" 2>&1
 	sleep 2
 	if [ "$WAS_ACTIVE" -eq 1 ]; then
 		systemctl start cam-operate.service >>"$LOG" 2>&1
 		sleep 12
-		log "cam-operate: $(systemctl is-active cam-operate.service)"
+	else
+		log "!! cam-operate 를 정지 상태로 둡니다 (시작 시에도 정지 상태였음)."
+		log "!! 보드가 녹화하지 않습니다. 되살리려면 RESTORE_CAM_OPERATE=1 또는 수동 기동."
 	fi
+	log "cam-operate: $(systemctl is-active cam-operate.service)"
 	log "### 로그: $LOG"
 	[ "$CHECK_ONLY" -eq 1 ] || log "### CSV: $CSV"
 	exit $rc
@@ -428,7 +449,8 @@ fi
 	exit 5
 }
 
-cp "$SRC_BIN" "$BIN" && chmod +x "$BIN"
+cp "$SRC_BIN" "$BIN" || { log "중단: 앱 스테이징 복사 실패"; exit 2; }
+chmod +x "$BIN" || { log "중단: 앱 스테이징 chmod 실패"; exit 2; }
 echo "case,combo,attempt,req_fps,exp_us,channel,csi_fps,isi_fps,encstat_fps,start_lat_s,elapsed_s" >"$CSV"
 
 # ------------------------------------------------------------------ 본 측정
@@ -512,6 +534,8 @@ for combo in $SUPPORTED; do
 				continue
 			fi
 		fi
+		# cp 도중 죽어도 복원되도록 쓰기 "전"에 세운다
+		CONF_DIRTY=1
 		cp "$OUT/.test.json" "$CONF"
 
 		hard_reset

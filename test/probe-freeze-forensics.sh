@@ -225,8 +225,9 @@ for TR in $(seq 1 "$TRIALS"); do
 	    | .VHL_CAM.i2c2.ch0.enable=false | .VHL_CAM.i2c2.ch1.enable=false
 	    | .VHL_CAM.i2c1.ch2.enable=true  | .VHL_CAM.i2c1.ch3.enable=true
 	    ' "$BACKUP" >"$OUT/.fz2.json" || exit 1
-	cp "$OUT/.fz2.json" "$CONF"
+	# cp 도중 죽어도 복원되도록 쓰기 "전"에 세운다
 	CONF_DIRTY=1
+	cp "$OUT/.fz2.json" "$CONF"
 	UNIQ=$(jq -r '[.VHL_CAM.i2c2.ch0,.VHL_CAM.i2c2.ch1,.VHL_CAM.i2c1.ch2,.VHL_CAM.i2c1.ch3]
 	              | map(del(.enable)) | unique | length' "$CONF")
 	[ "$UNIQ" = "1" ] || log "  !!! 통제 검증 실패 (unique=$UNIQ) — 이 회차 무효 !!!"

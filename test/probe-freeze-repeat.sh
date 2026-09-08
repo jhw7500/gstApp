@@ -260,8 +260,9 @@ probe() { # $1=라벨 $2=trial $3=mode(ctl|prod) $4..$7=ch0..3 $8=DEVSPEC $9=csi
 		    | .VHL_CAM.i2c1.ch2.led_flash.enable=false | .VHL_CAM.i2c1.ch3.led_flash.enable=false
 		    ' "$BACKUP" >"$OUT/.fz.json" || return 1
 	fi
-	cp "$OUT/.fz.json" "$CONF"
+	# cp 도중 죽어도 복원되도록 쓰기 "전"에 세운다
 	CONF_DIRTY=1
+	cp "$OUT/.fz.json" "$CONF"
 
 	UNIQ=$(jq -r '[.VHL_CAM.i2c2.ch0,.VHL_CAM.i2c2.ch1,.VHL_CAM.i2c1.ch2,.VHL_CAM.i2c1.ch3]
 	              | map(del(.enable)) | unique | length' "$CONF")

@@ -298,8 +298,9 @@ probe_app() { # $1=라벨 $2=trial $3=exp $4..$7=ch0..ch3 $8=DEVSPEC $9=subdev $
 	    | .VHL_CAM.i2c2.ch0.enable=$c0 | .VHL_CAM.i2c2.ch1.enable=$c1
 	    | .VHL_CAM.i2c1.ch2.enable=$c2 | .VHL_CAM.i2c1.ch3.enable=$c3
 	    ' "$BACKUP" >"$OUT/.ec.json" || return 1
-	cp "$OUT/.ec.json" "$CONF"
+	# cp 도중 죽어도 복원되도록 쓰기 "전"에 세운다
 	CONF_DIRTY=1
+	cp "$OUT/.ec.json" "$CONF"
 
 	# 통제가 실제로 걸렸는지 config 를 되읽어 남긴다 (가정하지 않는다).
 	log "  통제 확인 exp_time: i2c2=$(jq -r '.VHL_CAM.i2c2.exp_time' "$CONF") i2c1=$(jq -r '.VHL_CAM.i2c1.exp_time' "$CONF")"

@@ -155,6 +155,7 @@ ssh root@192.168.214.4 '/root/fpsmeas/run-fps-scenario.sh --res 1280x720 --fps 6
 | **듀얼와이드에서 AP1302 는 도는데(dHINF 정상) CSI2 가 정상의 8~10%, ISI 가 0** | **쌍의 `ae_on` 이 서로 다름** + 짧은 시드 노출. fps>30 에서만 발생 | 쌍의 두 채널 `ae_on` 을 같은 값으로. §0-2·§5.8 |
 | 채널이 "N초 뒤에 죽는다"는 시각이 안 맞음 | 측정 스크립트의 **샘플링 오프셋**(워밍업 `sleep`)이 로그에 없음 | 오프셋을 반드시 기록하고 t=0 을 캡처 기동 시점으로 잡는다. 이 누락이 오진을 낳았다(§5.8.5) |
 | 120fps 에서 `dHINF=0` 인데 정말 죽었는지 애매 | AP1302 HINF 는 8비트라 120fps 면 **2.13초에 한 바퀴**. 2초 폴링은 "0장"과 "256장"을 구분 못 함 | 폴링 간격 **1초**. 센서 `R0x00FC` 고정 여부를 독립 증거로 함께 본다 |
+| 시험을 Ctrl-C 로 끊었더니 **운영 config 가 시험값(또는 잘린 JSON)으로 남음** | 복원 여부를 정하는 플래그를 config 쓰기 **뒤**에 세움. Ctrl-C 는 포그라운드 그룹 전체에 SIGINT 를 보내므로 `cp` 자신이 쓰기 도중 죽는다 | 플래그를 쓰기 **앞**에 세운다. `test/run-probe-safety-source-check.sh` 가 이 순서를 검사한다 |
 
 ---
 
@@ -697,6 +698,7 @@ awk -v NAME=poll_slow_t7 -f test/classify-freeze.awk /root/fpsmeas/poll_..._slow
 | `test/probe-freeze-fastsample.sh` | `fast_` | 50Hz 샘플링 — 이탈 통계 (§5.8.6) |
 | `test/probe-freeze-pollrate.sh` | `poll_` | i2c 폴링 빈도 A/B · 전환 시계열 (§5.8.6) |
 | `test/classify-freeze.awk` | — | 원자료 재분류(아래 주의 참조). 입력은 `fast_*`/`poll_*` 회차별 CSV **뿐** |
+
 원본(타겟 `/root/fpsmeas/`): `transport_20260907_065027`, `dualtopo_20260907_070933`,
 `expctl_20260907_072630`, `freeze_20260907_074217`, `aeon_20260907_081557`,
 `ch23_20260907_083448`, `dflt_20260907_085621` (각 `.log`/`.csv`/`_summary.csv`).

@@ -274,8 +274,9 @@ probe() { # $1=라벨 $2=trial $3=mode(ctl|prod) $4=ae_on_chA $5=ae_on_chB $6=ex
 	jq --argjson a0 "$AE0" --argjson a1 "$AE1" \
 	   '.VHL_CAM.i2c1.ch2.ae_on=$a0 | .VHL_CAM.i2c1.ch3.ae_on=$a1' \
 	   "$OUT/.fz.json" >"$OUT/.ae.json" || return 1
-	cp "$OUT/.ae.json" "$CONF"
+	# cp 도중 죽어도 복원되도록 쓰기 "전"에 세운다
 	CONF_DIRTY=1
+	cp "$OUT/.ae.json" "$CONF"
 
 	# ctl 모드는 enable·ae_on 을 뺀 나머지가 4채널 동일해야 한다(ae_on 은 독립변수라 제외).
 	UNIQ=$(jq -r '[.VHL_CAM.i2c2.ch0,.VHL_CAM.i2c2.ch1,.VHL_CAM.i2c1.ch2,.VHL_CAM.i2c1.ch3]

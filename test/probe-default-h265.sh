@@ -247,8 +247,9 @@ probe() { # $1=라벨 $2=trial $3=fps $4..$7=ch0..3 $8=DEVSPEC $9=csi열 $10=isi
 	    | .VHL_CAM.i2c2.ch0.enable=$c0 | .VHL_CAM.i2c2.ch1.enable=$c1
 	    | .VHL_CAM.i2c1.ch2.enable=$c2 | .VHL_CAM.i2c1.ch3.enable=$c3
 	    ' "$BASEDEF" >"$OUT/.fz.json" || return 1
-	cp "$OUT/.fz.json" "$CONF"
+	# cp 도중 죽어도 복원되도록 쓰기 "전"에 세운다
 	CONF_DIRTY=1
+	cp "$OUT/.fz.json" "$CONF"
 
 	UNIQ=$(jq -r '[.VHL_CAM.i2c2.ch0,.VHL_CAM.i2c2.ch1,.VHL_CAM.i2c1.ch2,.VHL_CAM.i2c1.ch3]
 	              | map(del(.enable)) | unique | length' "$CONF")
