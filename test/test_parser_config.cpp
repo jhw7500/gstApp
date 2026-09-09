@@ -7,7 +7,7 @@
 
 static int g_checks = 0;
 static int g_failures = 0;
-static gchar g_fixture_path[512] = {0};
+static gint g_json_open_count = 0;
 static gchar g_critical_logs[32768] = {0};
 
 #define CHECK(condition)                                                \
@@ -34,13 +34,17 @@ void mylog(gint opt, const gchar *format, ...)
     }
 }
 
-gchar *search_file(const gchar *path, const gchar *prefix,
-                   const gchar *suffix)
+extern "C" json_object *json_object_from_file(const char *filename)
 {
-    (void)path;
-    (void)prefix;
-    (void)suffix;
-    return g_fixture_path;
+    ++g_json_open_count;
+
+    gchar *contents = NULL;
+    if (!g_file_get_contents(filename, &contents, NULL, NULL))
+        return NULL;
+
+    json_object *object = json_tokener_parse(contents);
+    g_free(contents);
+    return object;
 }
 
 /* check_arg() 를 부르면 --gc-sections 가 그 함수를 더 이상 버리지 않으므로,
@@ -63,9 +67,10 @@ static gchar *channel_json(const gchar *extra)
         extra && extra[0] ? "," : "", extra ? extra : "");
 }
 
-static gchar *edgeconf_json(const gchar *rtsp_tune,
-                            const gchar *ch0_extra,
-                            const gchar *ch3_extra)
+static gchar *runtime_json(const gchar *rtsp_tune,
+                           const gchar *ch0_extra,
+                           const gchar *ch3_extra,
+                           gboolean srt_enable = TRUE)
 {
     gchar *ch0 = channel_json(ch0_extra);
     gchar *ch1 = channel_json("");
@@ -78,10 +83,11 @@ static gchar *edgeconf_json(const gchar *rtsp_tune,
         "\"capture\":{\"enable\":false}%s%s,"
         "\"i2c2\":{\"crop_enable\":false,\"ch0\":%s,\"ch1\":%s},"
         "\"i2c1\":{\"crop_enable\":false,\"ch2\":%s,\"ch3\":%s}"
-        "}}",
+        "},\"ORD\":{\"port_num\":10007},"
+        "\"VCM\":{\"port_num\":10009,\"srt_enable\":%s}}",
         rtsp_tune && rtsp_tune[0] ? ",\"rtsp_tune\":" : "",
         rtsp_tune ? rtsp_tune : "",
-        ch0, ch1, ch2, ch3);
+        ch0, ch1, ch2, ch3, srt_enable ? "true" : "false");
     g_free(ch0);
     g_free(ch1);
     g_free(ch2);
@@ -92,28 +98,113 @@ static gchar *edgeconf_json(const gchar *rtsp_tune,
 static gint parse_fixture(ParserClass *parser, const gchar *contents)
 {
     gchar directory[] = "/tmp/gstapp-parser-config-XXXXXX";
+    gchar fixture_path[512] = {0};
+    gchar expected_path[512] = {0};
     CHECK(g_mkdtemp(directory) != NULL);
-    g_snprintf(g_fixture_path, sizeof(g_fixture_path),
-               "%s/edgeconf_test.json", directory);
-    CHECK(g_file_set_contents(g_fixture_path, contents, -1, NULL));
+    g_snprintf(fixture_path, sizeof(fixture_path),
+               "%s/pim_runtime.json", directory);
+    g_strlcpy(expected_path, fixture_path, sizeof(expected_path));
+    CHECK(g_file_set_contents(fixture_path, contents, -1, NULL));
 
     gchar appname[] = "gstApp";
     parser->init_arg(appname);
     g_critical_logs[0] = '\0';
-    const gint result = parser->json_parser(directory, JSON_CAM_OBJ_NAME);
+    g_json_open_count = 0;
+    const gint result = parser->json_parser(fixture_path, JSON_CAM_OBJ_NAME);
 
-    CHECK(g_remove(g_fixture_path) == 0);
+    CHECK(g_json_open_count == 1);
+    CHECK(parser->arg.json_file != fixture_path);
+    CHECK(g_strcmp0(parser->arg.json_file, expected_path) == 0);
+
+    CHECK(g_remove(fixture_path) == 0);
     CHECK(g_rmdir(directory) == 0);
-    g_fixture_path[0] = '\0';
+    fixture_path[0] = '\0';
+    CHECK(g_strcmp0(parser->arg.json_file, expected_path) == 0);
     return result;
+}
+
+static gchar *required_section_case(const gchar *section, gboolean missing)
+{
+    gchar *contents = runtime_json(NULL, "", "");
+    json_object *root = json_tokener_parse(contents);
+    g_free(contents);
+    CHECK(root != NULL);
+
+    if (missing)
+        json_object_object_del(root, section);
+    else
+        json_object_object_add(root, section, json_object_new_string("invalid"));
+
+    gchar *result = g_strdup(
+        json_object_to_json_string_ext(root, JSON_C_TO_STRING_PLAIN));
+    json_object_put(root);
+    return result;
+}
+
+static void test_merged_runtime_uses_exact_path_once_and_reads_vcm(void)
+{
+    ParserClass enabled_parser;
+    gchar *enabled = runtime_json(NULL, "", "", TRUE);
+    CHECK(parse_fixture(&enabled_parser, enabled) == 0);
+    CHECK(enabled_parser.arg.srt_en == TRUE);
+    g_free(enabled);
+
+    ParserClass disabled_parser;
+    gchar *disabled = runtime_json(NULL, "", "", FALSE);
+    CHECK(parse_fixture(&disabled_parser, disabled) == 0);
+    CHECK(disabled_parser.arg.srt_en == FALSE);
+    g_free(disabled);
+}
+
+static void test_required_top_level_objects_fail_closed(void)
+{
+    const gchar *sections[] = {"VHL_CAM", "ORD", "VCM"};
+
+    for (guint i = 0; i < G_N_ELEMENTS(sections); ++i) {
+        ParserClass missing_parser;
+        gchar *missing = required_section_case(sections[i], TRUE);
+        CHECK(parse_fixture(&missing_parser, missing) < 0);
+        g_free(missing);
+
+        ParserClass non_object_parser;
+        gchar *non_object = required_section_case(sections[i], FALSE);
+        CHECK(parse_fixture(&non_object_parser, non_object) < 0);
+        g_free(non_object);
+    }
+}
+
+static void test_non_object_and_unreadable_roots_fail_closed(void)
+{
+    ParserClass non_object_parser;
+    CHECK(parse_fixture(&non_object_parser, "[]") < 0);
+
+    gchar directory[] = "/tmp/gstapp-parser-config-missing-XXXXXX";
+    gchar missing_path[512] = {0};
+    gchar expected_path[512] = {0};
+    CHECK(g_mkdtemp(directory) != NULL);
+    g_snprintf(missing_path, sizeof(missing_path),
+               "%s/pim_runtime.json", directory);
+    g_strlcpy(expected_path, missing_path, sizeof(expected_path));
+
+    ParserClass unreadable_parser;
+    gchar appname[] = "gstApp";
+    unreadable_parser.init_arg(appname);
+    g_json_open_count = 0;
+    CHECK(unreadable_parser.json_parser(missing_path, JSON_CAM_OBJ_NAME) < 0);
+    CHECK(g_json_open_count == 1);
+    CHECK(unreadable_parser.arg.json_file != missing_path);
+    CHECK(g_strcmp0(unreadable_parser.arg.json_file, expected_path) == 0);
+    CHECK(g_rmdir(directory) == 0);
+    missing_path[0] = '\0';
+    CHECK(g_strcmp0(unreadable_parser.arg.json_file, expected_path) == 0);
 }
 
 static void test_malformed_arrays_fail_after_collecting_all_errors(void)
 {
     ParserClass parser;
-    gchar *json = edgeconf_json(NULL,
-                                "\"bps\":[8000],\"gop\":\"bad\"",
-                                "\"bps\":[7000,900]");
+    gchar *json = runtime_json(NULL,
+                               "\"bps\":[8000],\"gop\":\"bad\"",
+                               "\"bps\":[7000,900]");
 
     CHECK(parse_fixture(&parser, json) < 0);
     CHECK(parser.arg.cam[0].bps[STREAM_REC] == DEFAULT_RECORD_BITRATE);
@@ -133,7 +224,7 @@ static void test_malformed_arrays_fail_after_collecting_all_errors(void)
 static void test_oversized_array_is_fatal(void)
 {
     ParserClass parser;
-    gchar *json = edgeconf_json(NULL, "\"bps\":[1,2,3]", "");
+    gchar *json = runtime_json(NULL, "\"bps\":[1,2,3]", "");
 
     CHECK(parse_fixture(&parser, json) < 0);
     CHECK(parser.arg.cam[0].bps[STREAM_REC] == DEFAULT_RECORD_BITRATE);
@@ -146,7 +237,7 @@ static void test_oversized_array_is_fatal(void)
 static void test_object_instead_of_array_is_fatal(void)
 {
     ParserClass parser;
-    gchar *json = edgeconf_json(
+    gchar *json = runtime_json(
         NULL, "\"profile\":{\"record\":9,\"rtsp\":9}", "");
 
     CHECK(parse_fixture(&parser, json) < 0);
@@ -160,7 +251,7 @@ static void test_object_instead_of_array_is_fatal(void)
 static void test_explicit_null_array_is_fatal(void)
 {
     ParserClass parser;
-    gchar *json = edgeconf_json(NULL, "\"bps\":null", "");
+    gchar *json = runtime_json(NULL, "\"bps\":null", "");
 
     CHECK(parse_fixture(&parser, json) < 0);
     CHECK(parser.arg.cam[0].bps[STREAM_REC] == DEFAULT_RECORD_BITRATE);
@@ -173,7 +264,7 @@ static void test_explicit_null_array_is_fatal(void)
 static void test_missing_optional_arrays_keep_defaults_and_succeed(void)
 {
     ParserClass parser;
-    gchar *json = edgeconf_json(NULL, "", "");
+    gchar *json = runtime_json(NULL, "", "");
 
     CHECK(parse_fixture(&parser, json) == 0);
     CHECK(parser.arg.cam[0].bps[STREAM_REC] == DEFAULT_RECORD_BITRATE);
@@ -185,8 +276,8 @@ static void test_missing_optional_arrays_keep_defaults_and_succeed(void)
 static void test_non_integer_array_element_is_fatal(void)
 {
     ParserClass parser;
-    gchar *json = edgeconf_json(NULL,
-                                "\"quant\":[10,\"invalid\"]", "");
+    gchar *json = runtime_json(NULL,
+                               "\"quant\":[10,\"invalid\"]", "");
 
     CHECK(parse_fixture(&parser, json) < 0);
     CHECK(parser.arg.cam[0].quant[STREAM_REC] == DEFAULT_QUANT);
@@ -199,7 +290,7 @@ static void test_non_integer_array_element_is_fatal(void)
 static void test_existing_recoverable_errors_remain_nonfatal(void)
 {
     ParserClass parser;
-    gchar *json = edgeconf_json("{\"frame_id_sei\":2}", "", "");
+    gchar *json = runtime_json("{\"frame_id_sei\":2}", "", "");
 
     CHECK(parse_fixture(&parser, json) == 0);
     CHECK(parser.arg.rtsp_frame_id_sei == DEFAULT_RTSP_FRAME_ID_SEI);
@@ -239,6 +330,9 @@ static void test_out_of_range_split_sec_falls_back_to_default(void)
 
 int main(void)
 {
+    test_merged_runtime_uses_exact_path_once_and_reads_vcm();
+    test_required_top_level_objects_fail_closed();
+    test_non_object_and_unreadable_roots_fail_closed();
     test_malformed_arrays_fail_after_collecting_all_errors();
     test_oversized_array_is_fatal();
     test_object_instead_of_array_is_fatal();

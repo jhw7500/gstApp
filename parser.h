@@ -16,8 +16,7 @@
 #include "util.h"
 #include <json-c/json.h>
 
-#define JSON_NAME_PREFIX  "edgeconf_"
-#define JSON_NAME_SUFFIX  ".json"
+#define PIM_RUNTIME_JSON_FILE "/run/pim-camera/config/pim_runtime.json"
 
 #define DEFAULT_ENABLE_PATH_01	"/sys/bus/i2c/devices/i2c-2/2-0048/enable"
 #define DEFAULT_ENABLE_PATH_23	"/sys/bus/i2c/devices/i2c-1/1-0048/enable"
@@ -25,7 +24,6 @@
 #define DEFAULT_ROTATE_PATH_01	"/sys/bus/i2c/devices/i2c-2/2-0048/rotate"
 #define DEFAULT_ROTATE_PATH_23	"/sys/bus/i2c/devices/i2c-1/1-0048/rotate"
 
-#define DEFAULT_JSON_PATH   "/root/shared_v"
 #define JSON_CAM_OBJ_NAME   "VHL_CAM"
 #define JSON_CAP_OBJ_NAME   "capture"
 
@@ -231,7 +229,15 @@ public :
     static json_object *json_find_obj (json_object * jobj, char *find_key);
     
 private :
-	
+	void own_json_strings();
+    gchar *m_jsonOhtName;
+    gchar *m_jsonRtspId;
+    gchar *m_jsonMntDir;
+    gchar *m_jsonMuxer;
+    gchar *m_jsonCapDir;
+    gchar *m_jsonCapEncoder;
+    gchar *m_jsonAwb[MAX_CHANNEL];
+
 public :
 	gboolean m_flagDestroy;
     CmdArg arg;
