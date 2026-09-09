@@ -783,8 +783,8 @@ awk -v NAME=poll_slow_t7 -f test/classify-freeze.awk /root/fpsmeas/poll_..._slow
 [#68](https://github.com/jhw7500/max9296/issues/68)(철자 기반 정적 계약·CI 공백)도 완료됐다.
 간헐 동결 [#65](https://github.com/jhw7500/max9296/issues/65)는 노출 갈림과 별개이며 아직 열려 있다.
 
-도구: `test/probe-exposure-split.sh`. 원자료: 타겟 `/root/fpsmeas/expsplit_20260908_013240.*`
-(2x2), `expsplit_20260908_014852.*`(`W_aeon` 포함, 동결 빈발로 절반 무효).
+수정 전 원자료: 타겟 `/root/fpsmeas/expsplit_20260908_013240.*`(2x2),
+`expsplit_20260908_014852.*`(`W_aeon` 포함, 동결 빈발로 절반 무효).
 
 ## 6. 드라이버 / 앱 업데이트 후 체크리스트
 
