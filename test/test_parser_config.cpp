@@ -10,6 +10,38 @@ static int g_failures = 0;
 static gint g_json_open_count = 0;
 static gchar g_critical_logs[32768] = {0};
 
+enum BorrowedField {
+    BORROWED_VHL_NAME,
+    BORROWED_RTSP_ID,
+    BORROWED_MOUNT_PATH,
+    BORROWED_MUXER,
+    BORROWED_CAPTURE_PATH,
+    BORROWED_CAPTURE_ENCODER,
+    BORROWED_AWB_0,
+    BORROWED_AWB_1,
+    BORROWED_AWB_2,
+    BORROWED_AWB_3,
+    BORROWED_FIELD_COUNT,
+};
+
+enum ParseExpectation {
+    EXPECT_RELEASE_ONLY,
+    EXPECT_OWNED_STRINGS,
+    EXPECT_NO_VHL_EXTRACTION,
+};
+
+struct ParseProbe {
+    ParserClass *parser;
+    gint roots_created;
+    gint roots_finalized;
+    guint alias_mask;
+    guint borrowed_count;
+    gboolean borrowed_values_distinct;
+    const gchar *borrowed[BORROWED_FIELD_COUNT];
+};
+
+static ParseProbe *g_active_probe = NULL;
+
 #define CHECK(condition)                                                \
     do {                                                                \
         ++g_checks;                                                     \
@@ -34,6 +66,83 @@ void mylog(gint opt, const gchar *format, ...)
     }
 }
 
+static json_object *object_member(json_object *object, const gchar *name)
+{
+    if (object == NULL || json_object_get_type(object) != json_type_object)
+        return NULL;
+    return json_object_object_get(object, name);
+}
+
+static const gchar *string_member(json_object *object, const gchar *name)
+{
+    json_object *value = object_member(object, name);
+    if (value == NULL || json_object_get_type(value) != json_type_string)
+        return NULL;
+    return json_object_get_string(value);
+}
+
+static void capture_borrowed_strings(ParseProbe *probe, json_object *root)
+{
+    json_object *vhl = object_member(root, "VHL_CAM");
+    json_object *capture = object_member(vhl, "capture");
+    json_object *i2c2 = object_member(vhl, "i2c2");
+    json_object *i2c1 = object_member(vhl, "i2c1");
+
+    probe->borrowed[BORROWED_VHL_NAME] = string_member(vhl, "vhl_name");
+    probe->borrowed[BORROWED_RTSP_ID] = string_member(vhl, "id");
+    probe->borrowed[BORROWED_MOUNT_PATH] = string_member(vhl, "tmp_path");
+    probe->borrowed[BORROWED_MUXER] = string_member(vhl, "muxer");
+    probe->borrowed[BORROWED_CAPTURE_PATH] = string_member(capture, "path");
+    probe->borrowed[BORROWED_CAPTURE_ENCODER] =
+        string_member(capture, "encoder");
+    probe->borrowed[BORROWED_AWB_0] =
+        string_member(object_member(i2c2, "ch0"), "awb");
+    probe->borrowed[BORROWED_AWB_1] =
+        string_member(object_member(i2c2, "ch1"), "awb");
+    probe->borrowed[BORROWED_AWB_2] =
+        string_member(object_member(i2c1, "ch2"), "awb");
+    probe->borrowed[BORROWED_AWB_3] =
+        string_member(object_member(i2c1, "ch3"), "awb");
+
+    probe->borrowed_values_distinct = TRUE;
+    for (guint i = 0; i < BORROWED_FIELD_COUNT; ++i) {
+        if (probe->borrowed[i] == NULL)
+            continue;
+        ++probe->borrowed_count;
+        for (guint j = 0; j < i; ++j) {
+            if (probe->borrowed[j] != NULL &&
+                g_strcmp0(probe->borrowed[i], probe->borrowed[j]) == 0)
+                probe->borrowed_values_distinct = FALSE;
+        }
+    }
+}
+
+static void root_finalized(json_object *root, void *userdata)
+{
+    (void)root;
+    ParseProbe *probe = static_cast<ParseProbe *>(userdata);
+    ++probe->roots_finalized;
+
+    const gchar *parser_values[BORROWED_FIELD_COUNT] = {
+        probe->parser->arg.ohtName,
+        probe->parser->arg.rtsp_id,
+        probe->parser->arg.mntDir,
+        probe->parser->arg.muxer,
+        probe->parser->arg.cap.dir,
+        probe->parser->arg.cap.encoder,
+        probe->parser->arg.cam[0].awb,
+        probe->parser->arg.cam[1].awb,
+        probe->parser->arg.cam[2].awb,
+        probe->parser->arg.cam[3].awb,
+    };
+
+    for (guint i = 0; i < BORROWED_FIELD_COUNT; ++i) {
+        if (probe->borrowed[i] != NULL &&
+            parser_values[i] == probe->borrowed[i])
+            probe->alias_mask |= (1U << i);
+    }
+}
+
 extern "C" json_object *json_object_from_file(const char *filename)
 {
     ++g_json_open_count;
@@ -44,6 +153,11 @@ extern "C" json_object *json_object_from_file(const char *filename)
 
     json_object *object = json_tokener_parse(contents);
     g_free(contents);
+    if (object != NULL && g_active_probe != NULL) {
+        ++g_active_probe->roots_created;
+        capture_borrowed_strings(g_active_probe, object);
+        json_object_set_userdata(object, g_active_probe, root_finalized);
+    }
     return object;
 }
 
@@ -59,12 +173,12 @@ int safe_mkdir_p(const char *path, mode_t mode)
     return 0;
 }
 
-static gchar *channel_json(const gchar *extra)
+static gchar *channel_json(const gchar *extra, const gchar *awb)
 {
     return g_strdup_printf(
         "{\"enable\":true,\"hflip\":false,\"vflip\":false,"
-        "\"ae_on\":true%s%s}",
-        extra && extra[0] ? "," : "", extra ? extra : "");
+        "\"ae_on\":true,\"awb\":\"%s\"%s%s}",
+        awb, extra && extra[0] ? "," : "", extra ? extra : "");
 }
 
 static gchar *runtime_json(const gchar *rtsp_tune,
@@ -72,15 +186,19 @@ static gchar *runtime_json(const gchar *rtsp_tune,
                            const gchar *ch3_extra,
                            gboolean srt_enable = TRUE)
 {
-    gchar *ch0 = channel_json(ch0_extra);
-    gchar *ch1 = channel_json("");
-    gchar *ch2 = channel_json("");
-    gchar *ch3 = channel_json(ch3_extra);
+    gchar *ch0 = channel_json(ch0_extra, "owned-awb-0");
+    gchar *ch1 = channel_json("", "owned-awb-1");
+    gchar *ch2 = channel_json("", "owned-awb-2");
+    gchar *ch3 = channel_json(ch3_extra, "owned-awb-3");
     gchar *json = g_strdup_printf(
         "{\"VHL_CAM\":{"
-        "\"vhl_name\":\"parser-test\",\"id\":\"user\","
-        "\"tmp_path\":\"/tmp\",\"muxer\":\"mp4\","
-        "\"capture\":{\"enable\":false}%s%s,"
+        "\"vhl_name\":\"owned-vhl-name\",\"id\":\"owned-rtsp-id\","
+        "\"tmp_path\":\"/tmp/owned-mount\",\"muxer\":\"owned-muxer\","
+        "\"capture\":{\"enable\":true,\"delay\":0,\"timeout\":200,"
+        "\"encoder\":\"owned-capture-encoder\","
+        "\"path\":\"/tmp/owned-capture\",\"record\":false,"
+        "\"rtsp\":false,\"quality\":85,\"queue_size\":30,"
+        "\"response\":true,\"instant\":0}%s%s,"
         "\"i2c2\":{\"crop_enable\":false,\"ch0\":%s,\"ch1\":%s},"
         "\"i2c1\":{\"crop_enable\":false,\"ch2\":%s,\"ch3\":%s}"
         "},\"ORD\":{\"port_num\":10007},"
@@ -95,7 +213,8 @@ static gchar *runtime_json(const gchar *rtsp_tune,
     return json;
 }
 
-static gint parse_fixture(ParserClass *parser, const gchar *contents)
+static gint parse_fixture(ParserClass *parser, const gchar *contents,
+                          ParseExpectation expectation = EXPECT_RELEASE_ONLY)
 {
     gchar directory[] = "/tmp/gstapp-parser-config-XXXXXX";
     gchar fixture_path[512] = {0};
@@ -110,9 +229,25 @@ static gint parse_fixture(ParserClass *parser, const gchar *contents)
     parser->init_arg(appname);
     g_critical_logs[0] = '\0';
     g_json_open_count = 0;
+    ParseProbe probe = {};
+    probe.parser = parser;
+    g_active_probe = &probe;
     const gint result = parser->json_parser(fixture_path, JSON_CAM_OBJ_NAME);
+    g_active_probe = NULL;
 
     CHECK(g_json_open_count == 1);
+    CHECK(probe.roots_created == 1);
+    CHECK(probe.roots_finalized == 1);
+    if (expectation == EXPECT_OWNED_STRINGS) {
+        if (probe.alias_mask != 0)
+            fprintf(stderr, "  borrowed alias mask at root finalization: 0x%x\n",
+                    probe.alias_mask);
+        CHECK(probe.borrowed_count == BORROWED_FIELD_COUNT);
+        CHECK(probe.borrowed_values_distinct == TRUE);
+        CHECK(probe.alias_mask == 0);
+    } else if (expectation == EXPECT_NO_VHL_EXTRACTION) {
+        CHECK((probe.alias_mask & (1U << BORROWED_VHL_NAME)) == 0);
+    }
     CHECK(parser->arg.json_file != fixture_path);
     CHECK(g_strcmp0(parser->arg.json_file, expected_path) == 0);
 
@@ -121,6 +256,20 @@ static gint parse_fixture(ParserClass *parser, const gchar *contents)
     fixture_path[0] = '\0';
     CHECK(g_strcmp0(parser->arg.json_file, expected_path) == 0);
     return result;
+}
+
+static void check_owned_string_contents(const ParserClass *parser)
+{
+    CHECK(g_strcmp0(parser->arg.ohtName, "owned-vhl-name") == 0);
+    CHECK(g_strcmp0(parser->arg.rtsp_id, "owned-rtsp-id") == 0);
+    CHECK(g_strcmp0(parser->arg.mntDir, "/tmp/owned-mount") == 0);
+    CHECK(g_strcmp0(parser->arg.muxer, "owned-muxer") == 0);
+    CHECK(g_strcmp0(parser->arg.cap.dir, "/tmp/owned-capture") == 0);
+    CHECK(g_strcmp0(parser->arg.cap.encoder, "owned-capture-encoder") == 0);
+    CHECK(g_strcmp0(parser->arg.cam[0].awb, "owned-awb-0") == 0);
+    CHECK(g_strcmp0(parser->arg.cam[1].awb, "owned-awb-1") == 0);
+    CHECK(g_strcmp0(parser->arg.cam[2].awb, "owned-awb-2") == 0);
+    CHECK(g_strcmp0(parser->arg.cam[3].awb, "owned-awb-3") == 0);
 }
 
 static gchar *required_section_case(const gchar *section, gboolean missing)
@@ -145,14 +294,16 @@ static void test_merged_runtime_uses_exact_path_once_and_reads_vcm(void)
 {
     ParserClass enabled_parser;
     gchar *enabled = runtime_json(NULL, "", "", TRUE);
-    CHECK(parse_fixture(&enabled_parser, enabled) == 0);
+    CHECK(parse_fixture(&enabled_parser, enabled, EXPECT_OWNED_STRINGS) == 0);
     CHECK(enabled_parser.arg.srt_en == TRUE);
+    check_owned_string_contents(&enabled_parser);
     g_free(enabled);
 
     ParserClass disabled_parser;
     gchar *disabled = runtime_json(NULL, "", "", FALSE);
-    CHECK(parse_fixture(&disabled_parser, disabled) == 0);
+    CHECK(parse_fixture(&disabled_parser, disabled, EXPECT_OWNED_STRINGS) == 0);
     CHECK(disabled_parser.arg.srt_en == FALSE);
+    check_owned_string_contents(&disabled_parser);
     g_free(disabled);
 }
 
@@ -163,12 +314,14 @@ static void test_required_top_level_objects_fail_closed(void)
     for (guint i = 0; i < G_N_ELEMENTS(sections); ++i) {
         ParserClass missing_parser;
         gchar *missing = required_section_case(sections[i], TRUE);
-        CHECK(parse_fixture(&missing_parser, missing) < 0);
+        CHECK(parse_fixture(&missing_parser, missing,
+                            EXPECT_NO_VHL_EXTRACTION) < 0);
         g_free(missing);
 
         ParserClass non_object_parser;
         gchar *non_object = required_section_case(sections[i], FALSE);
-        CHECK(parse_fixture(&non_object_parser, non_object) < 0);
+        CHECK(parse_fixture(&non_object_parser, non_object,
+                            EXPECT_NO_VHL_EXTRACTION) < 0);
         g_free(non_object);
     }
 }
@@ -190,8 +343,14 @@ static void test_non_object_and_unreadable_roots_fail_closed(void)
     gchar appname[] = "gstApp";
     unreadable_parser.init_arg(appname);
     g_json_open_count = 0;
+    ParseProbe probe = {};
+    probe.parser = &unreadable_parser;
+    g_active_probe = &probe;
     CHECK(unreadable_parser.json_parser(missing_path, JSON_CAM_OBJ_NAME) < 0);
+    g_active_probe = NULL;
     CHECK(g_json_open_count == 1);
+    CHECK(probe.roots_created == 0);
+    CHECK(probe.roots_finalized == 0);
     CHECK(unreadable_parser.arg.json_file != missing_path);
     CHECK(g_strcmp0(unreadable_parser.arg.json_file, expected_path) == 0);
     CHECK(g_rmdir(directory) == 0);
