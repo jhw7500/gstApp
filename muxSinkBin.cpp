@@ -29,6 +29,13 @@ drop_no_pts_probe_mux(GstPad *pad, GstPadProbeInfo *info, gpointer user_data)
 #include <sys/file.h>
 #include <unistd.h>
 
+/* [관측] 이 길이 미만의 조각은 사건으로 본다.
+ * 근거: 2026-03~09 현장 로그에서 5초 미만 조각은 0건이고 최단이 약 8.2초다. 반면 이슈 #94 가
+ * 만든 피해 조각은 0.37~0.57초였다. 즉 오탐 0 / 탐지 확실한 구간이다. main.cpp 의
+ * MIN_SPLIT_INTERVAL_SEC(5) 와 같은 값이지만 그쪽은 앱의 연속 분할 억제용이라 의미가 다르고,
+ * 헤더로 끌어올리면 무관한 두 정책이 한 상수에 묶이므로 여기서 따로 둔다. */
+#define SHORT_FRAGMENT_ERR_MSEC 5000
+
 // 다채널 완료 추적 구조체
 typedef struct _RecordingSession {
   gchar *timestamp; // "20260127_143000"
@@ -192,6 +199,26 @@ void MuxSinkBin::handleFragmentClosed(const gchar *location, GstClockTime runnin
     if (running_time > muxSinkData.last_running_time) {
       calculated_duration = running_time - muxSinkData.last_running_time;
     }
+  }
+
+  /* [관측] 비정상적으로 짧은 조각을 사건으로 남긴다 (이슈 #94 계열의 '피해'를 로그만으로
+   * 판정하기 위한 것). 분할 타이밍 로직은 건드리지 않는다.
+   *
+   * LOG_ERR 인 이유: 운영 rsyslog 가 local0.notice 이상만 파일로 보내므로(실측)
+   * INFO/DEBUG 로 남기면 타겟 로그에 아예 나타나지 않는다. 조각 길이를 담은 기존 로그
+   * (handleFragmentOpened 의 duration 포함 분기)가 정확히 그 이유로 보이지 않는다.
+   *
+   * last_end_time 을 함께 보는 이유: 이 값이 invalid 면 이 채널의 '첫' 조각 닫힘이다.
+   * 기동 시각에 따라 첫 조각은 정상적으로 0~60초 사이 아무 길이나 될 수 있으므로
+   * (실측: 기동 8초 조각) 검사에서 제외해야 오탐이 나지 않는다. 아래 대입보다 앞에 두어야
+   * 이 판별이 성립한다. */
+  if (GST_CLOCK_TIME_IS_VALID(muxSinkData.last_end_time) &&
+      GST_CLOCK_TIME_IS_VALID(calculated_duration) &&
+      calculated_duration < (SHORT_FRAGMENT_ERR_MSEC * GST_MSECOND)) {
+    __LOG(LOG_ERR, "[GST][%s:%d] ch%d short fragment: %" G_GUINT64_FORMAT
+          "ms (< %dms) %s", _FILE_, __LINE__, muxSinkData.ch,
+          (guint64) (calculated_duration / GST_MSECOND),
+          SHORT_FRAGMENT_ERR_MSEC, location);
   }
 
   // [통계 저장] 이전 파일의 정보를 메모리에 보관
