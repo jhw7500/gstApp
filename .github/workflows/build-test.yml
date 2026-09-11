@@ -9,8 +9,6 @@ on:
   pull_request:
     types: [opened, reopened]
     branches: [ main, master ]
-    paths:
-      - 'projects/gstApp/**'
   issue_comment:
     types: [created]
   workflow_dispatch:
@@ -75,12 +73,11 @@ jobs:
 
       - name: Build
         run: |
-          cd projects/gstApp
           make || { echo "Build failed. Check dependencies."; exit 1; }
 
       - name: Upload Build Artifact
         uses: actions/upload-artifact@v4
         with:
           name: gstApp-binary
-          path: projects/gstApp/bin/gstApp
+          path: bin/gstApp
           if-no-files-found: warn
