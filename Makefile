@@ -1,5 +1,10 @@
 
 #TOP_DIR = $(shell pwd)
+# 호스트별 경로는 저장소에 넣지 않는다. `.env`(gitignore 대상)에서 읽는다 —
+# `cp .env.example .env` 로 시작한다. 래퍼(`./make-for-imx8`)는 환경변수를 먼저 보고
+# 해석한 값을 make 명령줄로 넘기므로 우선순위는 환경변수 > .env 다.
+-include .env
+
 OUTPUT = bin
 OBJ = obj
 #SOURCE=main.cpp util.cpp util.h videoBin.cpp videoBin.h recordBin.cpp recordBin.h audioBin.cpp audioBin.h muxSinkBin.cpp muxSinkBin.h rtspServerBin.cpp rtspServerBin.h captureBin.cpp captureBin.h
@@ -40,13 +45,18 @@ endif
 CPP_PERF_FLAGS = -fno-exceptions -fno-rtti
 
 LDFLAGS+=$(shell pkg-config --libs $(LIBS))
-LDFLAGS+=-L/opt/desktop/gitlab/gst-jhw/gstapp/gstapp/app/rnnoise/lib -lrnnoise
+# rnnoise 는 호스트 종속 외부 라이브러리다. RNNOISE_DIR 이 비면 링크하지 않는다.
+ifneq ($(strip $(RNNOISE_DIR)),)
+LDFLAGS+=-L$(strip $(RNNOISE_DIR))/lib -lrnnoise
+endif
 # LDFLAGS+=$(OPT_FLAGS) # 컴파일러가 링크 시 자동 처리하므로 중복 제거
 ALL_LDFLAGS=$(LDFLAGS)
 
 CFLAGS+=-Wall
 CFLAGS+=$(shell pkg-config --cflags $(LIBS))
-CFLAGS+=-I/opt/desktop/gitlab/gst-jhw/gstapp/gstapp/app/rnnoise/include
+ifneq ($(strip $(RNNOISE_DIR)),)
+CFLAGS+=-I$(strip $(RNNOISE_DIR))/include
+endif
 CFLAGS+=$(OPT_FLAGS)
 ALL_CFLAGS=-I$(IDIR) $(CFLAGS)
 

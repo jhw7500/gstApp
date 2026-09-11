@@ -15,13 +15,19 @@ This repo is often developed on GitHub first, then a curated result is pushed to
 See `projects/GITLAB_PUBLISH.md`.
 
 ## Quick Commands (from `Makefile`)
-- **Build (cross-compile for i.MX8): `./make-for-imx8`** — sources the Yocto SDK
-  (`/shared/fsl-imx-xwayland/5.10-hardknott`, `cortexa53-crypto-poky-linux`), points
+- **First-time setup: `cp .env.example .env`**, then fill in the host paths. `.env` is
+  gitignored, so each host keeps its own values without producing a commit diff.
+  `.env.example` is the source of truth for what must be filled.
+- **Build (cross-compile for i.MX8): `./make-for-imx8`** — reads `.env` for `SDK_LOC` /
+  `SDK_NAME` (environment variables win over `.env`), sources the Yocto SDK, points
   `PKG_CONFIG_PATH` at the target sysroot, then runs `make` (args pass through, e.g.
-  `./make-for-imx8 clean`). **Plain `make` on a dev host FAILS** with
+  `./make-for-imx8 clean`). The wrapper stops with a message if `SDK_LOC` or `SDK_NAME`
+  is empty. **Plain `make` on a dev host FAILS** with
   `fatal error: gst/gst.h: No such file or directory` because the host lacks the GStreamer
   dev libs. Always build via `./make-for-imx8`.
 - Clean: `./make-for-imx8 clean` (or `make clean`)
+- The wrapper passes argv through unchanged — `test/run-make-for-imx8-test.sh` pins that
+  contract, so do not inject make variables into the `make` call inside the wrapper.
 
 ### Build Artifacts
 - Output binary: `bin/gstApp`
@@ -39,9 +45,13 @@ See `projects/GITLAB_PUBLISH.md`.
   - `json-c`
   - `openssl`
   - `check`
-- Additional link flags include `-lturbojpeg` and a hardcoded rnnoise path:
-  - `-L/opt/desktop/gitlab/gst-jhw/gstapp/gstapp/app/rnnoise/lib -lrnnoise`
-  - `-I/opt/desktop/gitlab/gst-jhw/gstapp/gstapp/app/rnnoise/include`
+- Additional link flags include `-lturbojpeg` and, when `RNNOISE_DIR` is set, rnnoise:
+  - `-L$(RNNOISE_DIR)/lib -lrnnoise`
+  - `-I$(RNNOISE_DIR)/include`
+- `RNNOISE_DIR` is a make variable read from `.env`. Leave it empty and both flags are
+  omitted (rnnoise is currently only referenced in commented-out code —
+  `rtspServerBin.cpp:33,2425`). Override it the make way, since the wrapper does not
+  touch it: `./make-for-imx8 RNNOISE_DIR=/other/path`.
 
 ### Lint / Format
 - No lint target in `Makefile`.
