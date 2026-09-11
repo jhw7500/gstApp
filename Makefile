@@ -1,8 +1,13 @@
 
 #TOP_DIR = $(shell pwd)
 # 호스트별 경로는 저장소에 넣지 않는다. `.env`(gitignore 대상)에서 읽는다 —
-# `cp .env.example .env` 로 시작한다. 래퍼(`./make-for-imx8`)는 환경변수를 먼저 보고
-# 해석한 값을 make 명령줄로 넘기므로 우선순위는 환경변수 > .env 다.
+# `cp .env.example .env` 로 시작한다.
+#
+# make 는 .env 를 makefile 소스로 읽는다. 그래서 여기 적힌 값이 환경변수를 이긴다 —
+# 우선순위는 명령줄 > .env > 환경변수다. 일회성으로 바꾸려면 환경변수가 아니라 make
+# 인자로 넘긴다: ./make-for-imx8 RNNOISE_DIR=/다른/경로
+# 래퍼는 argv 를 그대로만 넘기고 make 변수를 대신 주입하지 않는다
+# (test/run-make-for-imx8-test.sh 가 그 계약을 고정한다).
 -include .env
 
 OUTPUT = bin
