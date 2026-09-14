@@ -89,7 +89,7 @@ CONF=${RUNTIME_CONF:-/run/pim-camera/config/pim_runtime.json}
 # 같은 디렉터리 임시 파일 + mv 로 발행한다(생산자 write_json_atomic 과 같은 원자성).
 # install -d 가 아니라 mkdir -p -m 인 이유, 경로 형태와 파일 종류를 먼저 보는 이유는
 # 같은 문서 §8.2. 이 정의는 13 벌이 바이트 동일해야 한다(게이트가 검사한다).
-# shellcheck disable=SC2174  # -m 이 안 붙는 중간 요소는 /run 뿐이고 그건 항상 있다
+# shellcheck disable=SC2174  # 기본 CONF 기준이다 — RUNTIME_CONF 로 더 깊은 경로를 주면 중간 요소는 -m 을 못 받고 umask 를 따른다(docs §8.2 실측)
 put_conf() { case $CONF in /*/*/*) ;; *) echo "!! CONF 가 /a/b/c 형태가 아니다: $CONF" >&2; return 1;; esac; if [ -L "$CONF" ] || { [ -e "$CONF" ] && [ ! -f "$CONF" ]; }; then echo "!! $CONF 가 정규 파일이 아니다 - 쓰지 않는다" >&2; return 1; fi; if mkdir -p -m 0750 "${CONF%/*/*}" "${CONF%/*}" && cp -f "$1" "$CONF.tmp.$$" && chmod 0640 "$CONF.tmp.$$" && mv -f "$CONF.tmp.$$" "$CONF"; then return 0; fi; rm -f "$CONF.tmp.$$"; echo "!! config 쓰기 실패: $1 -> $CONF" >&2; return 1; }
 # 예전 이름 EDGECONF 는 edge 문서를 가리켰다. 그냥 무시하면 그 값이 조용히 버려지고
 # 기본값으로 측정이 돌아 — 이 이슈가 만든 것과 같은 종류의 거짓 성공이 된다. 멈춘다.
@@ -555,6 +555,12 @@ for combo in $SUPPORTED; do
 				continue
 			fi
 		fi
+		# 생산자가 아직 살아 있으면 쓰지 않는다 — 발행 문서를 생산자 검증 없이 덮고
+		# publish 와 경합한다. 종료코드로 판정하면 안 된다: 비활성도 조회 실패도 non-zero 라
+		# 구분되지 않아, 조회가 깨지면 생산자가 도는 중에도 그대로 쓴다(실측 systemd 249 —
+		# inactive rc=3, D-Bus 실패 rc=1 이고 후자는 stdout 이 빈다). 상태 문자열로 보고
+		# 모르는 상태·조회 실패에서는 중단한다(이슈 #113 PR 리뷰, Codex P1 ②).
+		CAM_STATE=$(systemctl is-active cam-operate.service 2>/dev/null); case $CAM_STATE in inactive|failed) ;; *) echo "!! cam-operate 상태가 [${CAM_STATE:-조회실패}] 다 - 시험 config 를 쓰지 않는다" >&2; exit 2;; esac
 		# cp 도중 죽어도 복원되도록 쓰기 "전"에 세운다
 		CONF_DIRTY=1
 		put_conf "$OUT/.test.json" || exit 2

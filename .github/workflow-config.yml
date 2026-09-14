@@ -10,6 +10,11 @@
 automation_ref: v1.73
 automation_commit: 3d60f3baaa45820f7260912efea3ffcf45c10b07
 
+# PR 자동 리뷰 스위치(최상위). 없으면 기본이 false 라 `review:request` 라벨을 붙인
+# PR 만 리뷰를 받는다. 켜 두면 라벨 없이도 opened/synchronize 에서 리뷰가 돈다.
+review:
+  auto: true
+
 workflows:
   # Repo-specific
   shellcheck:
@@ -58,7 +63,10 @@ workflows:
   # 종전에는 항목 자체가 없어 check-workflow-enabled 의 `.enabled // true` 기본값으로
   # 켜져 있었다. 계속 쓰기로 했으므로 의도를 명시한다.
   # 주의: opencode-auto-review 의 자동실행 게이트는 이 블록의 `auto:` 가 아니라
-  # 최상위 `review.auto` 다(공유 워크플로우가 그 키를 읽는다, 미지정 시 true).
+  # 최상위 `review.auto` 다(공유 워크플로우가 그 키를 읽는다). **미지정 시 false 다** —
+  # 종전 주석은 true 라고 적었으나 사실과 반대였고, 그래서 PR #115·#117 이 리뷰 0건이었다.
+  # 근거: jhw7500/automation 의 resolve_review_policy.py 가 auto 키가 없으면
+  # PolicyDecision(False, "auto", "default_auto_false") 를 돌려준다.
   # 모델은 zai-coding-plan/glm-4.7, 인증은 저장소 시크릿 ZHIPU_API_KEY.
   opencode:
     enabled: true
