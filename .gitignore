@@ -15,3 +15,9 @@ tmp/
 # clangd (호스트 종속 — 각자 빌드 시 생성)
 compile_commands.json
 .cache/
+
+# 호스트별 빌드 경로 (.env.example 을 복사해 만든다)
+.env
+
+# 빌드 로그 (호스트 경로가 들어간다 — 커밋하지 않는다)
+build.log
