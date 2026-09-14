@@ -23,7 +23,9 @@ CONF=/run/pim-camera/config/pim_runtime.json
 # shellcheck disable=SC2174  # 기본 CONF 기준이다 — RUNTIME_CONF 로 더 깊은 경로를 주면 중간 요소는 -m 을 못 받고 umask 를 따른다(docs §8.2 실측)
 put_conf() { case $CONF in /*/*/*) ;; *) echo "!! CONF 가 /a/b/c 형태가 아니다: $CONF" >&2; return 1;; esac; if [ -L "$CONF" ] || { [ -e "$CONF" ] && [ ! -f "$CONF" ]; }; then echo "!! $CONF 가 정규 파일이 아니다 - 쓰지 않는다" >&2; return 1; fi; if mkdir -p -m 0750 "${CONF%/*/*}" "${CONF%/*}" && cp -f "$1" "$CONF.tmp.$$" && chmod 0640 "$CONF.tmp.$$" && mv -f "$CONF.tmp.$$" "$CONF"; then return 0; fi; rm -f "$CONF.tmp.$$"; echo "!! config 쓰기 실패: $1 -> $CONF" >&2; return 1; }
 ORIG="$D/pim_runtime.json.orig"
-ORIG_MD5="$D/pim_runtime.json.orig.md5"
+ORIG_MD5_FILE="$D/pim_runtime.json.orig.md5"
+# probe-*.sh 와 같은 의미로 쓴다: 경로가 아니라 md5 '값'. 백업 확보 뒤에 채운다.
+ORIG_MD5=""
 HARDRESET=/opt/pim/bin/cam_hard_reset.sh
 BIN="$D/gstApp.skew-test"
 LOG="$D/run-$TAG.log"
@@ -60,10 +62,10 @@ restore() {
   fi
   pkill -x gstApp 2>/dev/null; sleep 3
   if [ "$CONF_DIRTY" -eq 1 ]; then
-    if [ -f "$ORIG" ] && [ -f "$ORIG_MD5" ]; then
+    if [ -f "$ORIG" ] && [ -n "$ORIG_MD5" ]; then
       put_conf "$ORIG"; sync
-      [ "$(md5of "$CONF")" = "$(cat "$ORIG_MD5")" ] \
-        && log "config 복원 검증 OK ($(cat "$ORIG_MD5"))" \
+      [ "$(md5of "$CONF")" = "$ORIG_MD5" ] \
+        && log "config 복원 검증 OK ($ORIG_MD5)" \
         || log "!!! config 복원 md5 불일치 — 수동 확인 필요 !!!"
     else
       log "!!! 백업 부재 — config 복원 불가 !!!"
@@ -96,9 +98,28 @@ fi
 # ── 1. 원본 백업 (최초 1회, 절대 덮지 않음) ──────────────────────────────────
 if [ ! -f "$ORIG" ]; then
   [ "$(jq -r '.VHL_CAM.i2c1.ch2.enable' "$CONF")" = "false" ] || { log "!!! 배포 원본이 아닌 듯(ch2.enable!=false). 중단"; exit 3; }
-  cp "$CONF" "$ORIG"; md5of "$ORIG" > "$ORIG_MD5"; log "원본 백업 생성 (md5 $(cat "$ORIG_MD5"))"
+  cp "$CONF" "$ORIG"; md5of "$ORIG" > "$ORIG_MD5_FILE"; log "원본 백업 생성 (md5 $(cat "$ORIG_MD5_FILE"))"
 else
-  log "기존 백업 사용 (md5 $(cat "$ORIG_MD5"))"
+  log "기존 백업 사용 (md5 $(cat "$ORIG_MD5_FILE"))"
+fi
+[ -f "$ORIG_MD5_FILE" ] || { log "!!! 백업 md5 파일이 없다: $ORIG_MD5_FILE"; exit 2; }
+ORIG_MD5=$(cat "$ORIG_MD5_FILE")
+LIVE_MD5=$(md5of "$CONF")
+
+# 표류 검사 — 백업을 재사용하는 회차는 위의 ch2.enable 검사를 타지 않으므로, live 문서가
+# 백업과 어긋난 채로 측정될 수 있었다. 복원은 백업 시점으로 되돌리므로 그 차이가 그대로
+# 운영에 반영된다. probe-*.sh 와 같은 우회 스위치를 둔다.
+if [ "$LIVE_MD5" != "$ORIG_MD5" ]; then
+  if [ "${ALLOW_CONF_DRIFT:-0}" = "1" ]; then
+    log "경고: live($LIVE_MD5) != 백업($ORIG_MD5) — ALLOW_CONF_DRIFT=1 로 진행합니다."
+    log "      복원 시 현재 운영 설정이 백업 시점으로 되돌아갑니다."
+  else
+    log "중단: live config 가 백업과 다릅니다."
+    log "  live  =$LIVE_MD5  ($CONF)"
+    log "  backup=$ORIG_MD5  ($ORIG)"
+    log "  백업을 갱신하거나, 되돌아가도 좋다면 ALLOW_CONF_DRIFT=1 로 다시 실행하세요."
+    exit 2
+  fi
 fi
 
 # ── 2. 시험 config 생성 + 검증 ───────────────────────────────────────────────
@@ -150,7 +171,10 @@ put_conf "$TESTCONF" || exit 11; sync; log "시험 config 투입"   # 11: 정지
 # 기본은 운영 바이너리. SKEW55A_SRC_BIN 으로 시험 빌드를 지정할 수 있다.
 SRC_BIN="${SKEW55A_SRC_BIN:-/usr/local/bin/gstApp}"
 [ -x "$SRC_BIN" ] || { log "시험 바이너리 없음: $SRC_BIN"; exit 8; }
-cp -f "$SRC_BIN" "$BIN"; log "바이너리 $SRC_BIN md5 $(md5of "$BIN")"
+# 실패를 치명으로 다룬다 — 안 그러면 이전 회차가 남긴 낡은 $BIN 이 그대로 측정된다.
+cp -f "$SRC_BIN" "$BIN" || { log "바이너리 스테이징 실패: $SRC_BIN -> $BIN"; exit 12; }
+chmod +x "$BIN" || { log "바이너리 실행권한 설정 실패: $BIN"; exit 12; }
+log "바이너리 $SRC_BIN md5 $(md5of "$BIN")"
 
 touch "$MARKER"; ISI0=$(isi); T0=$(date +%s)
 cd /root || { log "cd /root 실패"; exit 10; }

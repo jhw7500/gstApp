@@ -2,7 +2,8 @@
 # 타겟 실행 스크립트의 운영 안전 불변식을 소스에서 검사한다.
 #
 # 왜 필요한가
-#   test/probe-*.sh 11 종과 run-fps-scenario.sh 는 한 조사에서 복사·편집으로 파생돼 안전
+#   test/probe-*.sh 11 종과 run-fps-scenario.sh, run-skew55a.sh 는 한 조사에서 복사·편집으로
+#   파생돼 안전
 #   장치가 파일마다 인라인으로 중복돼 있다. 실제로 pre-PR 리뷰에서 나온 결함 5 건을 고칠 때
 #   **같은 수정을 11 번** 넣어야 했고, 한 곳이라도 빠지면 그 스크립트만 조용히 위험한 채로
 #   남는다. 스크립트를 하나로 접는 리팩터는 하지 않는다 — 각 파일이 문서(§5.8.7)와 max9296
@@ -24,7 +25,9 @@
 #                  운영 설정으로 남는다 — 과잉 복원을 고치다 만든 실제 회귀다.
 #   3. 삭제 한정   녹화 삭제를 이 실행이 만든 파일로 한정 (-mmin 고정 창 금지)
 #   4. 스테이징    앱 복사·chmod 실패는 치명적 (낡은 바이너리 측정 금지)
-#   5. cam-operate 정지 상태로 두면 크게 알리고, RESTORE_CAM_OPERATE 로 되살릴 수 있다
+#   5. cam-operate 되살리는 경로가 반드시 있고, 정지 상태로 두는 선택지를 가진 스크립트는
+#                  그 사실을 크게 알린다(RESTORE_CAM_OPERATE 로 되살릴 수 있다). 무조건
+#                  되살리는 스크립트에 그 안내를 요구하지 않는다 — 거짓 양성이 된다.
 #   6. trap        EXIT/INT/TERM 에 복원이 걸려 있고, 이후 해제되지 않는다
 #
 # 이슈 #113 관련 (대상이 다르다 - put_conf 를 정의한 스크립트 전부, 오늘 13 개)
@@ -60,6 +63,11 @@ harness = Path("test/run-fps-scenario.sh")
 if not harness.exists():
     raise SystemExit(f"{harness} 를 찾지 못했습니다")
 targets.append(harness)
+skew = Path("test/run-skew55a.sh")
+if not skew.is_file():
+    print("test/run-skew55a.sh 를 찾지 못했습니다", file=sys.stderr)
+    raise SystemExit(1)
+targets.append(skew)
 if len(targets) < 2:
     raise SystemExit("검사 대상 스크립트를 찾지 못했습니다")
 
@@ -122,15 +130,20 @@ CHECKS = (
     ),
     (
         "스테이징 치명화",
-        lambda s: re.search(r'cp \S+ "\$BIN" \|\|', s) is not None
+        # 성질은 "$BIN 에 쓰는 cp 와 chmod 가 치명적인가" 다. cp 의 플래그 개수를 고정하지
+        # 않는다 — cp -f "$SRC" "$BIN" 도 cp "$SRC" "$BIN" 과 같은 성질이다.
+        lambda s: re.search(r'cp [^\n]*"\$BIN" \|\|', s) is not None
         and re.search(r'chmod \+x "\$BIN" \|\|', s) is not None,
         "앱 스테이징 실패가 치명적이지 않습니다 — 낡은 바이너리가 측정될 수 있습니다",
     ),
     (
         "cam-operate 복원",
-        lambda s: "RESTORE_CAM_OPERATE" in s
-        and "정지 상태로 둡니다" in s,
-        "cam-operate 를 정지 상태로 둘 때 알리지 않거나 되살릴 방법이 없습니다",
+        # 성질은 "정지된 채로 방치하지 않는다" 다. 되살리는 경로가 반드시 있어야 하고,
+        # 정지 상태로 두는 선택지(RESTORE_CAM_OPERATE)가 있는 스크립트만 그 사실을 알려야
+        # 한다. 무조건 되살리는 스크립트에 그 안내를 요구하면 거짓 양성이 된다.
+        lambda s: "systemctl start cam-operate" in s
+        and ("RESTORE_CAM_OPERATE" not in s or "정지 상태로 둡니다" in s),
+        "cam-operate 를 되살리는 경로가 없거나, 정지 상태로 두면서 알리지 않습니다",
     ),
     (
         "trap 복원",
