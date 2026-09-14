@@ -289,6 +289,10 @@ probe() { # $1=라벨 $2=trial $3=mode(ctl|prod) $4=ae_on_ch0 $5=ae_on_ch1
 	jq --argjson a0 "$AE0" --argjson a1 "$AE1" \
 	   '.VHL_CAM.i2c2.ch0.ae_on=$a0 | .VHL_CAM.i2c2.ch1.ae_on=$a1' \
 	   "$OUT/.fz.json" >"$OUT/.ae.json" || return 1
+	# 생산자가 아직 살아 있으면 쓰지 않는다 — 발행 문서를 생산자 검증 없이 덮고
+	# publish 와 경합한다. systemctl stop 은 실패해도 종료코드를 보지 않으므로
+	# 여기서 상태로 확인한다(이슈 #113 PR 리뷰, Codex P1 ②).
+	systemctl is-active --quiet cam-operate.service && { echo "!! cam-operate 가 아직 active - 시험 config 를 쓰지 않는다" >&2; exit 2; }
 	# cp 도중 죽어도 복원되도록 쓰기 "전"에 세운다
 	CONF_DIRTY=1
 	put_conf "$OUT/.ae.json" || exit 2

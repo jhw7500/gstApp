@@ -194,6 +194,10 @@ probe() { # $1=라벨 $2=trial $3..$6=ch0..ch3 enable $7=DEVS("이름=버스:후
 	    | .VHL_CAM.i2c2.ch0.led_flash.enable=false | .VHL_CAM.i2c2.ch1.led_flash.enable=false
 	    | .VHL_CAM.i2c1.ch2.led_flash.enable=false | .VHL_CAM.i2c1.ch3.led_flash.enable=false
 	    ' "$BACKUP" >"$OUT/.tp.json" || return 1
+	# 생산자가 아직 살아 있으면 쓰지 않는다 — 발행 문서를 생산자 검증 없이 덮고
+	# publish 와 경합한다. systemctl stop 은 실패해도 종료코드를 보지 않으므로
+	# 여기서 상태로 확인한다(이슈 #113 PR 리뷰, Codex P1 ②).
+	systemctl is-active --quiet cam-operate.service && { echo "!! cam-operate 가 아직 active - 시험 config 를 쓰지 않는다" >&2; exit 2; }
 	# cp 도중 죽어도 복원되도록 쓰기 "전"에 세운다
 	CONF_DIRTY=1
 	put_conf "$OUT/.tp.json" || exit 2
