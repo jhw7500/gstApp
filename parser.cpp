@@ -281,6 +281,7 @@ void ParserClass::init_arg(gchar *argv) {
   arg.dual_enc = FALSE;
   arg.wdt_timeout_long = DEFAULT_WDT_TIMEOUT_LONG;
   arg.wdt_timeout_short = DEFAULT_WDT_TIMEOUT_SHORT;
+  arg.srt_en = FALSE;
   arg.videorate_en = TRUE;
 
   arg.rtsp_factory_latency_ms = DEFAULT_RTSP_FACTORY_LATENCY_MS;
@@ -468,6 +469,8 @@ gint ParserClass::json_object_get_value(json_object *hobj, const gchar *name,
 ParserClass::ParserClass() {
   // 생성자 코드 추가
   arg.enc = NULL;
+  arg.json_file = NULL;
+  m_jsonRoot = NULL;
   __LOG(LOG_INFO, "[GST][%s:%d] %s", _FILE_, __LINE__, __FUNCTION__);
 }
 
@@ -475,6 +478,12 @@ ParserClass::~ParserClass() {
   // 소멸자 코드 추가
   g_free(arg.enc);
   arg.enc = NULL;
+  g_free((gpointer)arg.json_file);
+  arg.json_file = NULL;
+  if (m_jsonRoot != NULL) {
+    json_object_put(m_jsonRoot);
+    m_jsonRoot = NULL;
+  }
   __LOG(LOG_INFO, "[GST][%s:%d] %s", _FILE_, __LINE__, __FUNCTION__);
 }
 
@@ -541,45 +550,74 @@ gint ParserClass::json_sub_object_get_value(const gchar *file,
 
 gint ParserClass::json_parser(const gchar *path, const gchar *header) {
   gint ret = -1;
+  gboolean strings_bound = FALSE;
   gint array_errors = 0;
 
   json_object *jobj = NULL;
   json_object *hobj = NULL;
   json_object *sobj = NULL;
   json_object *vobj = NULL;
+  json_object *ord_obj = NULL;
+  json_object *vcm_obj = NULL;
   // const gchar* ptr;
 
   g_cfg_errors = 0;
-  arg.json_file = search_file(path, JSON_NAME_PREFIX, JSON_NAME_SUFFIX);
-  __LOG(LOG_INFO, "[%s][%s:%d] json file name : %s", LOG_KEY, _FILE_, __LINE__,
-        arg.json_file);
-
-  if (strstr(arg.json_file, JSON_NAME_PREFIX) == NULL ||
-      strstr(arg.json_file, JSON_NAME_SUFFIX) == NULL) {
-    __LOG(LOG_CRIT, "[%s][%s:%d] json file name not match %s %s", LOG_KEY,
-          _FILE_, __LINE__, JSON_NAME_PREFIX, JSON_NAME_SUFFIX);
+  gchar *json_file = g_strdup(path);
+  if (json_file == NULL || json_file[0] == '\0') {
+    g_free(json_file);
+    __LOG(LOG_CRIT, "[%s][%s:%d] json file path is empty", LOG_KEY, _FILE_,
+          __LINE__);
     return ret;
   }
 
+  g_free((gpointer)arg.json_file);
+  arg.json_file = json_file;
+
+  __LOG(LOG_INFO, "[%s][%s:%d] json file name : %s", LOG_KEY, _FILE_, __LINE__,
+        arg.json_file);
+
   jobj = json_object_from_file(arg.json_file);
-  enum json_type type = json_object_get_type(jobj);
+  if (jobj == NULL) {
+    __LOG(LOG_CRIT, "[%s][%s:%d] json file open fail : %s", LOG_KEY, _FILE_,
+          __LINE__, arg.json_file);
+    goto cleanup;
+  }
 
   do {
-    if (type != json_type_object) {
-      __LOG(LOG_ERR, "[%s][%s:%d] data not json type[%d]", LOG_KEY, _FILE_,
-            __LINE__, type);
+    if (json_object_get_type(jobj) != json_type_object) {
+      __LOG(LOG_ERR, "[%s][%s:%d] root data is not a JSON object", LOG_KEY,
+            _FILE_, __LINE__);
       break;
     }
 
-    // hobj = json_find_obj(jobj, "VHL_CAM");
     hobj = json_object_object_get(jobj, header);
-    type = json_object_get_type(hobj);
-
-    if (type != json_type_object) {
-      __LOG(LOG_ERR, "[%s][%s:%d] data not json type[%d]", LOG_KEY, _FILE_,
-            __LINE__, type);
-      // break;
+    ord_obj = json_object_object_get(jobj, "ORD");
+    vcm_obj = json_object_object_get(jobj, "VCM");
+    if (hobj == NULL || json_object_get_type(hobj) != json_type_object) {
+      __LOG(LOG_CRIT, "[%s][%s:%d] required object missing/invalid : %s",
+            LOG_KEY, _FILE_, __LINE__, header);
+      break;
     }
+    /* ORD is never read here, but it is part of the producer's contract:
+     * camera_runtime_config.py in pim-package-jhw validates
+     * _REQUIRED_SECTIONS = ("VHL_CAM", "ORD", "VCM") before it publishes
+     * /run/pim-camera/config/pim_runtime.json, so gstApp checks the same three
+     * and never starts on a document that fell outside that contract. */
+    if (ord_obj == NULL || json_object_get_type(ord_obj) != json_type_object) {
+      __LOG(LOG_CRIT, "[%s][%s:%d] required object missing/invalid : ORD",
+            LOG_KEY, _FILE_, __LINE__);
+      break;
+    }
+    if (vcm_obj == NULL || json_object_get_type(vcm_obj) != json_type_object) {
+      __LOG(LOG_CRIT, "[%s][%s:%d] required object missing/invalid : VCM",
+            LOG_KEY, _FILE_, __LINE__);
+      break;
+    }
+
+    /* 여기서부터 arg.* 가 jobj 안의 문자열을 가리킬 수 있다. 키가 실제로
+     * 없더라도 무조건 세운다 — 문서를 불필요하게 붙잡는 쪽은 안전하지만,
+     * 붙잡지 못하는 쪽이 위험하다. */
+    strings_bound = TRUE;
 
     json_object_get_value(hobj, "vhl_name", &arg.ohtName);
     json_object_get_value(hobj, "id", &arg.rtsp_id);
@@ -787,7 +825,7 @@ gint ParserClass::json_parser(const gchar *path, const gchar *header) {
               "[CFG][%s:%d] i2c%d.ch%d.dz is no longer supported; move dz "
               "to i2c%d so both channels use one factor",
               _FILE_, __LINE__, i / 2 ? 1 : 2, i, i / 2 ? 1 : 2);
-        return -1;
+        goto cleanup;
       }
       json_get_uint(vobj, "dz_x", &arg.cam[i].dz_x);
       json_get_uint(vobj, "dz_y", &arg.cam[i].dz_y);
@@ -816,43 +854,43 @@ gint ParserClass::json_parser(const gchar *path, const gchar *header) {
         arg.fps[k][i] = arg.main_fps[CSI_1];
     }
 
-    // Read SRT enabled status from ord_vcm_conf.json
+    // Read SRT enabled status from the VCM object in this runtime document.
     {
-      const gchar *ord_json = "/root/shared_v/ord_vcm_conf.json";
-      if (access(ord_json, R_OK) != 0) {
-        ord_json = "/home/root/ord_vcm_conf.json";
-      }
-
-      json_object *ord_obj = json_object_from_file(ord_json);
-      if (ord_obj) {
-        json_object *vcm_obj = json_object_object_get(ord_obj, "VCM");
-        if (vcm_obj) {
-          json_object *srt_obj = json_object_object_get(vcm_obj, "srt_enable");
-          if (srt_obj) {
-            arg.srt_en = json_object_get_boolean(srt_obj);
-            __LOG(LOG_INFO, "[CFG][%s:%d] srt_enable : %s", _FILE_, __LINE__,
-                  arg.srt_en ? "TRUE" : "FALSE");
-          }
-        }
-        json_object_put(ord_obj);
-      } else {
-        arg.srt_en = FALSE;
+      json_object *srt_obj = json_object_object_get(vcm_obj, "srt_enable");
+      if (srt_obj) {
+        arg.srt_en = json_object_get_boolean(srt_obj);
+        __LOG(LOG_INFO, "[CFG][%s:%d] srt_enable : %s", _FILE_, __LINE__,
+              arg.srt_en ? "TRUE" : "FALSE");
       }
     }
 
-  } while (0);
-
-  // ret = json_object_put(jobj);
-  // ret = json_object_put(hobj);
-
-  if (array_errors > 0) {
-    __LOG(LOG_CRIT,
+    if (array_errors > 0) {
+      __LOG(
+          LOG_CRIT,
           "[%s][%s:%d] !!! %d fatal edgeconf array error(s): startup aborted",
           LOG_KEY, _FILE_, __LINE__, array_errors);
-    return -1;
-  }
+      break;
+    }
 
-  return 0;
+    ret = 0;
+  } while (0);
+
+cleanup:
+  if (jobj != NULL) {
+    if (strings_bound) {
+      /* arg.* now points into this document, on the success path and on every
+         failure path that got this far. Keep it and release the previous one,
+         which nothing references any more. */
+      if (m_jsonRoot != NULL)
+        json_object_put(m_jsonRoot);
+      m_jsonRoot = jobj;
+    } else {
+      /* This parse never touched arg.*, so the previous document must stay
+         alive to keep the strings already handed out valid. */
+      json_object_put(jobj);
+    }
+  }
+  return ret;
 }
 
 gint ParserClass::arg_parser(int *argc, char **argv[]) {

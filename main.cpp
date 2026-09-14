@@ -934,7 +934,7 @@ gint main(gint argc, gchar *argv[]) {
   cmdArg = parser->arg;
   // getPasswdWithAES(&parser->arg);
 
-  if (parser->json_parser(DEFAULT_JSON_PATH, JSON_CAM_OBJ_NAME) < 0)
+  if (parser->json_parser(PIM_RUNTIME_JSON_FILE, JSON_CAM_OBJ_NAME) < 0)
     return -1;
 
   if (parser->arg_parser(&argc, &argv) <= 0)
@@ -1119,7 +1119,7 @@ gint main(gint argc, gchar *argv[]) {
       }
     }
 
-    // json_parser(DEFAULT_JSON_PATH);
+    // json_parser(PIM_RUNTIME_JSON_FILE);
     // print_option();
     if (cmdArg.dual_enc == FALSE &&
         (cmdArg.stream_en[STREAM_REC] || cmdArg.stream_en[STREAM_RTSP])) {
