@@ -34,9 +34,18 @@ set -u
 
 CAM=/root/camtest
 RESET="$CAM/cam_hard_reset.sh"
-CONF=/root/shared_v/edgeconf_pim.json
+# gstApp 이 읽는 병합 문서. 생산자 입력(/root/shared_v/edgeconf_pim.json)을 고쳐도
+# 이 스크립트는 cam-operate 를 멈춘 채 돌아 반영되지 않는다 (이슈 #113).
+# 두 층의 관계와 근거: docs/FPS_MEASUREMENT_SCENARIO.md §8.1
+CONF=/run/pim-camera/config/pim_runtime.json
+# 서비스가 멈추면 systemd 가 RuntimeDirectory 를 지우므로 쓰기 전마다 되살린다.
+# 같은 디렉터리 임시 파일 + mv 로 발행한다(생산자 write_json_atomic 과 같은 원자성).
+# install -d 가 아니라 mkdir -p -m 인 이유, 경로 형태와 파일 종류를 먼저 보는 이유는
+# 같은 문서 §8.2. 이 정의는 13 벌이 바이트 동일해야 한다(게이트가 검사한다).
+# shellcheck disable=SC2174  # -m 이 안 붙는 중간 요소는 /run 뿐이고 그건 항상 있다
+put_conf() { case $CONF in /*/*/*) ;; *) echo "!! CONF 가 /a/b/c 형태가 아니다: $CONF" >&2; return 1;; esac; if [ -L "$CONF" ] || { [ -e "$CONF" ] && [ ! -f "$CONF" ]; }; then echo "!! $CONF 가 정규 파일이 아니다 - 쓰지 않는다" >&2; return 1; fi; if mkdir -p -m 0750 "${CONF%/*/*}" "${CONF%/*}" && cp -f "$1" "$CONF.tmp.$$" && chmod 0640 "$CONF.tmp.$$" && mv -f "$CONF.tmp.$$" "$CONF"; then return 0; fi; rm -f "$CONF.tmp.$$"; echo "!! config 쓰기 실패: $1 -> $CONF" >&2; return 1; }
 OUT=/root/fpsmeas
-BACKUP="$OUT/edgeconf.orig.json"
+BACKUP="$OUT/pim_runtime.orig.json"
 BIN="$OUT/capapp"
 SAMPLES=${SAMPLES:-35}
 ROUNDS=${ROUNDS:-3}
@@ -54,6 +63,9 @@ log() { echo "$*" | tee -a "$LOG"; }
 [ -e "$BACKUP" ] || { echo "백업 없음: $BACKUP"; exit 2; }
 [ -x "$RESET" ] || { echo "리셋 스크립트 없음: $RESET"; exit 2; }
 ORIG_MD5=$(md5sum "$BACKUP" | awk '{print $1}')
+# 없는 채로 읽으면 md5 가 빈 문자열이 되어 표류 검사가 "live != backup" 이라는
+# 엉뚱한 원인을 댄다. $CONF 의 수명은 같은 문서 §8.2 참조.
+[ -e "$CONF" ] || { echo "병합 문서 없음: $CONF — cam-operate 를 먼저 기동할 것"; exit 2; }
 LIVE_MD5=$(md5sum "$CONF" | awk '{print $1}')
 # config 를 실제로 덮어쓰기 전에는 복원하지 않는다(중단이 정상 config 를 되돌리면 안 된다).
 CONF_DIRTY=0
@@ -102,7 +114,7 @@ restore() {
 	log "### 복구"
 	kill_cap
 	if [ "$CONF_DIRTY" -eq 1 ]; then
-		cp "$BACKUP" "$CONF"
+		put_conf "$BACKUP"
 		NOW=$(md5sum "$CONF" | awk '{print $1}')
 		if [ "$NOW" = "$ORIG_MD5" ]; then
 			log "  설정 복원 md5 일치 ($NOW)"
@@ -276,7 +288,7 @@ probe() { # $1=라벨 $2=trial $3=mode(ctl|prod) $4=ae_on_chA $5=ae_on_chB $6=ex
 	   "$OUT/.fz.json" >"$OUT/.ae.json" || return 1
 	# cp 도중 죽어도 복원되도록 쓰기 "전"에 세운다
 	CONF_DIRTY=1
-	cp "$OUT/.ae.json" "$CONF"
+	put_conf "$OUT/.ae.json" || exit 2
 
 	# ctl 모드는 enable·ae_on 을 뺀 나머지가 4채널 동일해야 한다(ae_on 은 독립변수라 제외).
 	UNIQ=$(jq -r '[.VHL_CAM.i2c2.ch0,.VHL_CAM.i2c2.ch1,.VHL_CAM.i2c1.ch2,.VHL_CAM.i2c1.ch3]

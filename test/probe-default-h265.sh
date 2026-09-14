@@ -33,9 +33,18 @@ set -u
 
 CAM=/root/camtest
 RESET="$CAM/cam_hard_reset.sh"
-CONF=/root/shared_v/edgeconf_pim.json
+# gstApp 이 읽는 병합 문서. 생산자 입력(/root/shared_v/edgeconf_pim.json)을 고쳐도
+# 이 스크립트는 cam-operate 를 멈춘 채 돌아 반영되지 않는다 (이슈 #113).
+# 두 층의 관계와 근거: docs/FPS_MEASUREMENT_SCENARIO.md §8.1
+CONF=/run/pim-camera/config/pim_runtime.json
+# 서비스가 멈추면 systemd 가 RuntimeDirectory 를 지우므로 쓰기 전마다 되살린다.
+# 같은 디렉터리 임시 파일 + mv 로 발행한다(생산자 write_json_atomic 과 같은 원자성).
+# install -d 가 아니라 mkdir -p -m 인 이유, 경로 형태와 파일 종류를 먼저 보는 이유는
+# 같은 문서 §8.2. 이 정의는 13 벌이 바이트 동일해야 한다(게이트가 검사한다).
+# shellcheck disable=SC2174  # -m 이 안 붙는 중간 요소는 /run 뿐이고 그건 항상 있다
+put_conf() { case $CONF in /*/*/*) ;; *) echo "!! CONF 가 /a/b/c 형태가 아니다: $CONF" >&2; return 1;; esac; if [ -L "$CONF" ] || { [ -e "$CONF" ] && [ ! -f "$CONF" ]; }; then echo "!! $CONF 가 정규 파일이 아니다 - 쓰지 않는다" >&2; return 1; fi; if mkdir -p -m 0750 "${CONF%/*/*}" "${CONF%/*}" && cp -f "$1" "$CONF.tmp.$$" && chmod 0640 "$CONF.tmp.$$" && mv -f "$CONF.tmp.$$" "$CONF"; then return 0; fi; rm -f "$CONF.tmp.$$"; echo "!! config 쓰기 실패: $1 -> $CONF" >&2; return 1; }
 OUT=/root/fpsmeas
-BACKUP="$OUT/edgeconf.orig.json"           # 복원용: 보드의 현재(현장수정) 설정
+BACKUP="$OUT/pim_runtime.orig.json"           # 복원용: 보드의 현재(현장수정) 설정
 BASEDEF=${BASEDEF:-/etc/defaultconf.json}  # 시험 기준: 패키지 정본
 BIN="$OUT/capapp"
 SAMPLES=${SAMPLES:-90}
@@ -52,9 +61,13 @@ SUM="$OUT/dflt_${STAMP}_summary.csv"
 log() { echo "$*" | tee -a "$LOG"; }
 
 [ -e "$BACKUP" ] || { echo "백업 없음: $BACKUP"; exit 2; }
-[ -e "$BASEDEF" ] || { echo "정본 없음: $BASEDEF"; exit 2; }
+# -s 다: jq -e 는 **빈 입력**에 0 을 내므로 -e 로는 0 바이트 정본이 모든 가드를 통과한다.
+[ -s "$BASEDEF" ] || { echo "정본이 없거나 비었다: $BASEDEF"; exit 2; }
 [ -x "$RESET" ] || { echo "리셋 스크립트 없음: $RESET"; exit 2; }
 ORIG_MD5=$(md5sum "$BACKUP" | awk '{print $1}')
+# 없는 채로 읽으면 md5 가 빈 문자열이 되어 표류 검사가 "live != backup" 이라는
+# 엉뚱한 원인을 댄다. $CONF 의 수명은 같은 문서 §8.2 참조.
+[ -e "$CONF" ] || { echo "병합 문서 없음: $CONF — cam-operate 를 먼저 기동할 것"; exit 2; }
 LIVE_MD5=$(md5sum "$CONF" | awk '{print $1}')
 # config 를 실제로 덮어쓰기 전에는 복원하지 않는다(중단이 정상 config 를 되돌리면 안 된다).
 CONF_DIRTY=0
@@ -103,7 +116,7 @@ restore() {
 	log "### 복구"
 	kill_cap
 	if [ "$CONF_DIRTY" -eq 1 ]; then
-		cp "$BACKUP" "$CONF"
+		put_conf "$BACKUP"
 		NOW=$(md5sum "$CONF" | awk '{print $1}')
 		if [ "$NOW" = "$ORIG_MD5" ]; then
 			log "  설정 복원 md5 일치 ($NOW)"
@@ -239,17 +252,48 @@ probe() { # $1=라벨 $2=trial $3=fps $4..$7=ch0..3 $8=DEVSPEC $9=csi열 $10=isi
 	assert_daemon_off
 
 	# 정본에서 바꾸는 것은 enc/fps/enable/계측용 로그 설정뿐. 카메라·인코더 파라미터는 손대지 않는다.
-	jq --argjson f "$FPS" --argjson c0 "$C0" --argjson c1 "$C1" \
-	   --argjson c2 "$C2" --argjson c3 "$C3" '
-	      .VHL_CAM.enc="h265"
-	    | .VHL_CAM.cam_width=640 | .VHL_CAM.cam_height=360 | .VHL_CAM.fps=$f
-	    | .VHL_CAM.debug_level=5 | .VHL_CAM.queue_tune.enc_stat_sec=1
-	    | .VHL_CAM.i2c2.ch0.enable=$c0 | .VHL_CAM.i2c2.ch1.enable=$c1
-	    | .VHL_CAM.i2c1.ch2.enable=$c2 | .VHL_CAM.i2c1.ch3.enable=$c3
-	    ' "$BASEDEF" >"$OUT/.fz.json" || return 1
+	# $BASEDEF 는 생산자의 *입력* 사본이라 최상위가 NETWORK/SENSORS/VHL_CAM 뿐이다
+	# (실측 2026-09-14: 보드 /etc/defaultconf.json 과 그 원본 edgeconf_pim_base.json
+	# 둘 다. postinst:393 이 후자를 전자로 복사한다). gstApp 은 VHL_CAM·ORD·VCM 을 모두
+	# 요구하므로(parser.cpp:596-614) 그대로 런타임 경로에 쓰면 기동하지 못한다. 그래서
+	# 병합 문서 $BACKUP 위에 정본 VHL_CAM 만 얹는다 — 생산자 camera_runtime_config.py
+	# 의 merged["VHL_CAM"] = vhl 과 같은 조작이다.
+	# 다만 VHL_CAM 을 통째로 바꾸면 측정 독립변수가 아닌 식별자·경로 필드까지 정본 값이
+	# 된다. 병합 문서는 이 스크립트만 읽는 것이 아니다 — 예를 들어 file_manager.sh 는
+	# /etc/crontab 을 통해 매 분 root 로 돌며 .VHL_CAM.vhl_name 을 보존 키로 쓴다
+	# (pim-package-jhw dist/pim/DEBIAN/postinst 의 crontab 등록). 그래서 그 필드들은
+	# 병합 문서의 값을 되돌려 놓는다.
+	jq -e '(.VHL_CAM|type)=="object"' "$BASEDEF" >/dev/null \
+		|| { log "  !! 정본 $BASEDEF 의 VHL_CAM 이 객체가 아니다 - 회차 폐기"; return 1; }
+	jq -n --argjson f "$FPS" --argjson c0 "$C0" --argjson c1 "$C1" \
+	   --argjson c2 "$C2" --argjson c3 "$C3" \
+	   --slurpfile live "$BACKUP" --slurpfile base "$BASEDEF" '
+	      $live[0]
+	    | .VHL_CAM = ( $base[0].VHL_CAM
+	        | .enc="h265"
+	        | .cam_width=640 | .cam_height=360 | .fps=$f
+	        | .debug_level=5 | .queue_tune.enc_stat_sec=1
+	        | .i2c2.ch0.enable=$c0 | .i2c2.ch1.enable=$c1
+	        | .i2c1.ch2.enable=$c2 | .i2c1.ch3.enable=$c3 )
+	    | reduce ("vhl_name","id","line","floor","tmp_path","sd_tmp_path",
+	              "final_path","app") as $k (.;
+	        if ($live[0].VHL_CAM | has($k))
+	        then .VHL_CAM[$k] = $live[0].VHL_CAM[$k] else . end)
+	    | if ($live[0].VHL_CAM.capture | type) == "object"
+	      then .VHL_CAM.capture.path = $live[0].VHL_CAM.capture.path else . end
+	    ' >"$OUT/.fz.json" || return 1
+	# 쓰기 전에 세 절이 **객체로** 있는지 확인한다. parser.cpp:596/606/611 은
+	# json_type_object 를 요구하므로 has() (존재만 확인, null 도 참)로는 부족하다 —
+	# {"ORD":null} 을 통과시켜 막겠다던 "required object missing/invalid" 를 낸다.
+	# [ -s ] 가 먼저다: jq -e 는 **빈 입력**에 대해 0 을 낸다(실측). 빈 파일이면
+	# 타입 검사가 통과해 버린다.
+	[ -s "$OUT/.fz.json" ] || { log "  !! 시험 문서가 비었다 - 회차 폐기"; return 1; }
+	jq -e '(.VHL_CAM|type)=="object" and (.ORD|type)=="object" and (.VCM|type)=="object"' \
+		"$OUT/.fz.json" >/dev/null \
+		|| { log "  !! 시험 문서의 VHL_CAM/ORD/VCM 이 객체가 아니다 - 회차 폐기"; return 1; }
 	# cp 도중 죽어도 복원되도록 쓰기 "전"에 세운다
 	CONF_DIRTY=1
-	cp "$OUT/.fz.json" "$CONF"
+	put_conf "$OUT/.fz.json" || exit 2
 
 	UNIQ=$(jq -r '[.VHL_CAM.i2c2.ch0,.VHL_CAM.i2c2.ch1,.VHL_CAM.i2c1.ch2,.VHL_CAM.i2c1.ch3]
 	              | map(del(.enable)) | unique | length' "$CONF")
