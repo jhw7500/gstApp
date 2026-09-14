@@ -36,7 +36,7 @@ CONF=/run/pim-camera/config/pim_runtime.json
 # 같은 디렉터리 임시 파일 + mv 로 발행한다(생산자 write_json_atomic 과 같은 원자성).
 # install -d 가 아니라 mkdir -p -m 인 이유, 경로 형태와 파일 종류를 먼저 보는 이유는
 # 같은 문서 §8.2. 이 정의는 13 벌이 바이트 동일해야 한다(게이트가 검사한다).
-# shellcheck disable=SC2174  # -m 이 안 붙는 중간 요소는 /run 뿐이고 그건 항상 있다
+# shellcheck disable=SC2174  # 기본 CONF 기준이다 — RUNTIME_CONF 로 더 깊은 경로를 주면 중간 요소는 -m 을 못 받고 umask 를 따른다(docs §8.2 실측)
 put_conf() { case $CONF in /*/*/*) ;; *) echo "!! CONF 가 /a/b/c 형태가 아니다: $CONF" >&2; return 1;; esac; if [ -L "$CONF" ] || { [ -e "$CONF" ] && [ ! -f "$CONF" ]; }; then echo "!! $CONF 가 정규 파일이 아니다 - 쓰지 않는다" >&2; return 1; fi; if mkdir -p -m 0750 "${CONF%/*/*}" "${CONF%/*}" && cp -f "$1" "$CONF.tmp.$$" && chmod 0640 "$CONF.tmp.$$" && mv -f "$CONF.tmp.$$" "$CONF"; then return 0; fi; rm -f "$CONF.tmp.$$"; echo "!! config 쓰기 실패: $1 -> $CONF" >&2; return 1; }
 OUT=/root/fpsmeas
 BACKUP="$OUT/pim_runtime.orig.json"
