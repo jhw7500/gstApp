@@ -494,7 +494,7 @@ static void test_deprecated_dz_is_fatal_and_still_releases_root(void)
 }
 
 /* 이슈 #112 — 재파싱이 이전 문서를 해제하면, 2차 문서가 빠뜨린 키의 필드가 해제된
- * 문서를 가리킨다. json_object_get_value() 는 키가 없으면 대상을 건드리지 않기
+ * 문서를 가리킨다. json_get_string() 은 키가 없으면 대상을 건드리지 않기
  * 때문이다. init_arg() 없이 연달아 두 번 파싱해 이전 문서가 살아 있는지 본다.
  *
  * 이전 문서는 의도적으로 해제하지 않으므로 재파싱 1회당 문서 1개가 샌다. 그 대가로
@@ -573,6 +573,147 @@ static void test_out_of_range_split_sec_falls_back_to_default(void)
     }
 }
 
+/* ───────────────────────────── 이슈 #116 ─────────────────────────────
+ * 옛 json_object_get_value() 는 목적지 타입이 아니라 JSON 값의 타입으로 분기해
+ * data 를 캐스팅했다. 호출자가 무엇을 기대하는지 함수에 전달되지 않으므로,
+ * 설정의 값 타입이 틀리면 크기가 다른 타입으로 목적지에 썼다.
+ *
+ * 아래 어서션은 목적지 포인터를 절대 역참조하지 않는다 — 수정 전에는 그것이
+ * 야생 포인터라 역참조 자체가 미정의 동작이다. 보존 여부만 본다.
+ */
+
+/* 정본 문서에서 경로 하나의 값을 교체한다. path 는 NULL 로 끝나는 키 배열이고
+ * 마지막 원소가 교체 대상 키다. value 의 소유권은 이 함수가 가져간다. */
+static gchar *runtime_json_with(const gchar *const *path, json_object *value)
+{
+    gchar *contents = runtime_json(NULL, "", "");
+    json_object *root = json_tokener_parse(contents);
+    g_free(contents);
+    CHECK(root != NULL);
+
+    json_object *owner = root;
+    gsize last = 0;
+    while (path[last + 1] != NULL) {
+        owner = json_object_object_get(owner, path[last]);
+        CHECK(owner != NULL);
+        ++last;
+    }
+    json_object_object_add(owner, path[last], value);
+
+    gchar *result = g_strdup(
+        json_object_to_json_string_ext(root, JSON_C_TO_STRING_PLAIN));
+    json_object_put(root);
+    return result;
+}
+
+/* parse_fixture() 와 달리 init_arg() 뒤, json_parser() 앞에 문자열 목적지에
+ * 표식을 심는다. arg.ohtName 의 기본값은 arg.appname 이고 그것은 호출자의
+ * 스택을 가리켜 비교 대상으로 불안정하므로, 정적 수명의 표식을 직접 세운다. */
+static gint parse_marked(ParserClass *parser, const gchar *contents,
+                         const gchar *marker)
+{
+    gchar directory[] = "/tmp/gstapp-parser-116-XXXXXX";
+    gchar fixture_path[512] = {0};
+    CHECK(g_mkdtemp(directory) != NULL);
+    g_snprintf(fixture_path, sizeof(fixture_path), "%s/pim_runtime.json",
+               directory);
+    CHECK(g_file_set_contents(fixture_path, contents, -1, NULL));
+
+    gchar appname[] = "gstApp";
+    parser->init_arg(appname);
+    g_critical_logs[0] = '\0';
+    g_json_open_count = 0;
+    g_probe = ParseProbe();
+    g_active_probe = &g_probe;
+
+    if (marker != NULL)
+        parser->arg.ohtName = marker;
+
+    const gint result = parser->json_parser(fixture_path, JSON_CAM_OBJ_NAME);
+    g_active_probe = NULL;
+
+    CHECK(g_remove(fixture_path) == 0);
+    CHECK(g_rmdir(directory) == 0);
+    return result;
+}
+
+/* 경우 1 — 문자열 자리에 정수. 옛 json_type_int 갈래가 8바이트 목적지에
+ * 4바이트만 써서 하위 절반이 포화 int 로 바뀌고 상위는 옛 포인터를 물려받았다. */
+static void test_wrong_typed_string_leaves_destination_untouched(void)
+{
+    static const gchar *const path[] = {"VHL_CAM", "vhl_name", NULL};
+    static const gchar marker[] = "gstapp-116-vhl-name-marker";
+    ParserClass parser;
+    gchar *json =
+        runtime_json_with(path, json_object_new_int64(1234567890000000LL));
+
+    CHECK(parse_marked(&parser, json, marker) == 0);
+    CHECK(parser.arg.ohtName == marker);
+
+    g_free(json);
+}
+
+/* 경우 2 — 불리언 자리에 문자열. 옛 json_type_string 갈래가 4바이트 gboolean 에
+ * 8바이트 포인터를 써서 인접 ae_gain 까지 덮었다. */
+static void test_wrong_typed_bool_leaves_destination_untouched(void)
+{
+    static const gchar *const path[] = {"VHL_CAM", "i2c2", "ch0", "ae_on",
+                                        NULL};
+    ParserClass parser;
+    gchar *json = runtime_json_with(path, json_object_new_string("yes"));
+
+    CHECK(parse_marked(&parser, json, NULL) == 0);
+    CHECK(parser.arg.cam[0].ae_on == TRUE);              /* init_arg 기본값 */
+    CHECK(parser.arg.cam[0].ae_gain == DEFAULT_AE_GAIN); /* 인접 필드 무사 */
+
+    g_free(json);
+}
+
+/* 같은 결함의 최악 갈래 — 배열은 원소 수만큼 연속으로 쓴다. 스칼라 목적지에
+ * 오면 필드 경계를 넘는 쓰기가 되고, 길이는 설정 파일이 정한다. */
+static void test_array_in_scalar_slot_leaves_destination_untouched(void)
+{
+    static const gchar *const path[] = {"VHL_CAM", "i2c2", "ch0", "ae_on",
+                                        NULL};
+    ParserClass parser;
+    json_object *arr = json_object_new_array();
+    json_object_array_add(arr, json_object_new_int(11));
+    json_object_array_add(arr, json_object_new_int(22));
+    json_object_array_add(arr, json_object_new_int(33));
+    json_object_array_add(arr, json_object_new_int(44));
+    gchar *json = runtime_json_with(path, arr);
+
+    CHECK(parse_marked(&parser, json, NULL) == 0);
+    CHECK(parser.arg.cam[0].ae_on == TRUE);
+    CHECK(parser.arg.cam[0].ae_gain == DEFAULT_AE_GAIN);
+
+    g_free(json);
+}
+
+/* 보존 검사 — 수정 전후 모두 통과해야 한다. gboolean 은 gint 라 정수 0/1 은
+ * 옛 코드에서도 크기가 맞아 정상 동작했다. 엄격화가 이걸 깨뜨리면 회귀다. */
+static void test_integer_zero_one_still_accepted_for_bool(void)
+{
+    static const gchar *const on[] = {"VHL_CAM", "i2c2", "ch0", "enable",
+                                      NULL};
+    static const gchar *const off[] = {"VHL_CAM", "i2c1", "ch3", "enable",
+                                       NULL};
+    {
+        ParserClass parser;
+        gchar *json = runtime_json_with(on, json_object_new_int(1));
+        CHECK(parse_marked(&parser, json, NULL) == 0);
+        CHECK(parser.arg.cam[0].enable == TRUE);
+        g_free(json);
+    }
+    {
+        ParserClass parser;
+        gchar *json = runtime_json_with(off, json_object_new_int(0));
+        CHECK(parse_marked(&parser, json, NULL) == 0);
+        CHECK(parser.arg.cam[3].enable == FALSE);
+        g_free(json);
+    }
+}
+
 int main(void)
 {
     test_merged_runtime_uses_exact_path_once_and_reads_vcm();
@@ -589,6 +730,10 @@ int main(void)
     test_deprecated_dz_is_fatal_and_still_releases_root();
     test_reparse_keeps_previous_root_when_key_is_omitted();
     test_out_of_range_split_sec_falls_back_to_default();
+    test_wrong_typed_string_leaves_destination_untouched();
+    test_wrong_typed_bool_leaves_destination_untouched();
+    test_array_in_scalar_slot_leaves_destination_untouched();
+    test_integer_zero_one_still_accepted_for_bool();
 
     printf("\nparser config test: %d checks, %d failures -> %s\n",
            g_checks, g_failures, g_failures ? "FAILED" : "PASSED");

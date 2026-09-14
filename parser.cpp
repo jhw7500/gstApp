@@ -125,6 +125,74 @@ static void json_object_get_bool_optional(json_object *obj,
   }
 }
 
+/*
+ * Strict typed string accessor — issue #116.
+ *
+ * The removed json_object_get_value() branched on the JSON value's type and
+ * cast `data` to match it. The caller's expected type never reached the
+ * function, so a wrong-typed config value wrote the wrong width to the
+ * destination (an int into an 8-byte pointer, a pointer into a 4-byte
+ * gboolean, an array into a scalar). Splitting per destination type removes
+ * that: the destination width is now fixed by the function that writes it.
+ *
+ * - Missing key / JSON null: keep *out unchanged, LOG_CRIT with the same
+ *   message the old accessor used, so startup logs do not change.
+ * - Wrong type: keep *out unchanged, LOG_ERR + count in the parse summary.
+ * - Valid string: borrow the retained document's pointer (unchanged ownership
+ *   model from issue #112 — the document outlives arg).
+ */
+static void json_get_string(json_object *obj, const gchar *name,
+                            const gchar **out) {
+  if (!name || !out)
+    return;
+
+  json_object *vobj = obj ? json_object_object_get(obj, name) : NULL;
+  if (vobj == NULL) {
+    __LOG(LOG_CRIT, "[CFG][%s:%d] not exist : %s", _FILE_, __LINE__, name);
+    return;
+  }
+
+  enum json_type type = json_object_get_type(vobj);
+  if (type != json_type_string) {
+    __LOG(LOG_ERR,
+          "[CFG][%s:%d] %s: expected string but got json_type[%d], keep default",
+          _FILE_, __LINE__, name, type);
+    g_cfg_errors++;
+    return;
+  }
+
+  *out = json_object_get_string(vobj);
+  __LOG(LOG_INFO, "[CFG][%s:%d] %s : %s", _FILE_, __LINE__, name, *out);
+}
+
+/*
+ * Strict typed boolean accessor — issue #116. Same policy as json_get_string.
+ *
+ * Accepts JSON true/false and integer 0/1 via cfg_get_bool(): gboolean is gint,
+ * so an integer 0/1 was already width-correct before #116 and deployed configs
+ * rely on it. Rejecting it here would be a regression, not a hardening.
+ */
+static void json_get_bool(json_object *obj, const gchar *name, gboolean *out) {
+  if (!name || !out)
+    return;
+
+  const CfgBoolStatus status = cfg_get_bool(obj, name, out);
+  if (status == CFG_BOOL_MISSING) {
+    __LOG(LOG_CRIT, "[CFG][%s:%d] not exist : %s", _FILE_, __LINE__, name);
+    return;
+  }
+  if (status != CFG_BOOL_OK) {
+    __LOG(LOG_ERR,
+          "[CFG][%s:%d] %s must be boolean or integer 0/1; keep default %s",
+          _FILE_, __LINE__, name, *out ? "TRUE" : "FALSE");
+    g_cfg_errors++;
+    return;
+  }
+
+  __LOG(LOG_INFO, "[CFG][%s:%d] %s : %s", _FILE_, __LINE__, name,
+        *out ? "TRUE" : "FALSE");
+}
+
 /* Wrapper over cfg_get_int_array (cfgjson.cpp): preserves the original logging
  * and counts malformed explicit arrays for the startup-fatal parse summary.
  * Silent keep-defaults hides real edgeconf mistakes — e.g. a bps array length
@@ -384,87 +452,6 @@ json_object *ParserClass::json_find_obj(json_object *jobj, char *find_key) {
   return NULL; // not found.
 }
 
-gint ParserClass::json_object_get_value(json_object *hobj, const gchar *name,
-                                        gpointer data) {
-  gint ret = 0;
-  // json_object *vobj = json_find_obj(obj, (char *)name);
-  json_object *vobj;
-
-  vobj = json_object_object_get(hobj, name);
-  if (vobj == NULL) {
-    __LOG(LOG_CRIT, "[CFG][%s:%d] not exist : %s", _FILE_, __LINE__, name);
-    return -1;
-  }
-
-  enum json_type type = json_object_get_type(vobj);
-
-  if (type == json_type_object) {
-    gchar **val = (gchar **)data;
-    *val = (gchar *)json_object_get_string(vobj);
-    __LOG(LOG_ERR, "[CFG][%s:%d] Type: Json object, name: %s, val: %s", _FILE_,
-          __LINE__, name, *val);
-    // return json_object_get_value(vobj, name, data);
-  } else if (type == json_type_string) {
-    gchar **val = (gchar **)data;
-    *val = (gchar *)json_object_get_string(vobj);
-    __LOG(LOG_INFO, "[CFG][%s:%d] %s : %s", _FILE_, __LINE__, name, *val);
-  } else if (type == json_type_int) {
-    gint *val = (gint *)data;
-    *val = json_object_get_int(vobj);
-    __LOG(LOG_INFO, "[CFG][%s:%d] %s : %d", _FILE_, __LINE__, name, *val);
-  } else if (type == json_type_boolean) {
-    gboolean *val = (gboolean *)data;
-    *val = json_object_get_boolean(vobj);
-    __LOG(LOG_INFO, "[CFG][%s:%d] %s : %s", _FILE_, __LINE__, name,
-          *val ? "TRUE" : "FALSE");
-  } else if (type == json_type_double) {
-    gdouble *val = (gdouble *)data;
-    *val = json_object_get_double(vobj);
-    __LOG(LOG_INFO, "[CFG][%s:%d] %s : %f", _FILE_, __LINE__, name, *val);
-  } else if (type == json_type_array) {
-    array_list *arr = json_object_get_array(vobj);
-    // g_print("len:%ld arr->size:%ld arr->len:%ld\n",
-    // json_object_array_length(vobj), arr->size, arr->length);
-    for (size_t i = 0; i < arr->length; i++) {
-      json_object *retrieved_obj = (json_object *)array_list_get_idx(arr, i);
-      type = json_object_get_type(retrieved_obj);
-      if (type == json_type_string) {
-        gchar **arr = (gchar **)data;
-        arr[i] = (gchar *)json_object_get_string(retrieved_obj);
-        __LOG(LOG_INFO, "[CFG][%s:%d] %s[%d] : %s", _FILE_, __LINE__, name, i,
-              arr[i]);
-      } else if (type == json_type_int) {
-        gint *arr = (gint *)data;
-        arr[i] = json_object_get_int(retrieved_obj);
-        __LOG(LOG_INFO, "[CFG][%s:%d] %s[%d] : %d", _FILE_, __LINE__, name, i,
-              arr[i]);
-      } else if (type == json_type_boolean) {
-        gboolean *arr = (gboolean *)data;
-        arr[i] = json_object_get_boolean(retrieved_obj);
-        __LOG(LOG_INFO, "[CFG][%s:%d] %s[%d] : %s", _FILE_, __LINE__, name, i,
-              arr[i] ? "TRUE" : "FALSE");
-      } else if (type == json_type_double) {
-        gdouble *arr = (gdouble *)data;
-        arr[i] = json_object_get_double(retrieved_obj);
-        __LOG(LOG_INFO, "[CFG][%s:%d] %s[%d] : %f", _FILE_, __LINE__, name, i,
-              arr[i]);
-      } else if (type == json_type_null) {
-        __LOG(LOG_ERR, "[CFG][%s:%d] not exist : %s", _FILE_, __LINE__, name);
-      } else {
-        __LOG(LOG_ERR, "[CFG][%s:%d] unsupport type : %d", _FILE_, __LINE__,
-              type);
-      }
-    }
-  } else if (type == json_type_null) {
-    __LOG(LOG_ERR, "[CFG][%s:%d] not exist : %s", _FILE_, __LINE__, name);
-  } else {
-    __LOG(LOG_ERR, "[CFG][%s:%d] unsupport type : %d", _FILE_, __LINE__, type);
-  }
-
-  // ret = json_object_put(vobj);
-
-  return ret;
-}
 
 ParserClass::ParserClass() {
   // 생성자 코드 추가
@@ -492,61 +479,6 @@ ParserClass *ParserClass::getInstance() {
   return &instance;
 }
 
-gint ParserClass::json_sub_object_get_value(const gchar *file,
-                                            const gchar *header,
-                                            const gchar *sub_obj,
-                                            const gchar *name, gpointer data) {
-  json_object *jobj = NULL;
-  json_object *hobj = NULL;
-  json_object *sobj = NULL;
-
-  jobj = json_object_from_file(file);
-  if (jobj == NULL) {
-    __LOG(LOG_CRIT, "[%s][%s:%d] json file open fail : %s", LOG_KEY, _FILE_,
-          __LINE__, file);
-    return -1;
-  }
-
-  enum json_type type = json_object_get_type(jobj);
-
-  do {
-    if (type != json_type_object) {
-      __LOG(LOG_ERR, "[%s][%s:%d] data not json type[%d]", LOG_KEY, _FILE_,
-            __LINE__, type);
-      break;
-    }
-
-    // hobj = json_find_obj(jobj, "VHL_CAM");
-    hobj = json_object_object_get(jobj, header);
-    if (hobj == NULL) {
-      __LOG(LOG_CRIT, "[%s][%s:%d] not exist header : %s", LOG_KEY, _FILE_,
-            __LINE__, header);
-      return -1;
-    }
-    type = json_object_get_type(hobj);
-    if (type != json_type_object) {
-      __LOG(LOG_ERR, "[%s][%s:%d] data not json type[%d]", LOG_KEY, _FILE_,
-            __LINE__, type);
-      break;
-    }
-
-    sobj = json_object_object_get(hobj, sub_obj);
-    if (sobj == NULL) {
-      __LOG(LOG_CRIT, "[%s][%s:%d] not exist sub_obj : %s", LOG_KEY, _FILE_,
-            __LINE__, sub_obj);
-      return -1;
-    }
-    type = json_object_get_type(hobj);
-    if (type != json_type_object) {
-      __LOG(LOG_ERR, "[%s][%s:%d] data not json type[%d]", LOG_KEY, _FILE_,
-            __LINE__, type);
-      break;
-    }
-    json_object_get_value(sobj, name, data);
-  } while (0);
-
-  return 0;
-}
 
 gint ParserClass::json_parser(const gchar *path, const gchar *header) {
   gint ret = -1;
@@ -619,9 +551,9 @@ gint ParserClass::json_parser(const gchar *path, const gchar *header) {
      * 붙잡지 못하는 쪽이 위험하다. */
     strings_bound = TRUE;
 
-    json_object_get_value(hobj, "vhl_name", &arg.ohtName);
-    json_object_get_value(hobj, "id", &arg.rtsp_id);
-    json_object_get_value(hobj, "tmp_path", &arg.mntDir);
+    json_get_string(hobj, "vhl_name", &arg.ohtName);
+    json_get_string(hobj, "id", &arg.rtsp_id);
+    json_get_string(hobj, "tmp_path", &arg.mntDir);
     json_get_int(hobj, "cam_width", &arg.width);
     json_get_int(hobj, "cam_height", &arg.height);
     json_get_int(hobj, "recording_time", &arg.duration);
@@ -642,26 +574,16 @@ gint ParserClass::json_parser(const gchar *path, const gchar *header) {
               _FILE_, __LINE__, DEFAULT_ENC);
       }
     }
-    json_object_get_value(hobj, "muxer", &arg.muxer);
-#if 0
-        json_object_get_value(hobj, "rec_fps", &arg.fps[STREAM_REC]);
-        json_object_get_value(hobj, "rec_bps", &arg.bps[STREAM_REC]);
-        json_object_get_value(hobj, "rtsp_fps", &arg.fps[STREAM_RTSP]);
-        json_object_get_value(hobj, "rtsp_bps", &arg.bps[STREAM_RTSP]);
-        json_object_get_value(hobj, "cap_fps", &arg.fps[STREAM_CAP]);
-        json_object_get_value(hobj, "cam_en", &arg.cam_en);
-        json_object_get_value(hobj, "hflip", &arg.hflip);
-        json_object_get_value(hobj, "vflip", &arg.vflip);
-#endif
+    json_get_string(hobj, "muxer", &arg.muxer);
 
     sobj = json_object_object_get(hobj, JSON_CAP_OBJ_NAME);
-    json_object_get_value(sobj, "enable", &arg.stream_en[STREAM_CAP]);
+    json_get_bool(sobj, "enable", &arg.stream_en[STREAM_CAP]);
     if (arg.stream_en[STREAM_CAP]) {
       json_get_int(sobj, "delay", &arg.cap.delay);
       json_get_int(sobj, "timeout", &arg.cap.timeout);
-      json_object_get_value(sobj, "encoder", &arg.cap.encoder);
+      json_get_string(sobj, "encoder", &arg.cap.encoder);
       // Optional: absolute capture output directory.
-      // Do not use json_object_get_value() because missing keys log CRIT.
+      // Do not use json_get_string() because missing keys log CRIT.
       {
         json_object *dir_obj = json_object_object_get(sobj, "path");
         if (dir_obj && json_object_get_type(dir_obj) == json_type_string) {
@@ -677,12 +599,12 @@ gint ParserClass::json_parser(const gchar *path, const gchar *header) {
           }
         }
       }
-      // json_object_get_value(sobj, "padding", &arg.cap.padding);
-      json_object_get_value(sobj, "record", &arg.cap.record_en);
-      json_object_get_value(sobj, "rtsp", &arg.cap.rtsp_en);
+      // json_get_bool(sobj, "padding", &arg.cap.padding);
+      json_get_bool(sobj, "record", &arg.cap.record_en);
+      json_get_bool(sobj, "rtsp", &arg.cap.rtsp_en);
       json_get_int(sobj, "quality", &arg.cap.quality);
       json_get_int(sobj, "queue_size", &arg.cap.queue_size);
-      json_object_get_value(sobj, "response", &arg.cap.res_en);
+      json_get_bool(sobj, "response", &arg.cap.res_en);
       json_get_int(sobj, "instant", &arg.cap.instant);
 
       arg.stream_en[STREAM_REC] = arg.cap.record_en;
@@ -795,9 +717,9 @@ gint ParserClass::json_parser(const gchar *path, const gchar *header) {
       gchar *ch_key = g_strdup_printf("ch%d", i);
       vobj = json_object_object_get(sobj, ch_key);
       g_free(ch_key);
-      json_object_get_value(vobj, "enable", &arg.cam[i].enable);
-      json_object_get_value(vobj, "hflip", &arg.cam[i].hflip);
-      json_object_get_value(vobj, "vflip", &arg.cam[i].vflip);
+      json_get_bool(vobj, "enable", &arg.cam[i].enable);
+      json_get_bool(vobj, "hflip", &arg.cam[i].hflip);
+      json_get_bool(vobj, "vflip", &arg.cam[i].vflip);
       array_errors += json_get_int_array(
           vobj, "bps", arg.cam[i].bps,
           sizeof(arg.cam[i].bps) / sizeof(arg.cam[i].bps[0]), i);
@@ -818,7 +740,7 @@ gint ParserClass::json_parser(const gchar *path, const gchar *header) {
       array_errors += json_get_int_array(
           vobj, "qp_max", arg.cam[i].qp_max,
           sizeof(arg.cam[i].qp_max) / sizeof(arg.cam[i].qp_max[0]), i);
-      json_object_get_value(vobj, "ae_on", &arg.cam[i].ae_on);
+      json_get_bool(vobj, "ae_on", &arg.cam[i].ae_on);
       json_get_uint(vobj, "ae_gain", &arg.cam[i].ae_gain);
       if (vobj && json_object_object_get(vobj, "dz")) {
         __LOG(LOG_CRIT,
@@ -840,7 +762,7 @@ gint ParserClass::json_parser(const gchar *path, const gchar *header) {
       {
         json_object *lf_obj = json_object_object_get(vobj, "led_flash");
         if (lf_obj && json_object_get_type(lf_obj) == json_type_object) {
-          json_object_get_value(lf_obj, "enable",      &arg.cam[i].led_flash_enable);
+          json_get_bool(lf_obj, "enable",      &arg.cam[i].led_flash_enable);
           json_get_uint(lf_obj, "wiper",       &arg.cam[i].led_flash_wiper);
           json_get_uint(lf_obj, "flash_delay", &arg.cam[i].led_flash_delay);
         }
@@ -883,7 +805,7 @@ cleanup:
 
          The previous document is deliberately NOT released here - this missing
          json_object_put() is the point, not an oversight. The ten borrowed
-         fields bind conditionally: json_object_get_value() leaves its target
+         fields bind conditionally: json_get_string() leaves its target
          untouched when the key is absent, and cap.dir, cap.encoder and
          cam[i].awb are assigned only inside key guards. So a later document
          that omits a key an earlier one supplied would leave that field
@@ -1689,8 +1611,6 @@ gint ParserClass::cfi_parser(gchar *buffer, gint len, gpointer data) {
       capMaxCnt = MAX_PNG_CAP_CNT;
     }
   }
-  // json_sub_object_get_value(cmdArg.json_file, JSON_CAM_OBJ_NAME,
-  // JSON_CAP_OBJ_NAME, "delay", &cmdArg.cap.delay);
   __LOG(LOG_INFO, "[%s][%s:%d] ch:0x%x, tx:%d, cnt:%d, prefix:%s, delay:%d",
         CAP_LOG_KEY, _FILE_, __LINE__, ch_en, _TCfiSendData.data.tx_id,
         capMaxCnt, _TCfiSendData.data.prefix, cmdArg.cap.delay);

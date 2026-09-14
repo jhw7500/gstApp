@@ -104,6 +104,72 @@ So the entry was accurate — and the command-injection vector genuinely present
 not at birth, and its `util.cpp:360-388` reference was accurate over the same
 window (`search_file()` began at line 360 at both `462f792` and `68a6489^`).
 
+### 3. Config Type Confusion (parser.cpp) — RESOLVED, with a documented residual
+
+**Status:** RESOLVED (2026-09, issue #116) — the type-confused accessor was
+split per destination type and then deleted.
+
+**Location:** `parser.cpp` — `json_object_get_value()` and
+`json_sub_object_get_value()` (both removed), replaced by `json_get_string()`
+and `json_get_bool()`.
+
+**What was wrong.**
+`json_object_get_value()` branched on the JSON *value's* type and cast the
+caller's `gpointer data` to match it. The caller's expected type never reached
+the function, so a wrong-typed config value wrote the wrong width to the
+destination. Measured on an isolated copy during the PR #115 tribunal:
+
+| config value | destination | result |
+|---|---|---|
+| `"vhl_name": 1234567890000000` | `const gchar *ohtName` (8 bytes) | 4-byte write; the low half became a saturated int and the high half kept the old pointer — a wild pointer |
+| `"ae_on": "yes"` | `gboolean ae_on` (4 bytes) | 8-byte pointer written; the adjacent `ae_gain` took the pointer's high half |
+| `"ae_on": [11,22,33,44]` | `gboolean ae_on` (4 bytes) | one write per array element, past the field; the length is chosen by the config file |
+
+`json_parser()` returned 0 in each case, so gstApp started on the corrupted
+configuration.
+
+**Resolution.** Each destination type has its own accessor, so the written width
+is fixed by the function that writes it rather than by the file being read. A
+type mismatch leaves `*out` at the caller's default, logs `LOG_ERR` and
+increments the parse-error counter. Reproduce with:
+
+```
+./test/run-parser-config-test.sh
+```
+
+The change-detecting cases are `test_wrong_typed_string_leaves_destination_untouched`,
+`test_wrong_typed_bool_leaves_destination_untouched` and
+`test_array_in_scalar_slot_leaves_destination_untouched` in
+`test/test_parser_config.cpp`; `test_integer_zero_one_still_accepted_for_bool`
+is a preservation check, since `gboolean` is `gint` and integer `0`/`1` was
+already width-correct.
+
+**Residual gap — a wrong type is now safe, but still not fatal.**
+Issue #116's acceptance condition (a) stated that counting the mismatch in
+`g_cfg_errors` would stop `json_parser()` from returning 0. The code does not
+behave that way. Check with:
+
+```
+grep -n 'g_cfg_errors' parser.cpp
+sed -n '/^gint ParserClass::check_arg/,/^}/p' parser.cpp | grep -n 'return'
+```
+
+`g_cfg_errors` is read in one place, and only to emit a summary `LOG_ERR`.
+`check_arg()` does return -1 — on recording duration, on an unsupported
+resolution and on the total-fps limit — but none of those paths consults
+`g_cfg_errors`. So a wrong-typed value
+no longer corrupts memory, but gstApp still starts, using the default for that
+field. That is the policy every other config accessor in this file already
+follows (`json_get_int()`, `json_get_int_array()`,
+`json_object_get_bool_optional()`): bad value, keep default, log, continue.
+Making type errors fatal would also change startup behaviour for those
+pre-existing paths, so it is deliberately outside this change.
+
+**Trigger.** The input is `/run/pim-camera/config/pim_runtime.json`, written by
+`camera_runtime_config.py` in the separate `pim-package-jhw` repository. The
+trigger is a producer bug, a hand-edited file, or a partially written file —
+not an external attacker. The PR #115 reviewer rated it MEDIUM for that reason.
+
 ---
 
 ## Security Review History
@@ -111,6 +177,7 @@ window (`search_file()` began at line 360 at both `462f792` and `68a6489^`).
 | Date       | Reviewer | Scope                    | Critical Findings |
 |------------|----------|--------------------------|-------------------|
 | 2026-01-20 | Claude   | Commit diff analysis     | 2 (1 deferred)    |
+| 2026-09-14 | PR #115 tribunal reviewer A | parser.cpp config accessors | 1 MEDIUM (issue #116, resolved above) |
 
 ---
 

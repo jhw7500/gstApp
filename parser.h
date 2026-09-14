@@ -224,8 +224,6 @@ public :
     gint apply_camera_sysfs();
     gint check_arg();
     void init_arg(gchar *argv);
-    static gint json_object_get_value(json_object *hobj, const gchar *name, gpointer data);
-    static gint json_sub_object_get_value(const gchar *file, const gchar *header, const gchar *sub_obj, const gchar *name, gpointer data);
     static json_object *json_find_obj (json_object * jobj, char *find_key);
     
 private :
