@@ -16,6 +16,8 @@
 #   못 막는다 의미적 약화 — 도달 불가능한 분기 안의 대입(`if false; then CONF_DIRTY=1; fi`),
 #            조건을 항상 참으로 만든 표류 검사 등. 토큰이 있으면 통과한다.
 #            여기 통과는 "장치가 소스에 남아 있다" 는 뜻이지 "동작한다" 는 뜻이 아니다.
+#            5 번의 UNCONDITIONAL_CAM_RESTART 목록은 **사람이 주장한 사실**이다 — 그 파일에
+#            정지 상태로 두는 경로가 없다는 것을 게이트가 구조적으로 검증하지는 못한다.
 #
 # 검사하는 불변식 (전부 실기 파괴로 이어졌던 실제 결함에서 나왔다)
 #   1. 표류 검사   live config 가 백업과 다르면 첫 쓰기 전에 중단 (ALLOW_CONF_DRIFT 로만 우회)
@@ -90,16 +92,36 @@ runtime_targets = sorted(
 if len(runtime_targets) < 2:
     raise SystemExit("put_conf 를 쓰는 스크립트를 찾지 못했습니다")
 
+# 무조건 cam-operate 를 되살리는 스크립트. 정지 상태로 두는 경로가 없으므로 안내가
+# 필요 없다. 아래 항목은 restore 경로를 직접 읽고 확인한 것이다.
+UNCONDITIONAL_CAM_RESTART = {
+    "run-skew55a.sh",   # restore() 가 systemctl start 를 조건 없이 부른다
+}
+
+# cp 가 $BIN 을 **목적지**로 쓰면서 실패를 치명으로 다루는가.
+# -t / --target-directory 가 붙으면 $BIN 은 소스 피연산자이므로 스테이징이 아니다.
+_CP_TO_BIN = re.compile(r'^[ \t]*cp[ \t]+(?P<args>[^\n]*?)"\$BIN"[ \t]*\|\|', re.M)
+_CP_TARGET_DIR = re.compile(r'(?:^|[ \t])(?:-t|--target-directory)(?:=|[ \t]|$)')
+
+
+def _stages_bin_fatally(source):
+    for m in _CP_TO_BIN.finditer(source):
+        if _CP_TARGET_DIR.search(m.group("args")):
+            continue
+        return True
+    return False
+
+
 CHECKS = (
     (
         "표류 검사",
-        lambda s: 'ALLOW_CONF_DRIFT' in s
+        lambda s, p: 'ALLOW_CONF_DRIFT' in s
         and re.search(r'if \[ "\$LIVE_MD5" != "\$ORIG_MD5" \]', s) is not None,
         "live 와 백업이 다를 때 중단하는 검사가 없습니다 (ALLOW_CONF_DRIFT 우회 포함)",
     ),
     (
         "dirty 플래그",
-        lambda s: "CONF_DIRTY=0" in s
+        lambda s, p: "CONF_DIRTY=0" in s
         and "CONF_DIRTY=1" in s
         and re.search(r'if \[ "\$CONF_DIRTY" -eq 1 \]', s) is not None,
         "config 를 덮어쓰지 않은 중단 경로에서도 복원합니다 (CONF_DIRTY 가드 없음)",
@@ -114,7 +136,7 @@ CHECKS = (
         # 막으려던 회귀(플래그를 쓰기 뒤로 미는 것)가 그대로 통과한다.
         # 줄 끝에 고정하지 않는다 (뒤에 '|| exit 2' 나 '; sync' 가 붙을 수 있다).
         # 인접 요구는 그대로다 — 그것이 이 검사의 전부다.
-        lambda s: re.search(
+        lambda s, p: re.search(
             r'^[ \t]*CONF_DIRTY=1\n'
             r'[ \t]*(?:cp "[^"]*" "\$CONF"|put_conf "[^"]*")',
             s, re.M
@@ -124,30 +146,36 @@ CHECKS = (
     ),
     (
         "삭제 한정",
-        lambda s: "-mmin" not in s
+        lambda s, p: "-mmin" not in s
         and ('newermt "@$RUN_T0"' not in s or "RUN_T0=" in s),
         "녹화 삭제가 고정 시간창(-mmin)을 씁니다 — 운영 녹화까지 지웁니다",
     ),
     (
         "스테이징 치명화",
-        # 성질은 "$BIN 에 쓰는 cp 와 chmod 가 치명적인가" 다. cp 의 플래그 개수를 고정하지
-        # 않는다 — cp -f "$SRC" "$BIN" 도 cp "$SRC" "$BIN" 과 같은 성질이다.
-        lambda s: re.search(r'cp [^\n]*"\$BIN" \|\|', s) is not None
+        # 성질은 "$BIN 에 쓰는 cp 와 chmod 가 치명적인가" 다. 플래그 개수는 고정하지 않되
+        # $BIN 이 **목적지** 여야 한다 — cp -t "$D" "$BIN" 은 $BIN 을 소스로 읽는 명령이라
+        # 스테이징이 전혀 일어나지 않는데, 목적지 여부를 보지 않으면 통과한다(실측).
+        lambda s, p: _stages_bin_fatally(s)
         and re.search(r'chmod \+x "\$BIN" \|\|', s) is not None,
         "앱 스테이징 실패가 치명적이지 않습니다 — 낡은 바이너리가 측정될 수 있습니다",
     ),
     (
         "cam-operate 복원",
-        # 성질은 "정지된 채로 방치하지 않는다" 다. 되살리는 경로가 반드시 있어야 하고,
-        # 정지 상태로 두는 선택지(RESTORE_CAM_OPERATE)가 있는 스크립트만 그 사실을 알려야
-        # 한다. 무조건 되살리는 스크립트에 그 안내를 요구하면 거짓 양성이 된다.
-        lambda s: "systemctl start cam-operate" in s
-        and ("RESTORE_CAM_OPERATE" not in s or "정지 상태로 둡니다" in s),
+        # 성질은 "정지된 채로 방치하지 않는다" 다. 되살리는 경로가 반드시 있고, 정지 상태로
+        # 둘 수 있는 스크립트는 그 사실을 알려야 한다.
+        #
+        # 예전 판은 RESTORE_CAM_OPERATE 라는 **변수 이름**이 있는지로 "조건부인가" 를
+        # 추론했다. 이름을 바꾸면서 안내를 지우면 조건부 분기가 그대로인데도 통과한다.
+        # 그래서 무조건 되살리는 파일을 아래 목록으로 **명시**한다. 목록에 넣는 것은
+        # "이 파일에는 정지 상태로 두는 경로가 없다" 는 주장이고, 게이트는 그 주장을
+        # 구조적으로 검증하지 못한다 — 넣을 때 restore 경로를 직접 읽어 확인할 것.
+        lambda s, p: "systemctl start cam-operate" in s
+        and (p.name in UNCONDITIONAL_CAM_RESTART or "정지 상태로 둡니다" in s),
         "cam-operate 를 되살리는 경로가 없거나, 정지 상태로 두면서 알리지 않습니다",
     ),
     (
         "trap 복원",
-        lambda s: re.search(r"^trap restore EXIT INT TERM$", s, re.M) is not None
+        lambda s, p: re.search(r"^trap restore EXIT INT TERM$", s, re.M) is not None
         and re.search(r"^\s*trap\s+-", s, re.M) is None,
         "EXIT/INT/TERM trap 에 restore 가 걸려 있지 않거나 이후 해제됩니다",
     ),
@@ -162,7 +190,7 @@ checked = len(targets) * (len(CHECKS) + 1) + 1
 for path in targets:
     source = path.read_text(encoding="utf-8")
     for name, predicate, message in CHECKS:
-        if not predicate(source):
+        if not predicate(source, path):
             failures.append(f"FAIL {path}: [{name}] {message}")
 
     # 삭제 한정 보강: -delete 가 있으면 반드시 이 실행의 t0 로 한정한다.
