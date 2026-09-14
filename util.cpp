@@ -13,28 +13,11 @@
 #include "util.h"
 #include "rtspServerBin.h"
 #include <glib-unix.h>
-#include <fcntl.h>
 #include <sys/stat.h>
-#include <sys/syscall.h>
 #include <sys/wait.h>
 #include <errno.h>
 #include <unistd.h>
 #include <string.h>
-#include <dirent.h>
-
-static int sys_newfstatat(const char *path, struct stat *st)
-{
-#if defined(__NR_newfstatat)
-    return (int)syscall(__NR_newfstatat, AT_FDCWD, path, st, 0);
-#elif defined(__NR_fstatat64)
-    return (int)syscall(__NR_fstatat64, AT_FDCWD, path, st, 0);
-#else
-    (void)path;
-    (void)st;
-    errno = ENOSYS;
-    return -1;
-#endif
-}
 
 GstElement *pipeline = NULL;
 GMainLoop *loop = NULL;
@@ -396,52 +379,6 @@ gboolean print_delay(GstPad *pad, GstObject *parent, GstBuffer *buffer)
   prev_time = current_time;
 
   return TRUE;
-}
-
-	gchar *search_file(const gchar* path, const gchar* prefix, const gchar* suffix)
-{
-	static gchar str[128];
-	str[0] = '\0';
-
-	DIR *dir;
-	struct dirent *ent;
-	struct stat st;
-	time_t latest_mtime = 0;
-	char latest_filename[256] = {0};
-
-	if ((dir = opendir(path)) != NULL) 
-	{
-		while ((ent = readdir(dir)) != NULL) 
-		{
-			if(g_str_has_prefix(ent->d_name, prefix) && g_str_has_suffix(ent->d_name, suffix))
-			{
-				char fullpath[512];
-				snprintf(fullpath, sizeof(fullpath), "%s/%s", path, ent->d_name);
-
-				if (sys_newfstatat(fullpath, &st) == 0) {
-					if (st.st_mtime > latest_mtime) {
-						latest_mtime = st.st_mtime;
-						strncpy(latest_filename, ent->d_name, sizeof(latest_filename) - 1);
-						latest_filename[sizeof(latest_filename) - 1] = '\0';
-					}
-				}
-			}
-		}
-
-		if (latest_mtime > 0) {
-			snprintf(str, sizeof(str), "%s/%s", path, latest_filename);
-		}
-		closedir(dir);
-	} 
-	else 
-	{
-		/* could not open directory */
-		perror ("");
-		return str;
-	}
-
-	__LOG(LOG_INFO, "[CFG][%s:%d] search_file: %s", _FILE_, __LINE__, str);
-	return str;
 }
 
 void print_tag(const GstTagList * list, const gchar * tag, gpointer unused)

@@ -268,7 +268,6 @@ gint charArrayToInt(gchar *arr);
 gboolean compareBuf(const gchar *cmp1, const gchar *cmp2, guint8 len);
 GstPadProbeReturn probe_function(GstPad *pad, GstPadProbeInfo *info, gpointer user_data);
 gboolean print_delay(GstPad *pad, GstObject *parent, GstBuffer *buffer);
-gchar *search_file(const gchar* path, const gchar* prefix, const gchar* suffix);
 void print_tag(const GstTagList * list, const gchar * tag, gpointer unused);
 void makeDir(const char* path);
 void convert_data_to_hex(const char *data, int len, char *buffer, int buffer_size);

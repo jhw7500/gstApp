@@ -879,10 +879,18 @@ cleanup:
   if (jobj != NULL) {
     if (strings_bound) {
       /* arg.* now points into this document, on the success path and on every
-         failure path that got this far. Keep it and release the previous one,
-         which nothing references any more. */
-      if (m_jsonRoot != NULL)
-        json_object_put(m_jsonRoot);
+         failure path that got this far, so it has to outlive the parse.
+
+         The previous document is deliberately NOT released here - this missing
+         json_object_put() is the point, not an oversight. The ten borrowed
+         fields bind conditionally: json_object_get_value() leaves its target
+         untouched when the key is absent, and cap.dir, cap.encoder and
+         cam[i].awb are assigned only inside key guards. So a later document
+         that omits a key an earlier one supplied would leave that field
+         pointing into whatever we released. Leaking one document per re-parse
+         is strictly safer than that use-after-free, and costs nothing today
+         because json_parser() runs once per parser. A config-reload path would
+         have more to solve than this - see issue #112. */
       m_jsonRoot = jobj;
     } else {
       /* This parse never touched arg.*, so the previous document must stay

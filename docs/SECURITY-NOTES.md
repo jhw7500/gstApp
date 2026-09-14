@@ -70,51 +70,39 @@ int get_tpm_key(BYTE *key, size_t keylen);
 
 ---
 
-### 2. Legacy Command Injection Risk (util.cpp)
+### 2. Legacy Command Injection Risk (util.cpp) — RESOLVED
 
-**Status:** ⚠️ ACCEPTED RISK (Mitigated by input constraints)
+**Status:** RESOLVED (2026-09) — the function was deleted.
 
-**Location:** `util.cpp:360-388` - `search_file()`
+**Location:** `util.cpp` / `util.h` - `search_file()` (removed)
 
-**Issue:**
-Function uses `popen()` with shell command pipeline:
-```cpp
-sprintf(str, "ls -ptr %s/%s*%s 2>/dev/null | grep -v '/$' | grep '\\%s$' | tail -1 ...",
-        path, prefix, suffix, suffix);
-fp = popen(str, "r");
-```
+**Resolution:**
+`search_file()` and its `util.h` declaration are gone. Its last caller
+disappeared when `json_parser()` stopped scanning a directory and began reading
+the exact path `PIM_RUNTIME_JSON_FILE` (PR #111); the test stub went with it.
+`git grep 'search_file' -- '*.cpp' '*.h'` now returns nothing; the name survives
+only in documentation (this file, `NEXT-PR-TASKS.md`, `RELEASE_NOTES_v1.3.md`
+and `docs/superpowers/plans/2026-08-31-edgeconf-array-fatal.md`). No caller, no
+code, no residual risk.
 
-**Security Impact:**
-- **Severity:** Medium (if inputs are user-controlled)
-- **Attack Vector:** Command injection via path/prefix/suffix
-- **Current Mitigation:** Function is only called with hardcoded internal constants
+**What this entry described, and when it was true.**
+The counts below are raw text occurrences inside the function body, measured
+with `git show <commit>:util.cpp | awk '/gchar \*search_file/,/^}/' |
+grep -c popen`:
 
-**Risk Acceptance Rationale:**
-- All call sites use compile-time constants
-- No external input reaches this function
-- Previous GLib implementation was reverted for operational reasons
+| Commit | Date | hits | |
+|---|---|---|---|
+| `8413fd5^` | | 3 | the shell pipeline: one `popen()` call plus two diagnostic strings |
+| `8413fd5` | 2026-01-19 16:23 | 1 | calls replaced by a GLib `GDir` scan; the single hit is a comment |
+| `462f792` | 2026-01-20 09:26 | 1 | **this entry authored** — the pipeline it quotes was not in the code at that moment |
+| `49f65be` | 2026-01-20 09:31 | 3 | `revert: Defer security improvements` — **pipeline restored**, again one call plus two diagnostic strings |
+| `68a6489` | 2026-02-09 13:09 | 0 | removed for good, replaced by `opendir()` / `readdir()` |
+| `b96ea98` | 2026-09-14 | 0 | state at deletion |
 
-**Call Site Analysis:**
-```bash
-# Verify all callers use constants only
-grep -n "search_file" *.cpp
-```
-
-**Required Controls:**
-1. ✅ All callers use string literals
-2. ✅ No user input flows to this function
-3. ⚠️ Code comments warn about input constraints
-4. ⚠️ No runtime validation of inputs
-
-**Monitoring:**
-- Static analysis should flag any new callers
-- Code review must verify input sources
-- Annual security audit recommended
-
-**Future Improvement (Low Priority):**
-- Add input validation assertions
-- Revert to GLib-based implementation
-- Add unit tests with malicious inputs
+So the entry was accurate — and the command-injection vector genuinely present
+— from `49f65be` until `68a6489`, roughly three weeks. It went stale in 2026-02,
+not at birth, and its `util.cpp:360-388` reference was accurate over the same
+window (`search_file()` began at line 360 at both `462f792` and `68a6489^`).
 
 ---
 
