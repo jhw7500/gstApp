@@ -229,14 +229,9 @@ public :
     static json_object *json_find_obj (json_object * jobj, char *find_key);
     
 private :
-	void own_json_strings();
-    gchar *m_jsonOhtName;
-    gchar *m_jsonRtspId;
-    gchar *m_jsonMntDir;
-    gchar *m_jsonMuxer;
-    gchar *m_jsonCapDir;
-    gchar *m_jsonCapEncoder;
-    gchar *m_jsonAwb[MAX_CHANNEL];
+    /* 파싱한 런타임 문서를 그대로 들고 있는다. 이 문서를 가리키는 모든 arg.*
+     * 문자열이 이 파서가 살아 있는 동안 계속 유효하도록 보장한다. */
+    json_object *m_jsonRoot;
 
 public :
 	gboolean m_flagDestroy;

@@ -25,21 +25,22 @@ enum BorrowedField {
 };
 
 enum ParseExpectation {
-    EXPECT_RELEASE_ONLY,
-    EXPECT_OWNED_STRINGS,
-    EXPECT_NO_VHL_EXTRACTION,
+    EXPECT_RETAINED_STRINGS,
+    EXPECT_RETAINED,
+    EXPECT_RELEASED,
 };
 
 struct ParseProbe {
-    ParserClass *parser;
     gint roots_created;
     gint roots_finalized;
-    guint alias_mask;
     guint borrowed_count;
     gboolean borrowed_values_distinct;
     const gchar *borrowed[BORROWED_FIELD_COUNT];
 };
 
+/* 문서는 이제 ~ParserClass() 에서 해제된다. 즉 root_finalized() 가 parse_fixture()
+ * 가 반환한 뒤에 불리므로, 프로브는 스택이 아니라 파일 스코프에 두어야 한다. */
+static ParseProbe g_probe;
 static ParseProbe *g_active_probe = NULL;
 
 #define CHECK(condition)                                                \
@@ -120,27 +121,9 @@ static void capture_borrowed_strings(ParseProbe *probe, json_object *root)
 static void root_finalized(json_object *root, void *userdata)
 {
     (void)root;
+    /* 파서가 이미 소멸 중일 수 있으므로 여기서 파서를 건드리지 않는다. */
     ParseProbe *probe = static_cast<ParseProbe *>(userdata);
     ++probe->roots_finalized;
-
-    const gchar *parser_values[BORROWED_FIELD_COUNT] = {
-        probe->parser->arg.ohtName,
-        probe->parser->arg.rtsp_id,
-        probe->parser->arg.mntDir,
-        probe->parser->arg.muxer,
-        probe->parser->arg.cap.dir,
-        probe->parser->arg.cap.encoder,
-        probe->parser->arg.cam[0].awb,
-        probe->parser->arg.cam[1].awb,
-        probe->parser->arg.cam[2].awb,
-        probe->parser->arg.cam[3].awb,
-    };
-
-    for (guint i = 0; i < BORROWED_FIELD_COUNT; ++i) {
-        if (probe->borrowed[i] != NULL &&
-            parser_values[i] == probe->borrowed[i])
-            probe->alias_mask |= (1U << i);
-    }
 }
 
 extern "C" json_object *json_object_from_file(const char *filename)
@@ -214,7 +197,7 @@ static gchar *runtime_json(const gchar *rtsp_tune,
 }
 
 static gint parse_fixture(ParserClass *parser, const gchar *contents,
-                          ParseExpectation expectation = EXPECT_RELEASE_ONLY)
+                          ParseExpectation expectation = EXPECT_RETAINED)
 {
     gchar directory[] = "/tmp/gstapp-parser-config-XXXXXX";
     gchar fixture_path[512] = {0};
@@ -229,24 +212,33 @@ static gint parse_fixture(ParserClass *parser, const gchar *contents,
     parser->init_arg(appname);
     g_critical_logs[0] = '\0';
     g_json_open_count = 0;
-    ParseProbe probe = {};
-    probe.parser = parser;
-    g_active_probe = &probe;
+    g_probe = ParseProbe();
+    g_active_probe = &g_probe;
     const gint result = parser->json_parser(fixture_path, JSON_CAM_OBJ_NAME);
     g_active_probe = NULL;
 
     CHECK(g_json_open_count == 1);
-    CHECK(probe.roots_created == 1);
-    CHECK(probe.roots_finalized == 1);
-    if (expectation == EXPECT_OWNED_STRINGS) {
-        if (probe.alias_mask != 0)
-            fprintf(stderr, "  borrowed alias mask at root finalization: 0x%x\n",
-                    probe.alias_mask);
-        CHECK(probe.borrowed_count == BORROWED_FIELD_COUNT);
-        CHECK(probe.borrowed_values_distinct == TRUE);
-        CHECK(probe.alias_mask == 0);
-    } else if (expectation == EXPECT_NO_VHL_EXTRACTION) {
-        CHECK((probe.alias_mask & (1U << BORROWED_VHL_NAME)) == 0);
+    CHECK(g_probe.roots_created == 1);
+    if (expectation == EXPECT_RETAINED_STRINGS) {
+        CHECK(g_probe.roots_finalized == 0);
+        CHECK(g_probe.borrowed_count == BORROWED_FIELD_COUNT);
+        CHECK(g_probe.borrowed_values_distinct == TRUE);
+        /* 붙잡은 문서를 그대로 가리키는 것이 올바른 결과다. */
+        CHECK(parser->arg.ohtName == g_probe.borrowed[BORROWED_VHL_NAME]);
+        CHECK(parser->arg.rtsp_id == g_probe.borrowed[BORROWED_RTSP_ID]);
+        CHECK(parser->arg.mntDir == g_probe.borrowed[BORROWED_MOUNT_PATH]);
+        CHECK(parser->arg.muxer == g_probe.borrowed[BORROWED_MUXER]);
+        CHECK(parser->arg.cap.dir == g_probe.borrowed[BORROWED_CAPTURE_PATH]);
+        CHECK(parser->arg.cap.encoder ==
+              g_probe.borrowed[BORROWED_CAPTURE_ENCODER]);
+        CHECK(parser->arg.cam[0].awb == g_probe.borrowed[BORROWED_AWB_0]);
+        CHECK(parser->arg.cam[1].awb == g_probe.borrowed[BORROWED_AWB_1]);
+        CHECK(parser->arg.cam[2].awb == g_probe.borrowed[BORROWED_AWB_2]);
+        CHECK(parser->arg.cam[3].awb == g_probe.borrowed[BORROWED_AWB_3]);
+    } else if (expectation == EXPECT_RETAINED) {
+        CHECK(g_probe.roots_finalized == 0);
+    } else {
+        CHECK(g_probe.roots_finalized == 1);
     }
     CHECK(parser->arg.json_file != fixture_path);
     CHECK(g_strcmp0(parser->arg.json_file, expected_path) == 0);
@@ -294,14 +286,16 @@ static void test_merged_runtime_uses_exact_path_once_and_reads_vcm(void)
 {
     ParserClass enabled_parser;
     gchar *enabled = runtime_json(NULL, "", "", TRUE);
-    CHECK(parse_fixture(&enabled_parser, enabled, EXPECT_OWNED_STRINGS) == 0);
+    CHECK(parse_fixture(&enabled_parser, enabled,
+                        EXPECT_RETAINED_STRINGS) == 0);
     CHECK(enabled_parser.arg.srt_en == TRUE);
     check_owned_string_contents(&enabled_parser);
     g_free(enabled);
 
     ParserClass disabled_parser;
     gchar *disabled = runtime_json(NULL, "", "", FALSE);
-    CHECK(parse_fixture(&disabled_parser, disabled, EXPECT_OWNED_STRINGS) == 0);
+    CHECK(parse_fixture(&disabled_parser, disabled,
+                        EXPECT_RETAINED_STRINGS) == 0);
     CHECK(disabled_parser.arg.srt_en == FALSE);
     check_owned_string_contents(&disabled_parser);
     g_free(disabled);
@@ -314,14 +308,13 @@ static void test_required_top_level_objects_fail_closed(void)
     for (guint i = 0; i < G_N_ELEMENTS(sections); ++i) {
         ParserClass missing_parser;
         gchar *missing = required_section_case(sections[i], TRUE);
-        CHECK(parse_fixture(&missing_parser, missing,
-                            EXPECT_NO_VHL_EXTRACTION) < 0);
+        CHECK(parse_fixture(&missing_parser, missing, EXPECT_RELEASED) < 0);
         g_free(missing);
 
         ParserClass non_object_parser;
         gchar *non_object = required_section_case(sections[i], FALSE);
         CHECK(parse_fixture(&non_object_parser, non_object,
-                            EXPECT_NO_VHL_EXTRACTION) < 0);
+                            EXPECT_RELEASED) < 0);
         g_free(non_object);
     }
 }
@@ -329,7 +322,7 @@ static void test_required_top_level_objects_fail_closed(void)
 static void test_non_object_and_unreadable_roots_fail_closed(void)
 {
     ParserClass non_object_parser;
-    CHECK(parse_fixture(&non_object_parser, "[]") < 0);
+    CHECK(parse_fixture(&non_object_parser, "[]", EXPECT_RELEASED) < 0);
 
     gchar directory[] = "/tmp/gstapp-parser-config-missing-XXXXXX";
     gchar missing_path[512] = {0};
@@ -343,14 +336,15 @@ static void test_non_object_and_unreadable_roots_fail_closed(void)
     gchar appname[] = "gstApp";
     unreadable_parser.init_arg(appname);
     g_json_open_count = 0;
-    ParseProbe probe = {};
-    probe.parser = &unreadable_parser;
-    g_active_probe = &probe;
+    g_critical_logs[0] = '\0';
+    g_probe = ParseProbe();
+    g_active_probe = &g_probe;
     CHECK(unreadable_parser.json_parser(missing_path, JSON_CAM_OBJ_NAME) < 0);
     g_active_probe = NULL;
     CHECK(g_json_open_count == 1);
-    CHECK(probe.roots_created == 0);
-    CHECK(probe.roots_finalized == 0);
+    CHECK(strstr(g_critical_logs, "json file open fail") != NULL);
+    CHECK(g_probe.roots_created == 0);
+    CHECK(g_probe.roots_finalized == 0);
     CHECK(unreadable_parser.arg.json_file != missing_path);
     CHECK(g_strcmp0(unreadable_parser.arg.json_file, expected_path) == 0);
     CHECK(g_rmdir(directory) == 0);
@@ -425,7 +419,7 @@ static void test_missing_optional_arrays_keep_defaults_and_succeed(void)
     ParserClass parser;
     gchar *json = runtime_json(NULL, "", "");
 
-    CHECK(parse_fixture(&parser, json) == 0);
+    CHECK(parse_fixture(&parser, json, EXPECT_RETAINED_STRINGS) == 0);
     CHECK(parser.arg.cam[0].bps[STREAM_REC] == DEFAULT_RECORD_BITRATE);
     CHECK(parser.arg.cam[0].bps[STREAM_RTSP] == DEFAULT_RTSP_BITRATE);
 
@@ -451,8 +445,40 @@ static void test_existing_recoverable_errors_remain_nonfatal(void)
     ParserClass parser;
     gchar *json = runtime_json("{\"frame_id_sei\":2}", "", "");
 
-    CHECK(parse_fixture(&parser, json) == 0);
+    CHECK(parse_fixture(&parser, json, EXPECT_RETAINED_STRINGS) == 0);
     CHECK(parser.arg.rtsp_frame_id_sei == DEFAULT_RTSP_FRAME_ID_SEI);
+
+    g_free(json);
+}
+
+/* 붙잡은 문서는 파서가 살아 있는 동안 유지되다가, 소멸 시점에 정확히 한 번 해제된다. */
+static void test_retained_root_is_released_once_when_parser_is_destroyed(void)
+{
+    gchar *json = runtime_json(NULL, "", "");
+
+    {
+        ParserClass parser;
+        CHECK(parse_fixture(&parser, json, EXPECT_RETAINED_STRINGS) == 0);
+        CHECK(g_probe.roots_finalized == 0);
+    }
+    CHECK(g_probe.roots_finalized == 1);
+
+    g_free(json);
+}
+
+/* 리뷰어 지적 B-R1-002 — 폐기된 per-channel dz 는 치명 오류이고, 그 실패 경로도
+ * cleanup 을 거쳐야 한다. 문서를 붙잡은 뒤 파서 소멸 시 해제하는지 본다. */
+static void test_deprecated_dz_is_fatal_and_still_releases_root(void)
+{
+    gchar *json = runtime_json(NULL, "\"dz\":1", "");
+
+    {
+        ParserClass parser;
+        CHECK(parse_fixture(&parser, json, EXPECT_RETAINED) < 0);
+        CHECK(g_probe.roots_finalized == 0);
+        CHECK(strstr(g_critical_logs, "no longer supported") != NULL);
+    }
+    CHECK(g_probe.roots_finalized == 1);
 
     g_free(json);
 }
@@ -499,6 +525,8 @@ int main(void)
     test_non_integer_array_element_is_fatal();
     test_missing_optional_arrays_keep_defaults_and_succeed();
     test_existing_recoverable_errors_remain_nonfatal();
+    test_retained_root_is_released_once_when_parser_is_destroyed();
+    test_deprecated_dz_is_fatal_and_still_releases_root();
     test_out_of_range_split_sec_falls_back_to_default();
 
     printf("\nparser config test: %d checks, %d failures -> %s\n",
