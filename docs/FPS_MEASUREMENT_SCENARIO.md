@@ -119,6 +119,12 @@ ssh root@192.168.214.4 '/root/fpsmeas/run-fps-scenario.sh --res 1280x720 --fps 6
 > ⚠️ 이 측정은 **운영 녹화(`cam-operate.service`)를 정지시킨다.** 스크립트는 trap 으로 어떤
 > 종료 경로에서도 설정을 md5 검증하며 되돌리고 서비스를 재기동한다. 그래도 실행 전에
 > 보드 점유를 확인할 것.
+>
+> ⚠️ `/run/pim-camera/config/pim_runtime.json` 은 **`cam-operate` 가 도는 동안만 존재한다.**
+> 유닛은 `RuntimeDirectory=pim-camera` 를 쓰고 `RuntimeDirectoryPreserve` 를 적지 않는다 —
+> 그 기본값이 `no` 라 서비스가 멈추면 systemd 가 디렉터리를 통째로 지운다. 그래서 스크립트는 쓰기 전에 매번
+> `put_conf` 로 디렉터리를 되살리고, 서비스가 멈춘 상태에서 시작하면 백업·표류 검사 단계에서
+> 파일을 찾지 못해 중단한다 — **측정은 서비스가 살아 있는 상태에서 시작한다.**
 
 ---
 
@@ -126,7 +132,7 @@ ssh root@192.168.214.4 '/root/fpsmeas/run-fps-scenario.sh --res 1280x720 --fps 6
 
 | # | 단계 | 왜 필요한가 |
 |---|---|---|
-| 1 | 설정 md5 백업 (`edgeconf.orig.json`) | 어떤 종료 경로에서도 원복하기 위해. 백업은 최초 1회만 만든다 |
+| 1 | 설정 md5 백업 (`/root/fpsmeas/pim_runtime.orig.json`) | 어떤 종료 경로에서도 원복하기 위해. 백업은 최초 1회만 만든다. **만드는 것은 `run-fps-scenario.sh` 뿐이고** `probe-*.sh` 11 종은 이미 있어야 실행된다 — 새 보드나 이름이 바뀐 직후에는 `run-fps-scenario.sh` 를 한 번 먼저 돌린다 (보드에 남아 있는 옛 백업을 옮겨 재사용하면 안 되는 이유는 §8.2, 이슈 #113) |
 | 2 | 자기 명령줄에 앱 이름 리터럴이 있으면 **실행 거부** | killcam 이 그 문자열을 가진 프로세스를 죽인다 |
 | 3 | fps 예산 검사 | `채널수 x fps` 가 한도를 넘으면 앱이 기동을 거부한다 (§4) |
 | 4 | **모드 지원 여부 확인** (frame interval 열거) | 지원되지 않는 fps 는 거부되는 게 아니라 **조용히 무시**된다 (§4) |
@@ -865,8 +871,15 @@ max9296 v2.12 + HD60 지원 gstApp 을 배포한 뒤 순서대로 수행한다.
    jq '.VHL_CAM | {cam_width,cam_height,fps,
                    i2c2:{exp_time:.i2c2.exp_time},i2c1:{exp_time:.i2c1.exp_time},
                    ch0:.i2c2.ch0, ch1:.i2c2.ch1, ch2:.i2c1.ch2, ch3:.i2c1.ch3}' \
-      /root/shared_v/edgeconf_pim.json
+      /run/pim-camera/config/pim_runtime.json
    ```
+   설정은 두 층이다. `/root/shared_v/edgeconf_pim.json` 은 **생산자의 입력**이고,
+   `camera_runtime_config.py` 가 그것과 `ord_vcm_conf.json` 을 병합해
+   `/run/pim-camera/config/pim_runtime.json` 을 만든다. **gstApp 이 읽는 것은 병합 문서뿐**
+   이다(`parser.h` `PIM_RUNTIME_JSON_FILE`). 측정 스크립트도 병합 문서를 고친다 — 생산자는
+   `VHL_CAM` 을 그대로 복사하므로 어느 쪽을 고치든 결과는 같지만, 스크립트는
+   `cam-operate.service` 를 정지시킨 채 돌기 때문에 입력을 고쳐도 병합이 일어나지 않는다
+   (이슈 #113).
    버스별·채널별로 **다르게 설정된 항목**(특히 `exp_time`, `ae_on`, `led_flash`, `ae_gain`,
    `hflip`/`vflip`)을 목록으로 뽑고, 각 항목을 **운영값에 맞출지 통제값으로 통일할지 명시적으로
    정한다.** 절반만 통일하면 운영과도 다르고 통제도 안 된 상태가 되어 결과를 오독하게 된다.
@@ -886,8 +899,157 @@ max9296 v2.12 + HD60 지원 gstApp 을 배포한 뒤 순서대로 수행한다.
 | prepare 경로 | `max9296Prepare.cpp` `kPreparePaths[0]` | `kPreparePaths[1]` |
 
 `enable` 비트: `1`=left(ch0/ch2), `2`=right(ch1/ch3), `3`=dual-wide(전송 폭 2배).
-설정 정본: `/root/shared_v/edgeconf_pim.json` (`chk_cam_operate.sh` 가 `edgeconf_*.json` 중
-mtime 최신 1개를 고른다). 채널 키는 `VHL_CAM.i2c2.ch0/ch1`, `VHL_CAM.i2c1.ch2/ch3`.
+설정 정본은 두 층이다. **생산자 입력**은 `/root/shared_v/edgeconf_pim.json`
+(`camera_runtime_config.py` 가 `edgeconf_*.json` 중 mtime 최신 1개를 고른다).
+**gstApp 이 읽는 것**은 병합 결과 `/run/pim-camera/config/pim_runtime.json` 이다.
+같은 디렉터리의 `edgeconf_pim.json` 은 병합 문서를 가리키는 심볼릭 링크이므로 쓰지 않는다.
+채널 키는 양쪽 모두 `VHL_CAM.i2c2.ch0/ch1`, `VHL_CAM.i2c1.ch2/ch3`.
+
+---
+
+## 8. 설정 정본 두 층과 측정 스크립트 (이슈 #113)
+
+측정 스크립트 13종이 `$CONF` 로 무엇을 가리키고 왜 그렇게 쓰는지의 **설명 정본은 이 절이다.**
+스크립트 쪽 주석은 사용 지점에서 사실만 짧게 밝히고 여기를 가리킨다 — 설명을 고칠 때
+13개 파일을 고치지 않기 위해서다.
+
+### 8.1 어느 파일을 고쳐야 하는가
+
+| 층 | 경로 | 누가 쓰나 |
+|---|---|---|
+| 생산자 **입력** | `/root/shared_v/edgeconf_pim.json` | 운영 설정 변경. `camera_runtime_config.py` 가 `edgeconf_*.json` 중 mtime 최신 1개를 고른다 |
+| 생산자 **출력** = gstApp 이 읽는 문서 | `/run/pim-camera/config/pim_runtime.json` | `camera_runtime_config.py` 가 입력 + `ord_vcm_conf.json` 을 병합해 만든다 (`parser.h` `PIM_RUNTIME_JSON_FILE`) |
+
+**측정 스크립트는 출력(병합 문서)을 고친다.** 입력을 고쳐도 스크립트는 `cam-operate.service`
+를 정지시킨 채 돌기 때문에 생산자가 실행되지 않아 병합이 일어나지 않는다 — 편집이 반영되지
+않은 채 기본 설정을 측정하게 된다. 이것이 이슈 #113 이었다.
+
+`/run/pim-camera/config/edgeconf_pim.json` 은 병합 문서를 가리키는 심볼릭 링크이므로 쓰지 않는다.
+
+**두 층 중 어느 쪽을 고쳐도 결과가 같은 이유**: 생산자가 `merged["VHL_CAM"] = vhl` 로 VHL_CAM
+을 그대로 복사하고, 측정 스크립트의 `jq` 프로그램은 전부 `.VHL_CAM.*` 아래만 건드리기
+때문이다. 전제는 두 개이고 **한쪽만 시험이 지킨다**:
+
+| 전제 | 지키는 것 |
+|---|---|
+| 생산자가 VHL_CAM 을 그대로 복사한다 | `test/run-runtime-config-commute-check.sh` (§8.3) |
+| 스크립트의 `jq` 가 `.VHL_CAM` 밖을 건드리지 않는다 | **없다 — 사람이 지켜야 한다** |
+
+두 번째 전제를 깨는 편집(예: `.ORD.x = 1`)을 넣어도 두 시험 모두 초록이다. 오늘 기준
+13 개 스크립트의 jq 대입 대상은 전부 `.VHL_CAM` 하위이고 `.ORD`/`.VCM`/`.ETC` 대입은 하나도
+없지만, 그것을 강제하는 장치는 없다 — 스크립트의 jq 를 고칠 때 직접 확인할 것. 직접 세려면:
+
+```bash
+grep -ohE '[.](VHL_CAM|ORD|VCM|ETC|NETWORK|SENSORS)[A-Za-z0-9_.]*[[:space:]]*[|]?=' \
+  test/probe-*.sh test/run-fps-scenario.sh test/run-skew55a.sh | sort -u
+```
+
+출력은 **비어 있으면 안 된다** — 비어 있으면 위반이 없는 것이 아니라 명령이 깨진 것이다.
+`.VHL_CAM` 으로 시작하지 않는 줄이 나오면 그것이 위반이다.
+
+### 8.2 병합 문서는 서비스가 도는 동안만 존재한다
+
+`cam-operate.service` 는 `RuntimeDirectory=pim-camera` 를 쓰고 `RuntimeDirectoryPreserve` 를
+적지 않는다. 그 기본값이 `no` 이므로 **서비스가 멈추면 systemd 가 `/run/pim-camera` 를 통째로
+지운다**. 그래서:
+
+- 스크립트는 쓰기 전마다 `put_conf` 로 디렉터리를 되살린다. `-m` 은 **마지막** 경로 요소에만
+  붙으므로 부모와 말단을 둘 다 피연산자로 적어야 한다 — 말단만 적으면 `/run/pim-camera` 가
+  umask 기본 `0755` 로 남아 유닛의 `RuntimeDirectoryMode=0750` 보다 넓어진다.
+- `install -d` 가 아니라 `mkdir -p -m` 을 쓴다. `install -d -m` 은 **이미 있는** 디렉터리의
+  모드까지 덮어쓰므로, `RUNTIME_CONF` 로 경로를 바꾸면 `/tmp` 같은 무관한 디렉터리를 0750 으로
+  만든다(실측 2026-09-14: 1777 → 750). `mkdir -p -m` 은 새로 만들 때만 모드를 준다. 같은 이유로
+  `put_conf` 는 `$CONF` 가 `/a/b/c` 형태인지 먼저 확인하고 아니면 쓰지 않는다 — 2 요소 경로면
+  부모 피연산자가 빈 문자열이 된다. shellcheck 의 SC2174 는 `-p` 가 만드는 **중간** 요소에
+  관한 경고다. 기본 `CONF` 에서는 중간 요소가 항상 존재하는 `/run` 뿐이라 해당하지 않지만,
+  `RUNTIME_CONF` 로 더 깊은 경로를 주면 그 중간 요소들은 `-m` 을 받지 못하고 umask 기본값으로
+  만들어진다(실측: `.../deep/a/b/pim-camera/config/...` 에서 `deep`·`a`·`b` 가 0775). 억제
+  지시자는 기본 경로를 기준으로 한 것이다.
+- `put_conf` 는 `$CONF` 가 심볼릭 링크이거나 정규 파일이 아니면(예: 디렉터리) 쓰지 않는다.
+  생산자 `atomic_publish` 도 같은 지점에서 링크와 비정규 파일을 거부하고, 같은 디렉터리에
+  `edgeconf_pim.json`·`ord_vcm_conf.json` 두 alias 링크를 유지한다.
+  발행은 같은 디렉터리 임시 파일에 쓰고 `chmod 0640` 한 뒤 `mv` 로 바꿔치는 방식이다 —
+  생산자 `write_json_atomic`(`mkstemp` + `os.fchmod(0o640)` + `os.replace`)과 같은 모양이라,
+  아래 소비자 목록처럼 같은 문서를 읽는 쪽이 절단된 내용을 보지 않는다.
+  **다만 생산자와 완전히 동등하지는 않다** — `put_conf` 는 최종 경로만 보고 디렉터리
+  성분(`${CONF%/*}`)이 링크면 그대로 따라가며, 검사와 쓰기 사이에 TOCTOU 창이 있다.
+  생산자는 런타임 디렉터리 자체도 거부한다.
+- 시험 config 쓰기는 `put_conf ... || exit 2` 로 실패를 치명으로 다루지만, `restore()` 안의
+  `put_conf` 는 그러지 않는다. `restore` 는 trap 핸들러라 거기서 `exit` 하면 EXIT trap 으로
+  재진입하고, 뒤따르는 md5 비교가 이미 불일치를 크게 알리기 때문이다. 이 비대칭은 의도된
+  것이니 "누락" 으로 보고 `|| exit` 를 붙이지 말 것.
+- **병합 문서는 이 스크립트들만 읽는 것이 아니다.** 측정 창 동안 시험값이 그 문서에 들어 있고,
+  다음이 그것을 읽는다. 아래는 생산자 체크아웃에서 `grep -rl` 로 리터럴 경로를 찾은 것이고,
+  경로를 변수로 조립하는 쪽(`chk_cam_operate.sh`, `start_cam.sh`, `lib/cam_*.sh`)은 이 방법으로
+  잡히지 않는다 — 그쪽은 전부 `cam-operate` 기동 사슬 안이다:
+
+  | 읽는 것 | 언제 도는가 |
+  |---|---|
+  | `camera_config_expectation.py` | `camera-capture-probe.service`, `camera-health-shadow-compare.service` — 둘 다 `Requires=cam-operate.service` 라 함께 멈춘다 |
+  | `sd_mount_stop.sh` | `sd-mount.service` 의 `ExecStop`. **`Requires=cam-operate.service` 가 없다** |
+  | `file_manager.sh` | **`/etc/crontab` 으로 매 분 `root`** (`pim-package-jhw` `dist/pim/DEBIAN/postinst` 의 crontab 등록). `.VHL_CAM.vhl_name` 을 보존 키로 쓰고, 문서가 없거나 구조가 어긋나면 `CONFIG_INVALID` 로 `exit 64` 한다 — 측정 창 동안 `/dev/shm` 정리가 매 분 실패할 수 있다 |
+  | `BG_Check_for_pim.sh` | `start_cam.sh` 가 백그라운드로 띄운다 — `cam-operate` 기동 사슬 안이다 |
+  | `cam_rotate_setting.sh`, `ncsftp.sh` | `/etc/rc.local` 의 참조가 둘 다 주석 처리돼 있다(`ncsftp` 쪽은 패키지 밖 경로). 호출 경로 없음 |
+  | `pim_guardian.py` | `postinst` 가 참조한다 |
+  | `cam_channel_resolve.sh` | 다른 진단 스크립트들이 source 한다 |
+  | `cpu_limit.sh` | 패키지 안에 참조가 없다 — 호출 경로 미확인 |
+  | `/usr/local/bin/ord`, `/usr/local/bin/vcm` (배포 바이너리) | 기동 시 1 회 읽는다. `ord-operate.service` 는 `After=cam-operate.service` 뿐이라 함께 멈추지 않지만 `postinst` 가 그 유닛을 disable 한다. `vcm` 을 띄우는 유닛은 패키지에 없다 |
+
+  그래서 `probe-default-h265.sh` 는 정본 `VHL_CAM` 을 얹을 때 `vhl_name`·`tmp_path` 같은
+  식별자·경로 필드는 병합 문서 값을 되돌려 놓는다.
+- **측정은 서비스가 살아 있는 상태에서 시작한다.** 멈춘 상태로 시작하면 병합 문서가 없어
+  백업·표류 검사 단계에서 중단된다.
+- 백업 `/root/fpsmeas/pim_runtime.orig.json` 을 만드는 것은 `run-fps-scenario.sh` 뿐이다.
+  `probe-*.sh` 11 종은 이미 있어야 돌아간다 — 새 보드에서는 `run-fps-scenario.sh` 를 먼저
+  한 번 돌린다.
+- 보드에 남아 있을 수 있는 옛 백업 `edgeconf.orig.json` 을 새 이름으로 옮겨 재사용하면 **안
+  된다.** 그것은 생산자 *입력* 형태라 최상위에 `ORD`·`VCM` 이 없고, 복원에 쓰면 gstApp 이
+  `required object missing/invalid : ORD` 로 기동하지 못한다.
+
+### 8.3 등식을 고정하는 시험 (수동)
+
+`test/run-runtime-config-commute-check.sh` 가 §8.1 의 등식을 **실제 생산자 모듈과 실제 배포
+fixture** 로 확인한다. 생산자는 별도 저장소에 있으므로 CI 에서는 돌지 않는다 — 개발 호스트에서
+형제 체크아웃을 두고 수동으로 돌린다(`test/run-health-producer-test.sh` 와 같은 방식이고,
+둘 다 생산자를 못 찾으면 **건너뛰지 않고 실패한다**).
+
+```bash
+# 기본값은 ../pim-package-jhw
+PIM_PACKAGE_DIR=/path/to/pim-package-jhw bash test/run-runtime-config-commute-check.sh
+# -> 마지막 줄이 "runtime config commute check: PASSED" 이고 종료코드 0
+```
+
+측정 스크립트 13 종의 소스 계약은 `test/run-probe-safety-source-check.sh` 가 검사한다.
+외부 의존이 없으므로 언제든 돌릴 수 있다. 출력의 파일·검사 개수는 실행 시점에 계산되는
+값이므로 여기 옮겨 적지 않는다 — `0 실패 -> PASSED` 인지만 본다.
+
+```bash
+bash test/run-probe-safety-source-check.sh
+# -> 마지막 줄이 "... 0 실패 -> PASSED" 이고 종료코드 0
+```
+
+**게이트가 검사하는 것** — 이름으로 적는다(개수는 실행할 때 나온다):
+
+- `probe-*.sh` 와 `run-fps-scenario.sh` 에 대해: 표류 검사, dirty 플래그, 쓰기 전 세움,
+  삭제 한정, 스테이징 치명화, cam-operate 복원, trap 복원.
+- `put_conf` 를 **정의하거나 호출하는** 스크립트 전부에 대해: **put_conf 동일성** — 정의가
+  파일당 정확히 하나이고, 한 줄 `put_conf() { ... }` 형태이고, 모든 파일에서 바이트 동일할 것.
+  13 벌 복제가 정책이므로 한 벌만 표류하는 것을 이렇게 잡는다. 호출까지 보고 하위 디렉터리까지
+  훑는 이유는 정의 철자를 바꿔 대상 집합에서 빠지는 회피를 막기 위해서다.
+- `test/classify-freeze.awk` 의 헤더 단언과 거부 종료.
+
+**이 게이트가 검사하지 않는 것** (초록을 커버리지로 읽지 말 것):
+
+- **`CONF` 가 병합 문서를 가리키는지 검사하지 않는다.** 검사해 봤으나 들여쓴 재대입,
+  `export`/`declare`/`readonly`, 중괄호 그룹 안의 대입이 전부 빠져나갔다. 셸에서 유효한 값은
+  마지막 대입이라 소스에서 건전히 판정할 수 없다.
+- config 쓰기가 전부 `put_conf` 를 거치는지 검사하지 않는다. `${CONF}` 중괄호형, 따옴표 없는
+  `$CONF`, 변수 별칭, `sed -i`, `>|`, `eval`, heredoc 이 전부 빠져나갔다.
+- 시험 쓰기가 `|| exit N` 을 가지는지 검사하지 않는다. 한 파일에 쓰기가 여럿이면 첫 자리만
+  보았고 `|| exit 0` 도 통과했다.
+- `put_conf` **본문이 무엇을 하는지** 검사하지 않는다. 동일성 검사는 13 벌이 서로 같은지만
+  본다 — 13 벌을 똑같이 망가뜨리면 통과한다.
+- 스크립트의 `jq` 가 `.VHL_CAM` 밖을 건드리지 않는지 검사하지 않는다(§8.1).
 
 관련 문서:
 - `docs/CAMERA_SYNC_VALIDATION.md` — 동기화·skew 실측

@@ -81,7 +81,25 @@ LED_ON=false
 
 CAM=${CAM_DIR:-/root/camtest}
 RESET="$CAM/cam_hard_reset.sh"
-CONF=${EDGECONF:-/root/shared_v/edgeconf_pim.json}
+# gstApp 이 읽는 병합 문서. 생산자 입력(/root/shared_v/edgeconf_pim.json)을 고쳐도
+# 이 스크립트는 cam-operate 를 멈춘 채 돌아 반영되지 않는다 (이슈 #113).
+# 두 층의 관계와 근거: docs/FPS_MEASUREMENT_SCENARIO.md §8.1
+CONF=${RUNTIME_CONF:-/run/pim-camera/config/pim_runtime.json}
+# 서비스가 멈추면 systemd 가 RuntimeDirectory 를 지우므로 쓰기 전마다 되살린다.
+# 같은 디렉터리 임시 파일 + mv 로 발행한다(생산자 write_json_atomic 과 같은 원자성).
+# install -d 가 아니라 mkdir -p -m 인 이유, 경로 형태와 파일 종류를 먼저 보는 이유는
+# 같은 문서 §8.2. 이 정의는 13 벌이 바이트 동일해야 한다(게이트가 검사한다).
+# shellcheck disable=SC2174  # -m 이 안 붙는 중간 요소는 /run 뿐이고 그건 항상 있다
+put_conf() { case $CONF in /*/*/*) ;; *) echo "!! CONF 가 /a/b/c 형태가 아니다: $CONF" >&2; return 1;; esac; if [ -L "$CONF" ] || { [ -e "$CONF" ] && [ ! -f "$CONF" ]; }; then echo "!! $CONF 가 정규 파일이 아니다 - 쓰지 않는다" >&2; return 1; fi; if mkdir -p -m 0750 "${CONF%/*/*}" "${CONF%/*}" && cp -f "$1" "$CONF.tmp.$$" && chmod 0640 "$CONF.tmp.$$" && mv -f "$CONF.tmp.$$" "$CONF"; then return 0; fi; rm -f "$CONF.tmp.$$"; echo "!! config 쓰기 실패: $1 -> $CONF" >&2; return 1; }
+# 예전 이름 EDGECONF 는 edge 문서를 가리켰다. 그냥 무시하면 그 값이 조용히 버려지고
+# 기본값으로 측정이 돌아 — 이 이슈가 만든 것과 같은 종류의 거짓 성공이 된다. 멈춘다.
+if [ -n "${EDGECONF:-}" ]; then
+	echo "중단: EDGECONF 는 RUNTIME_CONF 로 바뀌었습니다 (이슈 #113)."
+	echo "  EDGECONF 는 생산자의 입력(/root/shared_v/edgeconf_pim.json)을 가리켰지만,"
+	echo "  gstApp 은 병합 문서 $CONF 만 읽습니다."
+	echo "  병합 문서를 직접 지정하려면 RUNTIME_CONF 를 쓰세요."
+	exit 2
+fi
 SRC_BIN=${SRC_BIN:-/usr/local/bin/gstApp}
 OUT=${OUT:-/root/fpsmeas}
 # killcam 은 명령줄에 앱 이름 리터럴이 있는 프로세스를 죽인다. 다른 이름을 쓴다.
@@ -115,7 +133,7 @@ usage() {
         --check-only    지원 여부(frame interval 열거)만 확인하고 종료
     -h, --help
 
-  환경변수: SRC_BIN(기본 /usr/local/bin/gstApp), EDGECONF, CAM_DIR, OUT,
+  환경변수: SRC_BIN(기본 /usr/local/bin/gstApp), RUNTIME_CONF, CAM_DIR, OUT,
             TEST_BIN_NAME(기본 capapp)
 
 예:
@@ -197,9 +215,12 @@ if [ "$EXP" -ge "$PERIOD_US" ]; then
 	echo "      이 조건은 센서가 프레임을 늘려 fps 가 요청치에 못 미친다(U 곡선 오른쪽)." >&2
 fi
 
+# $CONF 는 cam-operate 가 도는 동안만 있다 (같은 문서 §8.2). 기존 존재 검사에
+# 그 안내를 얹는다 — 검사를 하나 더 두면 같은 조건을 두 번 보게 된다.
 for t in "$RESET" "$SRC_BIN" "$CONF"; do
 	[ -e "$t" ] || {
 		echo "필요한 파일 없음: $t" >&2
+		[ "$t" = "$CONF" ] && echo "      병합 문서는 cam-operate 가 도는 동안만 있다 — 먼저 기동할 것" >&2
 		exit 2
 	}
 done
@@ -222,7 +243,7 @@ STAMP=$(date +%Y%m%d_%H%M%S)
 TAG="${W}x${H}@${FPS}"
 LOG="$OUT/fps_${TAG}_$STAMP.log"
 CSV="$OUT/fps_${TAG}_$STAMP.csv"
-BACKUP="$OUT/edgeconf.orig.json"
+BACKUP="$OUT/pim_runtime.orig.json"
 BIN="$OUT/$TEST_BIN_NAME"
 
 log() { echo "$*" | tee -a "$LOG"; }
@@ -275,7 +296,7 @@ restore() {
 	log "### 복구"
 	kill_app
 	if [ "$CONF_DIRTY" -eq 1 ]; then
-		cp "$BACKUP" "$CONF"
+		put_conf "$BACKUP"
 		NOW=$(md5sum "$CONF" | awk '{print $1}')
 		if [ "$NOW" = "$ORIG_MD5" ]; then
 			log "설정 복원 md5 일치 ($NOW)"
@@ -536,7 +557,7 @@ for combo in $SUPPORTED; do
 		fi
 		# cp 도중 죽어도 복원되도록 쓰기 "전"에 세운다
 		CONF_DIRTY=1
-		cp "$OUT/.test.json" "$CONF"
+		put_conf "$OUT/.test.json" || exit 2
 
 		hard_reset
 		APPLOG="$OUT/app_${TAG}_${combo}_$r.log"
@@ -686,9 +707,20 @@ done
 
 # ------------------------------------------------------------------- 요약
 log ""
-log "### 요약 (채널별 평균 CSI2 fps)"
-awk -F, 'NR>1 && $6!="-" { k=$2" "$5; s[k]+=$6; n[k]++ }
-     END { for (k in s) printf "  %-14s %7.2f fps  (n=%d)\n", k, s[k]/n[k], n[k] }' "$CSV" |
+log "### 요약 (combo·노출·채널별 평균 CSI2 fps)"
+# CSV 열: 1 case, 2 combo, 3 attempt, 4 req_fps, 5 exp_us, 6 channel, 7 csi_fps.
+# 두 가지를 고친다.
+#  (1) 합산 열: 도입 시점(b7f7d7d)부터 6열(channel, 즉 "ch0")을 더해 요약이 항상
+#      0.00 을 보고했다 — 채널별 줄에는 실제 값이 찍히므로 조용한 거짓이었다.
+#  (2) 키: 옛 키 $2" "$5 는 채널을 빼먹어 combo 0+2 가 서로 다른 CSI 둘(ch0=CSI0,
+#      ch2=CSI1)을 한 줄로 평균냈다. 120 과 0 이면 60.00 으로 찍혀 머리글의 "채널별"
+#      이 거짓이 된다 — 자명하게 망가져 보이던 0.00 보다 알아채기 어렵다.
+# 하이픈 가드는 뺐다: 7열은 rate() 의 printf "%.2f" 라 하이픈이 될 수 없고, 하이픈이
+# 들어가는 열은 9열(encstat_fps, EF="-")뿐이다. 대신 빈 값을 거른다 — elapsed 가 0
+# 이면 rate() 의 나눗셈이 awk 오류로 죽어 7열이 빈 채로 찍히고, 그대로 더하면 0 이
+# 섞인다.
+awk -F, 'NR>1 && $7!="" { k=$2" "$5" "$6; s[k]+=$7; n[k]++ }
+     END { for (k in s) printf "  %-20s %7.2f fps  (n=%d)\n", k, s[k]/n[k], n[k] }' "$CSV" |
 	sort | tee -a "$LOG"
 log ""
 log "=== 측정 종료 $(date -Is) ==="

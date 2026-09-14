@@ -12,9 +12,18 @@ set -u
 W="${1:?width}"; H="${2:?height}"; FPS="${3:?fps}"; MIN="${4:-15}"
 TAG="${W}x${H}@${FPS}"
 D=/root/skew55a
-CONF=/root/shared_v/edgeconf_pim.json
-ORIG="$D/edgeconf_pim.json.orig"
-ORIG_MD5="$D/edgeconf_pim.json.orig.md5"
+# gstApp 이 읽는 병합 문서. 생산자 입력(/root/shared_v/edgeconf_pim.json)을 고쳐도
+# 이 스크립트는 cam-operate 를 멈춘 채 돌아 반영되지 않는다 (이슈 #113).
+# 두 층의 관계와 근거: docs/FPS_MEASUREMENT_SCENARIO.md §8.1
+CONF=/run/pim-camera/config/pim_runtime.json
+# 서비스가 멈추면 systemd 가 RuntimeDirectory 를 지우므로 쓰기 전마다 되살린다.
+# 같은 디렉터리 임시 파일 + mv 로 발행한다(생산자 write_json_atomic 과 같은 원자성).
+# install -d 가 아니라 mkdir -p -m 인 이유, 경로 형태와 파일 종류를 먼저 보는 이유는
+# 같은 문서 §8.2. 이 정의는 13 벌이 바이트 동일해야 한다(게이트가 검사한다).
+# shellcheck disable=SC2174  # -m 이 안 붙는 중간 요소는 /run 뿐이고 그건 항상 있다
+put_conf() { case $CONF in /*/*/*) ;; *) echo "!! CONF 가 /a/b/c 형태가 아니다: $CONF" >&2; return 1;; esac; if [ -L "$CONF" ] || { [ -e "$CONF" ] && [ ! -f "$CONF" ]; }; then echo "!! $CONF 가 정규 파일이 아니다 - 쓰지 않는다" >&2; return 1; fi; if mkdir -p -m 0750 "${CONF%/*/*}" "${CONF%/*}" && cp -f "$1" "$CONF.tmp.$$" && chmod 0640 "$CONF.tmp.$$" && mv -f "$CONF.tmp.$$" "$CONF"; then return 0; fi; rm -f "$CONF.tmp.$$"; echo "!! config 쓰기 실패: $1 -> $CONF" >&2; return 1; }
+ORIG="$D/pim_runtime.json.orig"
+ORIG_MD5="$D/pim_runtime.json.orig.md5"
 HARDRESET=/opt/pim/bin/cam_hard_reset.sh
 BIN="$D/gstApp.skew-test"
 LOG="$D/run-$TAG.log"
@@ -49,7 +58,7 @@ restore() {
   fi
   pkill -x gstApp 2>/dev/null; sleep 3
   if [ -f "$ORIG" ] && [ -f "$ORIG_MD5" ]; then
-    cp -f "$ORIG" "$CONF"; sync
+    put_conf "$ORIG"; sync
     [ "$(md5of "$CONF")" = "$(cat "$ORIG_MD5")" ] \
       && log "config 복원 검증 OK ($(cat "$ORIG_MD5"))" \
       || log "!!! config 복원 md5 불일치 — 수동 확인 필요 !!!"
@@ -71,7 +80,12 @@ if ! flock -n 9; then
   exit 9
 fi
 
-trap restore EXIT INT TERM
+# 없는 채로 읽으면 md5 가 빈 문자열이 되어 표류 검사가 "live != backup" 이라는
+# 엉뚱한 원인을 댄다. $CONF 의 수명은 같은 문서 §8.2 참조. 위 락과 같은 이유로
+# trap '앞에' 둔다 — 아무것도 쓰지 않은 사전조건 실패가 restore 를 돌리면
+# pkill·하드리셋·서비스 재기동이 이 실행이 건드린 적 없는 장비에 일어나고,
+# restore 의 put_conf 가 없던 런타임 문서를 stale 내용으로 새로 만든다.
+[ -e "$CONF" ] || { echo "병합 문서 없음: $CONF — cam-operate 를 먼저 기동할 것"; exit 2; }
 
 # ── 1. 원본 백업 (최초 1회, 절대 덮지 않음) ──────────────────────────────────
 if [ ! -f "$ORIG" ]; then
@@ -82,7 +96,7 @@ else
 fi
 
 # ── 2. 시험 config 생성 + 검증 ───────────────────────────────────────────────
-TESTCONF="$D/edgeconf.test.$TAG.json"
+TESTCONF="$D/pim_runtime.test.$TAG.json"   # 병합 문서 사본이므로 백업·원본과 같은 이름 규칙
 jq --argjson w "$W" --argjson h "$H" --argjson f "$FPS" '
     .VHL_CAM.cam_width = $w | .VHL_CAM.cam_height = $h | .VHL_CAM.fps = $f
   | .VHL_CAM.debug_level = 7
@@ -100,13 +114,21 @@ V=$(jq -r '[ .VHL_CAM.cam_width, .VHL_CAM.cam_height, .VHL_CAM.fps, .VHL_CAM.deb
 [ "$V" = "[$W,$H,$FPS,7,10000,10000,1]" ] || { log "시험 config 검증 실패: $V"; exit 5; }
 log "시험 config 검증 OK: $V"
 
+# 여기까지는 $CONF 를 읽기만 하고 쓰는 곳은 전부 $D 안이라 보드 상태를 바꾸지 않는다.
+# 그래서 trap 은 첫 파괴적 동작(systemctl stop) 바로 앞에 건다 — 위의 exit 3/4/5 는
+# 아무것도 쓰지 않은 사전조건 실패인데, trap 이 그보다 위에 있으면 restore 가 돌아
+# put_conf "$ORIG" 가 **서비스가 살아 있는 상태의 발행 문서**를 생산자 검증을 우회해
+# 덮어쓰고 "복원 검증 OK" 까지 남긴다. cam-operate.service 의 ExecStartPost 는 그
+# 문서가 validate 를 통과할 때까지 TimeoutStartSec=90s 를 돈다.
+trap restore EXIT INT TERM
+
 # ── 3. 정지 → 하드 리셋(epoch↑) → config 투입 → 기동 ────────────────────────
 log "cam-operate 정지 (기동 전 epoch: $(epochs))"
 systemctl stop cam-operate; sleep 3
 pkill -x gstApp 2>/dev/null; pkill -x killcam 2>/dev/null; sleep 3
 hard_reset "pre-run" || { log "!!! 하드 리셋 실패 — 중단"; exit 7; }
 
-cp -f "$TESTCONF" "$CONF"; sync; log "시험 config 투입"
+put_conf "$TESTCONF" || exit 11; sync; log "시험 config 투입"   # 11: 정지·하드리셋 후 쓰기 실패(2 는 보드 무변경)
 # 기본은 운영 바이너리. SKEW55A_SRC_BIN 으로 시험 빌드를 지정할 수 있다.
 SRC_BIN="${SKEW55A_SRC_BIN:-/usr/local/bin/gstApp}"
 [ -x "$SRC_BIN" ] || { log "시험 바이너리 없음: $SRC_BIN"; exit 8; }

@@ -19,13 +19,31 @@
 # 검사하는 불변식 (전부 실기 파괴로 이어졌던 실제 결함에서 나왔다)
 #   1. 표류 검사   live config 가 백업과 다르면 첫 쓰기 전에 중단 (ALLOW_CONF_DRIFT 로만 우회)
 #   2. dirty 플래그 config 를 실제로 덮어쓴 회차에서만 복원한다
-#   2b. 쓰기 전 세움 플래그가 cp **바로 앞** 이다. 뒤에 있으면 cp 도중 SIGINT 로 죽었을 때
-#                  플래그가 0 이라 복원이 생략되고, 프로브 config(또는 잘린 JSON)가 운영
-#                  설정으로 남는다 — 과잉 복원을 고치다 만든 실제 회귀다.
+#   2b. 쓰기 전 세움 플래그가 config 쓰기 **바로 앞** 이다. 뒤에 있으면 쓰기 도중 SIGINT 로
+#                  죽었을 때 플래그가 0 이라 복원이 생략되고, 프로브 config(또는 잘린 JSON)가
+#                  운영 설정으로 남는다 — 과잉 복원을 고치다 만든 실제 회귀다.
 #   3. 삭제 한정   녹화 삭제를 이 실행이 만든 파일로 한정 (-mmin 고정 창 금지)
 #   4. 스테이징    앱 복사·chmod 실패는 치명적 (낡은 바이너리 측정 금지)
 #   5. cam-operate 정지 상태로 두면 크게 알리고, RESTORE_CAM_OPERATE 로 되살릴 수 있다
 #   6. trap        EXIT/INT/TERM 에 복원이 걸려 있고, 이후 해제되지 않는다
+#
+# 이슈 #113 관련 (대상이 다르다 - put_conf 를 정의한 스크립트 전부, 오늘 13 개)
+#   7. put_conf 동일성 정의가 파일당 정확히 하나이고, 한 줄 형태이고, 모든 파일에서
+#      바이트 동일하다. 13 벌 복제가 저장소 정책이므로(위 참조) 한 벌만 손대는 표류를
+#      이렇게 잡는다. 대상은 put_conf 를 정의하거나 호출하는 스크립트 전부다 - 정의
+#      철자를 바꿔 대상에서 빠지는 회피를 막으려고 호출까지 본다.
+#
+# 여기서 **하지 않는** 것 (초록을 커버리지로 읽지 말 것)
+#   - CONF 가 gstApp 이 읽는 병합 문서를 가리키는지 **검사하지 않는다**. 검사해 봤으나
+#     들여쓴 재대입, export/declare/readonly, 중괄호 그룹 안 대입이 전부 빠져나갔다
+#     (리뷰 실측). 셸에서 유효한 값은 마지막 대입이라 소스에서 건전히 판정할 수 없다.
+#   - config 쓰기가 전부 put_conf 를 거치는지 검사하지 않는다. `${CONF}` 중괄호형,
+#     따옴표 없는 $CONF, 변수 별칭, `sed -i`, `>|`, `eval`, heredoc 이 빠져나갔고,
+#     본문 주석 한 줄이나 불균형 중괄호 하나로 검사 자체가 꺼졌다.
+#   - 시험 쓰기가 `|| exit N` 을 가지는지 검사하지 않는다. 첫 일치만 보므로 둘째 쓰기를
+#     못 보고, `|| exit 0` 도 통과했다.
+#   - put_conf 본문이 무엇을 하는지 검사하지 않는다. 7 번은 13 벌이 서로 같은지만 본다.
+#   이 계약들은 소스 검사가 아니라 docs 의 기록과 실행 검증으로 지킨다.
 set -euo pipefail
 
 cd "$(dirname "$0")/.."
@@ -45,6 +63,25 @@ targets.append(harness)
 if len(targets) < 2:
     raise SystemExit("검사 대상 스크립트를 찾지 못했습니다")
 
+# put_conf 를 정의**하거나 호출**하는 스크립트 전부가 7 번의 대상이다. 이름을 하드코딩
+# 하지 않으므로 파생 러너도, 하위 디렉터리도 자동으로 들어온다. 호출까지 보는 이유:
+# 정의 탐지만으로 고르면 정의 철자를 바꾸는 것만으로 대상에서 빠져 검사가 꺼진다.
+_PC_DEF = re.compile(r"^[ \t]*put_conf[ \t]*\([ \t]*\)[ \t]*\{")
+_PC_CALL = re.compile(r'^[ \t]*put_conf "', re.M)   # re.M 없으면 파일 0 번 위치만 본다
+
+
+def _defs(source):
+    return [l for l in source.splitlines() if _PC_DEF.match(l)]
+
+
+runtime_targets = sorted(
+    p for p in Path("test").rglob("*.sh")
+    if (lambda src: bool(_defs(src)) or _PC_CALL.search(src) is not None)(
+        p.read_text(encoding="utf-8"))
+)
+if len(runtime_targets) < 2:
+    raise SystemExit("put_conf 를 쓰는 스크립트를 찾지 못했습니다")
+
 CHECKS = (
     (
         "표류 검사",
@@ -61,13 +98,21 @@ CHECKS = (
     ),
     (
         "쓰기 전 세움",
-        # CONF_DIRTY=1 은 config 를 덮어쓰는 cp 의 **바로 앞 줄**이어야 한다.
-        # 뒤에 두면 cp 자신이 SIGINT 로 죽었을 때 플래그가 0 이라 복원이 생략된다.
+        # CONF_DIRTY=1 은 config 를 덮어쓰는 줄의 **바로 앞 줄**이어야 한다.
+        # 뒤에 두면 그 쓰기가 SIGINT 로 죽었을 때 플래그가 0 이라 복원이 생략된다.
+        # 쓰기 형태는 맨 cp 였다가 이슈 #113 에서 put_conf 로 바뀌었다 — 서비스를
+        # 멈추면 systemd 가 RuntimeDirectory 를 지우므로 쓰기 전에 되살려야 한다.
+        # 두 형태를 다 받되 **인접** 요구는 완화하지 않는다. 완화하면 이 검사가
+        # 막으려던 회귀(플래그를 쓰기 뒤로 미는 것)가 그대로 통과한다.
+        # 줄 끝에 고정하지 않는다 (뒤에 '|| exit 2' 나 '; sync' 가 붙을 수 있다).
+        # 인접 요구는 그대로다 — 그것이 이 검사의 전부다.
         lambda s: re.search(
-            r'^[ \t]*CONF_DIRTY=1\n[ \t]*cp "[^"]*" "\$CONF"$', s, re.M
+            r'^[ \t]*CONF_DIRTY=1\n'
+            r'[ \t]*(?:cp "[^"]*" "\$CONF"|put_conf "[^"]*")',
+            s, re.M
         ) is not None,
-        "CONF_DIRTY=1 이 config 쓰기 바로 앞에 있지 않습니다 "
-        "— cp 도중 죽으면 복원이 생략되고 시험 config 가 운영에 남습니다",
+        "CONF_DIRTY=1 이 config 쓰기(cp 또는 put_conf) 바로 앞에 있지 않습니다 "
+        "— 쓰기 도중 죽으면 복원이 생략되고 시험 config 가 운영에 남습니다",
     ),
     (
         "삭제 한정",
@@ -95,11 +140,12 @@ CHECKS = (
     ),
 )
 
+
 failures = []
 # 검사 수는 입력에 의존하지 않는다 — 파일마다 같은 검사를 전부 돌린다.
 # (예전 판은 -delete 유무로 개수가 달라져 79/78 을 오갔고, 그래서 개수가 계약의
 #  일부인지 우연인지 알 수 없었다.)
-checked = len(targets) * (len(CHECKS) + 1)
+checked = len(targets) * (len(CHECKS) + 1) + 1
 for path in targets:
     source = path.read_text(encoding="utf-8")
     for name, predicate, message in CHECKS:
@@ -111,6 +157,34 @@ for path in targets:
         failures.append(
             f"FAIL {path}: [삭제 한정] -delete 가 있는데 -newermt \"@$RUN_T0\" 로 한정하지 않습니다"
         )
+
+# 7. put_conf 동일성. 13 벌 복제는 저장소 정책이라 합치지 않는다 - 대신 서로 달라지는
+# 것을 여기서 잡는다. 본문이 무엇을 하는지는 보지 않고 "모두 같은가" 만 본다.
+defs = {}
+for path in runtime_targets:
+    lines = _defs(path.read_text(encoding="utf-8"))
+    if len(lines) != 1:
+        failures.append(
+            f"FAIL {path}: [put_conf 동일성] put_conf 정의가 {len(lines)} 개입니다 (1 개여야 합니다)"
+        )
+        continue
+    line = lines[0]
+    # 한 줄 정의여야 한다. 여러 줄을 허용하면 본문을 비교하려고 중괄호를 세게 되고,
+    # 그 파싱이 조용히 꺼지는 것이 이 검사가 대체한 옛 검사의 실패 방식이었다.
+    if not line.startswith("put_conf() {") or not line.rstrip().endswith("}"):
+        failures.append(
+            f"FAIL {path}: [put_conf 동일성] put_conf 정의가 한 줄의 "
+            f"'put_conf() {{ ... }}' 형태가 아닙니다"
+        )
+        continue
+    defs.setdefault(line, []).append(str(path))
+if len(defs) > 1:
+    groups = " / ".join(
+        f"{len(v)}개({v[0]} 외)" if len(v) > 1 else v[0] for v in defs.values()
+    )
+    failures.append(
+        f"FAIL [put_conf 동일성] put_conf 정의가 파일마다 다릅니다 — {groups}"
+    )
 
 # 분류기: 입력 헤더를 단언하고 비정상 입력을 거부해야 한다.
 awk_path = Path("test/classify-freeze.awk")
@@ -131,11 +205,12 @@ else:
 if failures:
     print("\n".join(failures), file=sys.stderr)
     raise SystemExit(
-        f"probe safety source contract: {len(targets)} 파일, {checked} 검사, "
-        f"{len(failures)} 실패 -> FAILED"
+        f"probe safety source contract: 계약 {len(targets)} 파일 {checked} 검사 / "
+        f"put_conf 동일성 {len(runtime_targets)} 파일, {len(failures)} 실패 -> FAILED"
     )
 
 print(
-    f"probe safety source contract: {len(targets)} 파일, {checked} 검사, 0 실패 -> PASSED"
+    f"probe safety source contract: 계약 {len(targets)} 파일 {checked} 검사 / "
+    f"put_conf 동일성 {len(runtime_targets)} 파일, 0 실패 -> PASSED"
 )
 PY
