@@ -139,9 +139,11 @@ pkill -x gstApp 2>/dev/null; pkill -x killcam 2>/dev/null; sleep 3
 hard_reset "pre-run" || { log "!!! 하드 리셋 실패 — 중단"; exit 7; }
 
 # 생산자가 아직 살아 있으면 쓰지 않는다 — 발행 문서를 생산자 검증 없이 덮고
-# publish 와 경합한다. systemctl stop 은 실패해도 종료코드를 보지 않으므로
-# 여기서 상태로 확인한다(이슈 #113 PR 리뷰, Codex P1 ②).
-systemctl is-active --quiet cam-operate.service && { echo "!! cam-operate 가 아직 active - 시험 config 를 쓰지 않는다" >&2; exit 11; }
+# publish 와 경합한다. 종료코드로 판정하면 안 된다: 비활성도 조회 실패도 non-zero 라
+# 구분되지 않아, 조회가 깨지면 생산자가 도는 중에도 그대로 쓴다(실측 systemd 249 —
+# inactive rc=3, D-Bus 실패 rc=1 이고 후자는 stdout 이 빈다). 상태 문자열로 보고
+# 모르는 상태·조회 실패에서는 중단한다(이슈 #113 PR 리뷰, Codex P1 ②).
+CAM_STATE=$(systemctl is-active cam-operate.service 2>/dev/null); case $CAM_STATE in inactive|failed) ;; *) echo "!! cam-operate 상태가 [${CAM_STATE:-조회실패}] 다 - 시험 config 를 쓰지 않는다" >&2; exit 11;; esac
 # cp 도중 죽어도 복원되도록 쓰기 "전"에 세운다
 CONF_DIRTY=1
 put_conf "$TESTCONF" || exit 11; sync; log "시험 config 투입"   # 11: 정지·하드리셋 후 쓰기 실패(2 는 보드 무변경)
