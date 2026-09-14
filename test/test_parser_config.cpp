@@ -264,17 +264,27 @@ static void check_owned_string_contents(const ParserClass *parser)
     CHECK(g_strcmp0(parser->arg.cam[3].awb, "owned-awb-3") == 0);
 }
 
-static gchar *required_section_case(const gchar *section, gboolean missing)
+/* 정상 문서를 만들되 키 하나만 변형한다. parent 가 NULL 이면 최상위에서,
+ * 아니면 그 자식 객체 안에서 key 를 찾는다. missing 이면 지우고, 아니면
+ * 문자열 "invalid" 로 치환해 타입 검사 경로를 태운다. */
+static gchar *mutated_runtime_json(const gchar *parent, const gchar *key,
+                                   gboolean missing)
 {
     gchar *contents = runtime_json(NULL, "", "");
     json_object *root = json_tokener_parse(contents);
     g_free(contents);
     CHECK(root != NULL);
 
+    json_object *owner = root;
+    if (parent != NULL) {
+        owner = json_object_object_get(root, parent);
+        CHECK(owner != NULL);
+    }
+
     if (missing)
-        json_object_object_del(root, section);
+        json_object_object_del(owner, key);
     else
-        json_object_object_add(root, section, json_object_new_string("invalid"));
+        json_object_object_add(owner, key, json_object_new_string("invalid"));
 
     gchar *result = g_strdup(
         json_object_to_json_string_ext(root, JSON_C_TO_STRING_PLAIN));
@@ -307,12 +317,12 @@ static void test_required_top_level_objects_fail_closed(void)
 
     for (guint i = 0; i < G_N_ELEMENTS(sections); ++i) {
         ParserClass missing_parser;
-        gchar *missing = required_section_case(sections[i], TRUE);
+        gchar *missing = mutated_runtime_json(NULL, sections[i], TRUE);
         CHECK(parse_fixture(&missing_parser, missing, EXPECT_RELEASED) < 0);
         g_free(missing);
 
         ParserClass non_object_parser;
-        gchar *non_object = required_section_case(sections[i], FALSE);
+        gchar *non_object = mutated_runtime_json(NULL, sections[i], FALSE);
         CHECK(parse_fixture(&non_object_parser, non_object,
                             EXPECT_RELEASED) < 0);
         g_free(non_object);
@@ -483,6 +493,56 @@ static void test_deprecated_dz_is_fatal_and_still_releases_root(void)
     g_free(json);
 }
 
+/* 이슈 #112 — 재파싱이 이전 문서를 해제하면, 2차 문서가 빠뜨린 키의 필드가 해제된
+ * 문서를 가리킨다. json_object_get_value() 는 키가 없으면 대상을 건드리지 않기
+ * 때문이다. init_arg() 없이 연달아 두 번 파싱해 이전 문서가 살아 있는지 본다.
+ *
+ * 이전 문서는 의도적으로 해제하지 않으므로 재파싱 1회당 문서 1개가 샌다. 그 대가로
+ * use-after-free 가 사라진다. 아래 마지막 어서션이 그 누수를 명시적으로 고정한다. */
+static void test_reparse_keeps_previous_root_when_key_is_omitted(void)
+{
+    gchar *full = runtime_json(NULL, "", "");
+    gchar *without_name = mutated_runtime_json("VHL_CAM", "vhl_name", TRUE);
+
+    /* parse_fixture 가 1차 문서의 임시 디렉터리를 스스로 지우므로 2차 문서는
+     * 이 테스트가 따로 만든다. */
+    gchar directory[] = "/tmp/gstapp-parser-reparse-XXXXXX";
+    gchar second_path[512] = {0};
+    CHECK(g_mkdtemp(directory) != NULL);
+    g_snprintf(second_path, sizeof(second_path), "%s/pim_runtime.json", directory);
+    CHECK(g_file_set_contents(second_path, without_name, -1, NULL));
+
+    {
+        ParserClass parser;
+        CHECK(parse_fixture(&parser, full, EXPECT_RETAINED_STRINGS) == 0);
+        const gchar *first_name = parser.arg.ohtName;
+        CHECK(g_strcmp0(first_name, "owned-vhl-name") == 0);
+
+        /* 2차 파싱: init_arg() 를 다시 부르지 않는다. vhl_name 이 없으므로
+         * arg.ohtName 은 1차 문서를 계속 가리킨 채 남는다. */
+        g_probe = ParseProbe();
+        g_active_probe = &g_probe;
+        CHECK(parser.json_parser(second_path, JSON_CAM_OBJ_NAME) == 0);
+        g_active_probe = NULL;
+        CHECK(g_probe.roots_created == 1);
+        /* 1차 문서를 해제했다면 그 파이널라이저가 여기서 1 을 만든다 =
+         * arg.ohtName 은 dangling. 0 이어야 한다. */
+        CHECK(g_probe.roots_finalized == 0);
+        /* 재바인딩되지 않았음을 포인터 동일성으로 본다. 여기서 역참조하지
+         * 않는 것은 의도적이다 — CHECK 는 비치명적이라 위 어서션이 실패해도
+         * 실행이 계속되고, 그 실패는 곧 1차 문서가 해제됐다는 뜻이므로 값을
+         * 읽으면 use-after-free 가 된다. 값 확인은 1차 파싱 직후에 이미 했다. */
+        CHECK(parser.arg.ohtName == first_name);
+    }
+    /* 소멸자는 마지막 문서 하나만 해제한다. 1차 문서는 샌 채로 남는다. */
+    CHECK(g_probe.roots_finalized == 1);
+
+    CHECK(g_remove(second_path) == 0);
+    CHECK(g_rmdir(directory) == 0);
+    g_free(full);
+    g_free(without_name);
+}
+
 /* 이슈 #102 — -S 는 범위 검사가 없어 0..59 밖 값이 guint8 로 절단된 채 splitCheck() 로
  * 들어갔다. check_arg() 가 stdin 경로와 같은 상한(MAX_SPLIT_SEC)으로 되돌리는지 본다.
  * 반환값이 아니라 클램프된 값을 보는데, 클램프가 check_arg() 의 어떤 return 보다 앞이다.
@@ -527,6 +587,7 @@ int main(void)
     test_existing_recoverable_errors_remain_nonfatal();
     test_retained_root_is_released_once_when_parser_is_destroyed();
     test_deprecated_dz_is_fatal_and_still_releases_root();
+    test_reparse_keeps_previous_root_when_key_is_omitted();
     test_out_of_range_split_sec_falls_back_to_default();
 
     printf("\nparser config test: %d checks, %d failures -> %s\n",
