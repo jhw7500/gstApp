@@ -29,6 +29,8 @@ BIN="$D/gstApp.skew-test"
 LOG="$D/run-$TAG.log"
 RUNLOG="$D/runner.log"
 APP_PID=""; MARKER="$D/.runstart"
+# config 를 실제로 덮어쓰기 전에는 복원하지 않는다(중단이 정상 config 를 되돌리면 안 된다).
+CONF_DIRTY=0
 
 mkdir -p "$D"
 log(){ printf '[%s] %s\n' "$(date -Is)" "$*" | tee -a "$RUNLOG"; }
@@ -57,13 +59,17 @@ restore() {
     kill -0 "$APP_PID" 2>/dev/null && { log "SIGKILL $APP_PID"; kill -KILL "$APP_PID" 2>/dev/null; }
   fi
   pkill -x gstApp 2>/dev/null; sleep 3
-  if [ -f "$ORIG" ] && [ -f "$ORIG_MD5" ]; then
-    put_conf "$ORIG"; sync
-    [ "$(md5of "$CONF")" = "$(cat "$ORIG_MD5")" ] \
-      && log "config 복원 검증 OK ($(cat "$ORIG_MD5"))" \
-      || log "!!! config 복원 md5 불일치 — 수동 확인 필요 !!!"
+  if [ "$CONF_DIRTY" -eq 1 ]; then
+    if [ -f "$ORIG" ] && [ -f "$ORIG_MD5" ]; then
+      put_conf "$ORIG"; sync
+      [ "$(md5of "$CONF")" = "$(cat "$ORIG_MD5")" ] \
+        && log "config 복원 검증 OK ($(cat "$ORIG_MD5"))" \
+        || log "!!! config 복원 md5 불일치 — 수동 확인 필요 !!!"
+    else
+      log "!!! 백업 부재 — config 복원 불가 !!!"
+    fi
   else
-    log "!!! 백업 부재 — config 복원 불가 !!!"
+    log "config 미투입 — 복원하지 않는다(발행 문서를 건드린 적이 없다)"
   fi
   hard_reset "restore"              # 운영 지문(@원본)으로 되돌아갈 수 있게 epoch 을 올린다
   systemctl start cam-operate && log "cam-operate 재시작 요청"
@@ -120,6 +126,10 @@ log "시험 config 검증 OK: $V"
 # put_conf "$ORIG" 가 **서비스가 살아 있는 상태의 발행 문서**를 생산자 검증을 우회해
 # 덮어쓰고 "복원 검증 OK" 까지 남긴다. cam-operate.service 의 ExecStartPost 는 그
 # 문서가 validate 를 통과할 때까지 TimeoutStartSec=90s 를 돈다.
+# 위치만으로는 닫히지 않는 창이 남는다 — trap 설치부터 아래 put_conf "$TESTCONF" 까지
+# 사이에 INT/TERM 이 오면 restore 가 도는데, 그 구간 앞부분에서는 서비스가 아직 살아
+# 있다. 그래서 복원은 CONF_DIRTY 로 조건부다(다른 측정 스크립트와 같은 방식).
+# 서비스 재시작과 하드 리셋은 무조건 해도 무해하므로 그대로 둔다.
 trap restore EXIT INT TERM
 
 # ── 3. 정지 → 하드 리셋(epoch↑) → config 투입 → 기동 ────────────────────────
@@ -128,6 +138,8 @@ systemctl stop cam-operate; sleep 3
 pkill -x gstApp 2>/dev/null; pkill -x killcam 2>/dev/null; sleep 3
 hard_reset "pre-run" || { log "!!! 하드 리셋 실패 — 중단"; exit 7; }
 
+# cp 도중 죽어도 복원되도록 쓰기 "전"에 세운다
+CONF_DIRTY=1
 put_conf "$TESTCONF" || exit 11; sync; log "시험 config 투입"   # 11: 정지·하드리셋 후 쓰기 실패(2 는 보드 무변경)
 # 기본은 운영 바이너리. SKEW55A_SRC_BIN 으로 시험 빌드를 지정할 수 있다.
 SRC_BIN="${SKEW55A_SRC_BIN:-/usr/local/bin/gstApp}"
