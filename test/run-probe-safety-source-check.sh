@@ -99,14 +99,31 @@ UNCONDITIONAL_CAM_RESTART = {
 }
 
 # cp 가 $BIN 을 **목적지**로 쓰면서 실패를 치명으로 다루는가.
-# -t / --target-directory 가 붙으면 $BIN 은 소스 피연산자이므로 스테이징이 아니다.
+# -t / --target-directory 가 붙으면 $BIN 은 소스 피연산자라 스테이징이 아니다.
+# 단축 옵션은 인자를 붙여 쓸 수 있고(-t"$D") 묶을 수도 있어서(-ft "$D"), 토큰의 앞쪽
+# **글자들만** 떼어 t 가 있는지 본다. 첫 비알파벳에서 멈추므로 -f/tmp/x 같은 형태의
+# 경로 글자에 걸리지 않고, 대문자 -T(--no-target-directory)는 목적지를 바꾸지 않으므로
+# 소문자만 본다.
 _CP_TO_BIN = re.compile(r'^[ \t]*cp[ \t]+(?P<args>[^\n]*?)"\$BIN"[ \t]*\|\|', re.M)
-_CP_TARGET_DIR = re.compile(r'(?:^|[ \t])(?:-t|--target-directory)(?:=|[ \t]|$)')
+_SHORT_CLUSTER = re.compile(r'^-([A-Za-z]+)')
+
+
+def _uses_target_directory(args):
+    for token in args.split():
+        if token.startswith("--"):
+            if token.split("=", 1)[0] == "--target-directory":
+                return True
+            continue
+        if token.startswith("-"):
+            m = _SHORT_CLUSTER.match(token)
+            if m and "t" in m.group(1):
+                return True
+    return False
 
 
 def _stages_bin_fatally(source):
     for m in _CP_TO_BIN.finditer(source):
-        if _CP_TARGET_DIR.search(m.group("args")):
+        if _uses_target_directory(m.group("args")):
             continue
         return True
     return False
