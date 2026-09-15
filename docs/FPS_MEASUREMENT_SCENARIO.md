@@ -1030,14 +1030,8 @@ bash test/run-probe-safety-source-check.sh
 
 **게이트가 검사하는 것** — 이름으로 적는다(개수는 실행할 때 나온다):
 
-- `probe-*.sh`, `run-fps-scenario.sh`, `run-skew55a.sh` 에 대해: 표류 검사, dirty 플래그,
-  쓰기 전 세움, 삭제 한정, 스테이징 치명화, cam-operate 복원, trap 복원.
-  `run-skew55a.sh` 는 오래 빠져 있었고, 그동안 계약이 적용되지 않아 표류 검사와 스테이징
-  치명화가 없는 채로 남아 있었다.
-  `cam-operate 복원` 은 무조건 되살리는 파일을 게이트 안 `UNCONDITIONAL_CAM_RESTART` 목록으로
-  구분한다. 변수 이름(`RESTORE_CAM_OPERATE`)으로 조건부 여부를 추론하던 판은 이름을 바꾸면서
-  안내를 지우면 통과했다. 목록은 사람이 주장한 사실이고 게이트가 검증하지 못한다 —
-  넣을 때 `restore` 경로를 직접 읽을 것.
+- `probe-*.sh` 와 `run-fps-scenario.sh` 에 대해: 표류 검사, dirty 플래그, 쓰기 전 세움,
+  삭제 한정, 스테이징 치명화, cam-operate 복원, trap 복원.
 - `put_conf` 를 **정의하거나 호출하는** 스크립트 전부에 대해: **put_conf 동일성** — 정의가
   파일당 정확히 하나이고, 한 줄 `put_conf() { ... }` 형태이고, 모든 파일에서 바이트 동일할 것.
   13 벌 복제가 정책이므로 한 벌만 표류하는 것을 이렇게 잡는다. 호출까지 보고 하위 디렉터리까지

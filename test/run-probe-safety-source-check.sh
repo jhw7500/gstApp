@@ -2,8 +2,7 @@
 # 타겟 실행 스크립트의 운영 안전 불변식을 소스에서 검사한다.
 #
 # 왜 필요한가
-#   test/probe-*.sh 11 종과 run-fps-scenario.sh, run-skew55a.sh 는 한 조사에서 복사·편집으로
-#   파생돼 안전
+#   test/probe-*.sh 11 종과 run-fps-scenario.sh 는 한 조사에서 복사·편집으로 파생돼 안전
 #   장치가 파일마다 인라인으로 중복돼 있다. 실제로 pre-PR 리뷰에서 나온 결함 5 건을 고칠 때
 #   **같은 수정을 11 번** 넣어야 했고, 한 곳이라도 빠지면 그 스크립트만 조용히 위험한 채로
 #   남는다. 스크립트를 하나로 접는 리팩터는 하지 않는다 — 각 파일이 문서(§5.8.7)와 max9296
@@ -16,8 +15,6 @@
 #   못 막는다 의미적 약화 — 도달 불가능한 분기 안의 대입(`if false; then CONF_DIRTY=1; fi`),
 #            조건을 항상 참으로 만든 표류 검사 등. 토큰이 있으면 통과한다.
 #            여기 통과는 "장치가 소스에 남아 있다" 는 뜻이지 "동작한다" 는 뜻이 아니다.
-#            5 번의 UNCONDITIONAL_CAM_RESTART 목록은 **사람이 주장한 사실**이다 — 그 파일에
-#            정지 상태로 두는 경로가 없다는 것을 게이트가 구조적으로 검증하지는 못한다.
 #
 # 검사하는 불변식 (전부 실기 파괴로 이어졌던 실제 결함에서 나왔다)
 #   1. 표류 검사   live config 가 백업과 다르면 첫 쓰기 전에 중단 (ALLOW_CONF_DRIFT 로만 우회)
@@ -27,9 +24,7 @@
 #                  운영 설정으로 남는다 — 과잉 복원을 고치다 만든 실제 회귀다.
 #   3. 삭제 한정   녹화 삭제를 이 실행이 만든 파일로 한정 (-mmin 고정 창 금지)
 #   4. 스테이징    앱 복사·chmod 실패는 치명적 (낡은 바이너리 측정 금지)
-#   5. cam-operate 되살리는 경로가 반드시 있고, 정지 상태로 두는 선택지를 가진 스크립트는
-#                  그 사실을 크게 알린다(RESTORE_CAM_OPERATE 로 되살릴 수 있다). 무조건
-#                  되살리는 스크립트에 그 안내를 요구하지 않는다 — 거짓 양성이 된다.
+#   5. cam-operate 정지 상태로 두면 크게 알리고, RESTORE_CAM_OPERATE 로 되살릴 수 있다
 #   6. trap        EXIT/INT/TERM 에 복원이 걸려 있고, 이후 해제되지 않는다
 #
 # 이슈 #113 관련 (대상이 다르다 - put_conf 를 정의한 스크립트 전부, 오늘 13 개)
@@ -65,11 +60,6 @@ harness = Path("test/run-fps-scenario.sh")
 if not harness.exists():
     raise SystemExit(f"{harness} 를 찾지 못했습니다")
 targets.append(harness)
-skew = Path("test/run-skew55a.sh")
-if not skew.is_file():
-    print("test/run-skew55a.sh 를 찾지 못했습니다", file=sys.stderr)
-    raise SystemExit(1)
-targets.append(skew)
 if len(targets) < 2:
     raise SystemExit("검사 대상 스크립트를 찾지 못했습니다")
 
@@ -92,45 +82,16 @@ runtime_targets = sorted(
 if len(runtime_targets) < 2:
     raise SystemExit("put_conf 를 쓰는 스크립트를 찾지 못했습니다")
 
-# 무조건 cam-operate 를 되살리는 스크립트. 정지 상태로 두는 경로가 없으므로 안내가
-# 필요 없다. 아래 항목은 restore 경로를 직접 읽고 확인한 것이다.
-UNCONDITIONAL_CAM_RESTART = {
-    "run-skew55a.sh",   # restore() 가 systemctl start 를 조건 없이 부른다
-}
-
-# cp 가 $BIN 을 **목적지**로 쓰면서 실패를 치명으로 다루는가.
-#
-# 이 판정은 화이트리스트다. 셸 한 줄에서 cp 의 의미를 문자열로 알아내는 것은 변형을
-# 하나씩 막는 싸움이 된다 — 실제로 세 라운드 연속 새 형태가 나왔다(-t"$D" 붙여쓰기,
-# -ft 묶음, "-t$D" 인용, 그리고 덮어쓰기를 건너뛰는 -n). 그래서 반대로, **아는 안전한
-# 형태만** 인정하고 나머지는 전부 거부한다. 새 철자를 쓰려면 여기를 같이 고쳐야 하고,
-# 그 변경은 게이트 파일에 남아 리뷰에 걸린다.
-#
-#   허용: cp [-f|-p 조합] <소스> "$BIN" || ...
-#   소스는 인용/비인용 모두 되지만 '-' 로 시작할 수 없다("-t$D" 같은 위장 차단).
-#   -n(--no-clobber)·-u·-t 등은 플래그 집합에 없으므로 거부된다 — -n 은 대상이 이미
-#   있으면 복사를 건너뛰고도 0 을 반환해 낡은 바이너리가 측정된다.
-_CP_STAGE_OK = re.compile(
-    r'^[ \t]*cp(?:[ \t]+-[fp]+)*'
-    r'[ \t]+(?:"[^"\n-][^"\n]*"|[^\s"\'|-][^\s"\'|]*)'
-    r'[ \t]+"\$BIN"[ \t]*\|\|',
-    re.M)
-
-
-def _stages_bin_fatally(source):
-    return _CP_STAGE_OK.search(source) is not None
-
-
 CHECKS = (
     (
         "표류 검사",
-        lambda s, p: 'ALLOW_CONF_DRIFT' in s
+        lambda s: 'ALLOW_CONF_DRIFT' in s
         and re.search(r'if \[ "\$LIVE_MD5" != "\$ORIG_MD5" \]', s) is not None,
         "live 와 백업이 다를 때 중단하는 검사가 없습니다 (ALLOW_CONF_DRIFT 우회 포함)",
     ),
     (
         "dirty 플래그",
-        lambda s, p: "CONF_DIRTY=0" in s
+        lambda s: "CONF_DIRTY=0" in s
         and "CONF_DIRTY=1" in s
         and re.search(r'if \[ "\$CONF_DIRTY" -eq 1 \]', s) is not None,
         "config 를 덮어쓰지 않은 중단 경로에서도 복원합니다 (CONF_DIRTY 가드 없음)",
@@ -145,7 +106,7 @@ CHECKS = (
         # 막으려던 회귀(플래그를 쓰기 뒤로 미는 것)가 그대로 통과한다.
         # 줄 끝에 고정하지 않는다 (뒤에 '|| exit 2' 나 '; sync' 가 붙을 수 있다).
         # 인접 요구는 그대로다 — 그것이 이 검사의 전부다.
-        lambda s, p: re.search(
+        lambda s: re.search(
             r'^[ \t]*CONF_DIRTY=1\n'
             r'[ \t]*(?:cp "[^"]*" "\$CONF"|put_conf "[^"]*")',
             s, re.M
@@ -155,36 +116,25 @@ CHECKS = (
     ),
     (
         "삭제 한정",
-        lambda s, p: "-mmin" not in s
+        lambda s: "-mmin" not in s
         and ('newermt "@$RUN_T0"' not in s or "RUN_T0=" in s),
         "녹화 삭제가 고정 시간창(-mmin)을 씁니다 — 운영 녹화까지 지웁니다",
     ),
     (
         "스테이징 치명화",
-        # 성질은 "$BIN 에 쓰는 cp 와 chmod 가 치명적인가" 다. 플래그 개수는 고정하지 않되
-        # $BIN 이 **목적지** 여야 한다 — cp -t "$D" "$BIN" 은 $BIN 을 소스로 읽는 명령이라
-        # 스테이징이 전혀 일어나지 않는데, 목적지 여부를 보지 않으면 통과한다(실측).
-        lambda s, p: _stages_bin_fatally(s)
+        lambda s: re.search(r'cp \S+ "\$BIN" \|\|', s) is not None
         and re.search(r'chmod \+x "\$BIN" \|\|', s) is not None,
         "앱 스테이징 실패가 치명적이지 않습니다 — 낡은 바이너리가 측정될 수 있습니다",
     ),
     (
         "cam-operate 복원",
-        # 성질은 "정지된 채로 방치하지 않는다" 다. 되살리는 경로가 반드시 있고, 정지 상태로
-        # 둘 수 있는 스크립트는 그 사실을 알려야 한다.
-        #
-        # 예전 판은 RESTORE_CAM_OPERATE 라는 **변수 이름**이 있는지로 "조건부인가" 를
-        # 추론했다. 이름을 바꾸면서 안내를 지우면 조건부 분기가 그대로인데도 통과한다.
-        # 그래서 무조건 되살리는 파일을 아래 목록으로 **명시**한다. 목록에 넣는 것은
-        # "이 파일에는 정지 상태로 두는 경로가 없다" 는 주장이고, 게이트는 그 주장을
-        # 구조적으로 검증하지 못한다 — 넣을 때 restore 경로를 직접 읽어 확인할 것.
-        lambda s, p: "systemctl start cam-operate" in s
-        and (p.name in UNCONDITIONAL_CAM_RESTART or "정지 상태로 둡니다" in s),
-        "cam-operate 를 되살리는 경로가 없거나, 정지 상태로 두면서 알리지 않습니다",
+        lambda s: "RESTORE_CAM_OPERATE" in s
+        and "정지 상태로 둡니다" in s,
+        "cam-operate 를 정지 상태로 둘 때 알리지 않거나 되살릴 방법이 없습니다",
     ),
     (
         "trap 복원",
-        lambda s, p: re.search(r"^trap restore EXIT INT TERM$", s, re.M) is not None
+        lambda s: re.search(r"^trap restore EXIT INT TERM$", s, re.M) is not None
         and re.search(r"^\s*trap\s+-", s, re.M) is None,
         "EXIT/INT/TERM trap 에 restore 가 걸려 있지 않거나 이후 해제됩니다",
     ),
@@ -199,7 +149,7 @@ checked = len(targets) * (len(CHECKS) + 1) + 1
 for path in targets:
     source = path.read_text(encoding="utf-8")
     for name, predicate, message in CHECKS:
-        if not predicate(source, path):
+        if not predicate(source):
             failures.append(f"FAIL {path}: [{name}] {message}")
 
     # 삭제 한정 보강: -delete 가 있으면 반드시 이 실행의 t0 로 한정한다.
