@@ -73,7 +73,7 @@ restore() {
       else
         # 오늘은 도달하지 않는다 - ORIG_MD5 는 trap 설치 전에 비어 있지 않음이 보장된다.
         # trap 을 앞으로 옮기면 살아나므로 방어적으로 남긴다. 확인:
-        #   grep -n 'ORIG_MD5=\|^trap restore' test/run-skew55a.sh
+        #   grep -n 'ORIG_MD5=\|-n "$ORIG_MD5"\|^trap restore' test/run-skew55a.sh
         log "!!! 백업 md5 가 비어 복원 검증을 못 했다 — 수동 확인 필요 !!!"
       fi
     else
@@ -107,19 +107,36 @@ fi
 # ── 1. 원본 백업 (최초 1회, 절대 덮지 않음) ──────────────────────────────────
 if [ ! -f "$ORIG" ]; then
   [ "$(jq -r '.VHL_CAM.i2c1.ch2.enable' "$CONF")" = "false" ] || { log "!!! 배포 원본이 아닌 듯(ch2.enable!=false). 중단"; exit 3; }
-  cp "$CONF" "$ORIG"; md5of "$ORIG" > "$ORIG_MD5_FILE"; log "원본 백업 생성"
+  cp "$CONF" "$ORIG" || { log "!!! 백업 생성 실패: $CONF -> $ORIG"; exit 2; }
+  md5of "$ORIG" > "$ORIG_MD5_FILE" || { log "!!! 백업 지문 기록 실패: $ORIG_MD5_FILE"; exit 2; }
+  log "원본 백업 생성"
 fi
-# 표류 검사의 기준은 **복원이 실제로 쓸 파일**에서 직접 계산한다. 기록해 둔 .md5 문자열을
-# 믿으면, 백업 파일과 기록이 어긋났을 때 검사를 통과하고 put_conf "$ORIG" 가 어긋난 백업을
-# 발행 문서로 내보낸 뒤에야 불일치를 로그로 남긴다(그때는 이미 늦다 - 하드리셋과
-# cam-operate 기동까지 진행하고 rc=0 으로 끝난다). probe-*.sh 11 벌이 같은 이유로 매 회차
-# 백업 파일을 직접 해싱한다:
-#   grep -n 'ORIG_MD5=' test/*.sh
-# .orig.md5 는 사람이 읽는 기록으로만 남긴다 - 판정에는 쓰지 않는다.
+# 기준은 **셋이 모두 일치**해야 한다: live($CONF) == 백업 파일($ORIG) == 기록(.orig.md5).
+# 한쪽만 보면 반대 방향으로 각각 뚫린다.
+#   기록만 보면 - 백업 '파일' 이 변조돼도 live==기록 이면 통과하고, put_conf "$ORIG" 가
+#                 그 파일을 발행 문서로 내보낸 뒤에야 불일치를 로그로 남긴다.
+#   파일만 보면 - 오염된 백업이 스스로를 인증한다. 크래시로 시험 config 가 live 로 남은 뒤
+#                 운영자가 백업을 live 로 덮으면 live==파일 이 되어 통과하고, 시험 설정이
+#                 '원본' 으로 발행되면서 "복원 검증 OK" 와 rc=0 까지 찍힌다.
+# 기록은 백업 생성 시점의 독립 증인이라 회차를 넘어 지속된다 - 그래서 둘 다 본다.
 ORIG_MD5=$(md5of "$ORIG")
 # md5of 는 읽기에 실패해도 rc=0 에 빈 문자열을 낸다. 빈 기준으로는 표류 검사가 무의미하다.
+# (0 바이트 파일은 빈 문자열이 아니라 d41d8c.. 해시를 내므로 이 가드로는 안 걸린다 -
+#  그건 뒤의 jq 시험 config 생성이 잡는다.)
 [ -n "$ORIG_MD5" ] || { log "!!! 백업 md5 를 계산하지 못했다: $ORIG — 백업을 확인할 것"; exit 2; }
-log "백업 기준 md5 $ORIG_MD5 ($ORIG)"
+RECORDED_MD5=$(cat "$ORIG_MD5_FILE" 2>/dev/null)
+# 이 검사는 ALLOW_CONF_DRIFT 로 우회되지 않는다. 그 스위치는 'live 가 백업과 다름' 을
+# 승인하는 것이지 '백업 자체를 믿을 수 없음' 을 승인하는 것이 아니다.
+if [ "$ORIG_MD5" != "$RECORDED_MD5" ]; then
+  log "중단: 백업 파일이 생성 시점 지문과 다릅니다 — 백업을 믿을 수 없습니다."
+  log "  파일=$ORIG_MD5  ($ORIG)"
+  log "  기록=${RECORDED_MD5:-(없음 또는 빈 값)}  ($ORIG_MD5_FILE)"
+  log "  백업을 다시 잡으려면 **둘을 함께** 지우고 재실행하세요(하나만 지우면 안 됩니다):"
+  log "    rm -f '$ORIG' '$ORIG_MD5_FILE'"
+  log "  단, 그때 live 문서가 배포 원본인지 먼저 확인하세요 - 그것이 새 기준이 됩니다."
+  exit 2
+fi
+log "백업 기준 md5 $ORIG_MD5 (파일·기록 일치)"
 LIVE_MD5=$(md5of "$CONF")
 
 # 표류 검사 — 백업을 재사용하는 회차는 위의 ch2.enable 검사를 타지 않으므로, live 문서가
@@ -133,7 +150,9 @@ if [ "$LIVE_MD5" != "$ORIG_MD5" ]; then
     log "중단: live config 가 백업과 다릅니다."
     log "  live  =$LIVE_MD5  ($CONF)"
     log "  backup=$ORIG_MD5  ($ORIG)"
-    log "  백업을 갱신하거나, 되돌아가도 좋다면 ALLOW_CONF_DRIFT=1 로 다시 실행하세요."
+    log "  이 상태는 앞선 회차가 남긴 시험 config 일 수 있습니다 - 그렇다면 복원이 필요합니다."
+    log "  되돌아가도 좋다면 ALLOW_CONF_DRIFT=1 로 다시 실행하세요(측정 뒤 백업 시점으로 복원됩니다)."
+    log "  백업을 live 로 덮지 마세요 - 오염된 백업이 이후 회차에서 '원본' 으로 발행됩니다."
     exit 2
   fi
 fi
