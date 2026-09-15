@@ -25,6 +25,12 @@ workflows:
     enabled: true
     description: "Build and test the package"
 
+  # test/ 의 소스 계약 게이트. 종전에는 저장소에 있기만 하고 CI 어디에서도 실행되지
+  # 않았다 — build-test 는 빌드만 한다. 전부 보드 없이 도는 소스 문자열 검사다.
+  source-contracts:
+    enabled: true
+    description: "Source contract gates for test/ scripts (no hardware needed)"
+
   # Shared Gemini workflows
   gemini-dispatch:
     enabled: true

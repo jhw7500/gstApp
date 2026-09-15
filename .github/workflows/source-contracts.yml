@@ -1,0 +1,107 @@
+name: Source Contracts
+
+# test/ 의 소스 계약 게이트를 CI 에서 돌린다.
+#
+# 종전에는 이 게이트들이 저장소에 있기만 하고 **CI 어디에서도 실행되지 않았다**
+# (build-test.yml 은 빌드만 한다). 사람이 손으로 돌릴 때만 검사됐으므로, 안전 장치가
+# 빠진 변경이 초록으로 머지될 수 있었다.
+#
+# 전부 소스 문자열 검사라 **타겟 보드가 필요 없다** — 파일 읽기와 임시 디렉터리만 쓴다.
+
+# paths 필터를 두지 않는다.
+#   게이트 7 종 중 5 종은 **저장소 루트의 프로덕션 소스**를 읽는다 - main.cpp,
+#   videoBin.cpp, parser.cpp/h, util.cpp/h, muxSinkBin.cpp, encoderBin.cpp,
+#   audioBin.cpp, rtspServerBin.cpp, rtspSync.cpp, rtspFrameId.h.
+#   'test/**' 로 거르면 videoBin.cpp 만 고친 PR 에서 게이트가 아예 돌지 않는다 -
+#   바로 그 게이트들이 막으라고 있는 변경인데 초록으로 통과한다.
+#   경로를 열거하면 새 게이트가 새 파일을 읽기 시작할 때 조용히 빠진다(#124 의
+#   블랙리스트 교훈과 같다). 잡은 실측 0.3 초라 항상 돌려도 싸다.
+on:
+  push:
+    branches: [ main, master ]
+  pull_request:
+    branches: [ main, master ]
+  workflow_dispatch:
+    inputs:
+      force_run:
+        description: 'Run even if disabled in config'
+        type: boolean
+        default: false
+
+jobs:
+  check-enabled:
+    name: Check if enabled
+    runs-on: ubuntu-latest
+    outputs:
+      enabled: ${{ steps.check.outputs.enabled }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          sparse-checkout: .github
+
+      - name: Check workflow config
+        id: check
+        uses: ./.github/actions/check-workflow-enabled
+        with:
+          workflow-name: source-contracts
+          force-run: ${{ github.event.inputs.force_run || 'false' }}
+
+  source-contracts:
+    name: Source Contracts
+    needs: check-enabled
+    if: needs.check-enabled.outputs.enabled == 'true'
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Run source contract gates
+        run: |
+          set -uo pipefail
+          # 이름으로 고르므로 앞으로 추가되는 게이트도 자동으로 들어온다.
+          mapfile -t gates < <(ls test/*source-check*.sh test/run-gate-selftest.sh 2>/dev/null)
+          if [ "${#gates[@]}" -eq 0 ]; then
+            echo "::error::검사 대상 게이트를 찾지 못했습니다"
+            exit 1
+          fi
+          fail=0
+          for g in "${gates[@]}"; do
+            echo "::group::$g"
+            if bash "$g"; then
+              echo "  -> PASSED"
+              printf '| `%s` | PASSED |\n' "$g" >> "$GITHUB_STEP_SUMMARY.rows"
+            else
+              rc=$?
+              echo "::error file=$g::$g 가 rc=$rc 로 실패했습니다"
+              printf '| `%s` | **FAILED (rc=%s)** |\n' "$g" "$rc" >> "$GITHUB_STEP_SUMMARY.rows"
+              fail=$((fail + 1))
+            fi
+            echo "::endgroup::"
+          done
+          {
+            echo "## Source Contracts"
+            echo ""
+            echo "| 게이트 | 결과 |"
+            echo "|---|---|"
+            cat "$GITHUB_STEP_SUMMARY.rows"
+            echo ""
+            echo "게이트 ${#gates[@]} 종 중 실패 $fail 종."
+          } >> "$GITHUB_STEP_SUMMARY"
+          rm -f "$GITHUB_STEP_SUMMARY.rows"
+          [ "$fail" -eq 0 ] || exit 1
+
+  skipped:
+    name: Workflow Skipped
+    needs: check-enabled
+    if: needs.check-enabled.outputs.enabled != 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Notice
+        run: |
+          echo "::notice::Source Contracts workflow is disabled in .github/workflow-config.yml"
+          {
+            echo "## Workflow Skipped"
+            echo "Source Contracts is disabled in workflow-config.yml"
+          } >> "$GITHUB_STEP_SUMMARY"
