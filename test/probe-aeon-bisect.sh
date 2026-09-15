@@ -86,7 +86,9 @@ if [ "$LIVE_MD5" != "$ORIG_MD5" ]; then
 		echo "중단: live config 가 백업과 다릅니다."
 		echo "  live  =$LIVE_MD5  ($CONF)"
 		echo "  backup=$ORIG_MD5  ($BACKUP)"
-		echo "  백업을 갱신하거나, 되돌아가도 좋다면 ALLOW_CONF_DRIFT=1 로 다시 실행하세요."
+		echo "  앞선 회차가 남긴 시험 config 일 수 있습니다. 되돌아가도 좋다면"
+		echo "  ALLOW_CONF_DRIFT=1 로 다시 실행하세요(측정 뒤 백업 내용으로 복원됩니다)."
+		echo "  백업을 live 로 덮지 마세요 - 이후 회차가 그것을 '원본' 으로 발행합니다."
 		exit 2
 	fi
 fi
