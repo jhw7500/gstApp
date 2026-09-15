@@ -71,6 +71,9 @@ restore() {
           && log "config 복원 검증 OK ($ORIG_MD5)" \
           || log "!!! config 복원 md5 불일치 — 수동 확인 필요 !!!"
       else
+        # 오늘은 도달하지 않는다 - ORIG_MD5 는 trap 설치 전에 비어 있지 않음이 보장된다.
+        # trap 을 앞으로 옮기면 살아나므로 방어적으로 남긴다. 확인:
+        #   grep -n 'ORIG_MD5=\|^trap restore' test/run-skew55a.sh
         log "!!! 백업 md5 가 비어 복원 검증을 못 했다 — 수동 확인 필요 !!!"
       fi
     else
@@ -104,14 +107,19 @@ fi
 # ── 1. 원본 백업 (최초 1회, 절대 덮지 않음) ──────────────────────────────────
 if [ ! -f "$ORIG" ]; then
   [ "$(jq -r '.VHL_CAM.i2c1.ch2.enable' "$CONF")" = "false" ] || { log "!!! 배포 원본이 아닌 듯(ch2.enable!=false). 중단"; exit 3; }
-  cp "$CONF" "$ORIG"; md5of "$ORIG" > "$ORIG_MD5_FILE"; log "원본 백업 생성 (md5 $(cat "$ORIG_MD5_FILE"))"
-else
-  log "기존 백업 사용 (md5 $(cat "$ORIG_MD5_FILE"))"
+  cp "$CONF" "$ORIG"; md5of "$ORIG" > "$ORIG_MD5_FILE"; log "원본 백업 생성"
 fi
-[ -f "$ORIG_MD5_FILE" ] || { log "!!! 백업 md5 파일이 없다: $ORIG_MD5_FILE"; exit 2; }
-ORIG_MD5=$(cat "$ORIG_MD5_FILE")
-# 빈 체크섬으로 진행하면 표류 검사가 무의미해지고 복원 검증도 못 한다.
-[ -n "$ORIG_MD5" ] || { log "!!! 백업 md5 가 비었다: $ORIG_MD5_FILE — 백업을 다시 만들 것"; exit 2; }
+# 표류 검사의 기준은 **복원이 실제로 쓸 파일**에서 직접 계산한다. 기록해 둔 .md5 문자열을
+# 믿으면, 백업 파일과 기록이 어긋났을 때 검사를 통과하고 put_conf "$ORIG" 가 어긋난 백업을
+# 발행 문서로 내보낸 뒤에야 불일치를 로그로 남긴다(그때는 이미 늦다 - 하드리셋과
+# cam-operate 기동까지 진행하고 rc=0 으로 끝난다). probe-*.sh 11 벌이 같은 이유로 매 회차
+# 백업 파일을 직접 해싱한다:
+#   grep -n 'ORIG_MD5=' test/*.sh
+# .orig.md5 는 사람이 읽는 기록으로만 남긴다 - 판정에는 쓰지 않는다.
+ORIG_MD5=$(md5of "$ORIG")
+# md5of 는 읽기에 실패해도 rc=0 에 빈 문자열을 낸다. 빈 기준으로는 표류 검사가 무의미하다.
+[ -n "$ORIG_MD5" ] || { log "!!! 백업 md5 를 계산하지 못했다: $ORIG — 백업을 확인할 것"; exit 2; }
+log "백업 기준 md5 $ORIG_MD5 ($ORIG)"
 LIVE_MD5=$(md5of "$CONF")
 
 # 표류 검사 — 백업을 재사용하는 회차는 위의 ch2.enable 검사를 타지 않으므로, live 문서가
