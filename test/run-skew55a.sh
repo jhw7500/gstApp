@@ -62,11 +62,17 @@ restore() {
   fi
   pkill -x gstApp 2>/dev/null; sleep 3
   if [ "$CONF_DIRTY" -eq 1 ]; then
-    if [ -f "$ORIG" ] && [ -n "$ORIG_MD5" ]; then
+    # 복원 여부는 백업 '파일' 로 판정한다. md5 는 검증에만 쓴다 — md5 가 비었다고
+    # 복원을 건너뛰면 시험 config 가 그대로 남은 채 cam-operate 가 올라온다.
+    if [ -f "$ORIG" ]; then
       put_conf "$ORIG"; sync
-      [ "$(md5of "$CONF")" = "$ORIG_MD5" ] \
-        && log "config 복원 검증 OK ($ORIG_MD5)" \
-        || log "!!! config 복원 md5 불일치 — 수동 확인 필요 !!!"
+      if [ -n "$ORIG_MD5" ]; then
+        [ "$(md5of "$CONF")" = "$ORIG_MD5" ] \
+          && log "config 복원 검증 OK ($ORIG_MD5)" \
+          || log "!!! config 복원 md5 불일치 — 수동 확인 필요 !!!"
+      else
+        log "!!! 백업 md5 가 비어 복원 검증을 못 했다 — 수동 확인 필요 !!!"
+      fi
     else
       log "!!! 백업 부재 — config 복원 불가 !!!"
     fi
@@ -104,6 +110,8 @@ else
 fi
 [ -f "$ORIG_MD5_FILE" ] || { log "!!! 백업 md5 파일이 없다: $ORIG_MD5_FILE"; exit 2; }
 ORIG_MD5=$(cat "$ORIG_MD5_FILE")
+# 빈 체크섬으로 진행하면 표류 검사가 무의미해지고 복원 검증도 못 한다.
+[ -n "$ORIG_MD5" ] || { log "!!! 백업 md5 가 비었다: $ORIG_MD5_FILE — 백업을 다시 만들 것"; exit 2; }
 LIVE_MD5=$(md5of "$CONF")
 
 # 표류 검사 — 백업을 재사용하는 회차는 위의 ch2.enable 검사를 타지 않으므로, live 문서가

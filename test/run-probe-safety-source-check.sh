@@ -99,34 +99,26 @@ UNCONDITIONAL_CAM_RESTART = {
 }
 
 # cp 가 $BIN 을 **목적지**로 쓰면서 실패를 치명으로 다루는가.
-# -t / --target-directory 가 붙으면 $BIN 은 소스 피연산자라 스테이징이 아니다.
-# 단축 옵션은 인자를 붙여 쓸 수 있고(-t"$D") 묶을 수도 있어서(-ft "$D"), 토큰의 앞쪽
-# **글자들만** 떼어 t 가 있는지 본다. 첫 비알파벳에서 멈추므로 -f/tmp/x 같은 형태의
-# 경로 글자에 걸리지 않고, 대문자 -T(--no-target-directory)는 목적지를 바꾸지 않으므로
-# 소문자만 본다.
-_CP_TO_BIN = re.compile(r'^[ \t]*cp[ \t]+(?P<args>[^\n]*?)"\$BIN"[ \t]*\|\|', re.M)
-_SHORT_CLUSTER = re.compile(r'^-([A-Za-z]+)')
-
-
-def _uses_target_directory(args):
-    for token in args.split():
-        if token.startswith("--"):
-            if token.split("=", 1)[0] == "--target-directory":
-                return True
-            continue
-        if token.startswith("-"):
-            m = _SHORT_CLUSTER.match(token)
-            if m and "t" in m.group(1):
-                return True
-    return False
+#
+# 이 판정은 화이트리스트다. 셸 한 줄에서 cp 의 의미를 문자열로 알아내는 것은 변형을
+# 하나씩 막는 싸움이 된다 — 실제로 세 라운드 연속 새 형태가 나왔다(-t"$D" 붙여쓰기,
+# -ft 묶음, "-t$D" 인용, 그리고 덮어쓰기를 건너뛰는 -n). 그래서 반대로, **아는 안전한
+# 형태만** 인정하고 나머지는 전부 거부한다. 새 철자를 쓰려면 여기를 같이 고쳐야 하고,
+# 그 변경은 게이트 파일에 남아 리뷰에 걸린다.
+#
+#   허용: cp [-f|-p 조합] <소스> "$BIN" || ...
+#   소스는 인용/비인용 모두 되지만 '-' 로 시작할 수 없다("-t$D" 같은 위장 차단).
+#   -n(--no-clobber)·-u·-t 등은 플래그 집합에 없으므로 거부된다 — -n 은 대상이 이미
+#   있으면 복사를 건너뛰고도 0 을 반환해 낡은 바이너리가 측정된다.
+_CP_STAGE_OK = re.compile(
+    r'^[ \t]*cp(?:[ \t]+-[fp]+)*'
+    r'[ \t]+(?:"[^"\n-][^"\n]*"|[^\s"\'|-][^\s"\'|]*)'
+    r'[ \t]+"\$BIN"[ \t]*\|\|',
+    re.M)
 
 
 def _stages_bin_fatally(source):
-    for m in _CP_TO_BIN.finditer(source):
-        if _uses_target_directory(m.group("args")):
-            continue
-        return True
-    return False
+    return _CP_STAGE_OK.search(source) is not None
 
 
 CHECKS = (
