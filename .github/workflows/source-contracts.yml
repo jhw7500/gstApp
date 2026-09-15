@@ -8,19 +8,19 @@ name: Source Contracts
 #
 # 전부 소스 문자열 검사라 **타겟 보드가 필요 없다** — 파일 읽기와 임시 디렉터리만 쓴다.
 
+# paths 필터를 두지 않는다.
+#   게이트 7 종 중 5 종은 **저장소 루트의 프로덕션 소스**를 읽는다 - main.cpp,
+#   videoBin.cpp, parser.cpp/h, util.cpp/h, muxSinkBin.cpp, encoderBin.cpp,
+#   audioBin.cpp, rtspServerBin.cpp, rtspSync.cpp, rtspFrameId.h.
+#   'test/**' 로 거르면 videoBin.cpp 만 고친 PR 에서 게이트가 아예 돌지 않는다 -
+#   바로 그 게이트들이 막으라고 있는 변경인데 초록으로 통과한다.
+#   경로를 열거하면 새 게이트가 새 파일을 읽기 시작할 때 조용히 빠진다(#124 의
+#   블랙리스트 교훈과 같다). 잡은 실측 0.3 초라 항상 돌려도 싸다.
 on:
   push:
     branches: [ main, master ]
-    paths:
-      - 'test/**'
-      - '.github/workflows/source-contracts.yml'
-      - '.github/workflow-config.yml'
   pull_request:
     branches: [ main, master ]
-    paths:
-      - 'test/**'
-      - '.github/workflows/source-contracts.yml'
-      - '.github/workflow-config.yml'
   workflow_dispatch:
     inputs:
       force_run:
