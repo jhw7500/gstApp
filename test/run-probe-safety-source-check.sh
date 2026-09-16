@@ -222,6 +222,45 @@ def _restore_propagates_exit(source):
     return indent == base and _EXIT_RC.match(last[len(base):]) is not None
 
 
+# assert_daemon_off 가 이름대로 assert 하는가, 그리고 깨진 개수 관용구를 쓰지 않는가.
+#
+# 종전 본문은 정지·종료를 **시도만** 하고 결과를 로그로 남긴 뒤 그대로 진행했다.
+# 실측(스텁 A/B): cam-operate 가 안 멈춘 경우와 gstApp 이 남은 경우 모두 스크립트가
+# 계속 진행했다 — 운영 데몬이 살아 있는 채로 시험 config 를 쓰고 측정한다는 뜻이다.
+#
+# 개수 관용구: `pgrep -cx X || echo 0` 은 없을 때 값이 "0\n0" 이 된다. pgrep -c 가
+# "0" 을 찍고 rc=1 로 끝나기 때문이다(실측). 산술 비교가 오류나고 로그도 두 줄로 깨진다.
+_ASSERT_OPEN = re.compile(r'^assert_daemon_off\(\)[ \t]*\{[ \t]*$', re.M)
+_BROKEN_COUNT = re.compile(r'pgrep -c\S*[^\n|]*\|\|[ \t]*echo')
+
+
+def _assert_daemon_body(source):
+    m = _ASSERT_OPEN.search(source)
+    if m is None:
+        return None
+    body = []
+    for line in source[m.end():].splitlines():
+        if line.startswith("}"):
+            break
+        body.append(line)
+    return body
+
+
+def _assert_daemon_off_asserts(source):
+    body = _assert_daemon_body(source)
+    if body is None:          # 정의하지 않은 파일은 이 검사의 대상이 아니다
+        return True
+    return any(re.search(r'\bexit [0-9]+\b', line) for line in body)
+
+
+def _no_broken_count_idiom(source):
+    # 전체가 주석인 줄은 뺀다. 이 관용구를 **설명하는** 주석이 실제 사용으로 잡혔다
+    # (첫 실행에서 6 건 거짓 양성). 줄 끝에 붙은 주석 안의 언급은 여전히 잡힌다 —
+    # 그 경우는 코드와 같은 줄이라 구분할 근거가 약하다.
+    code = "\n".join(l for l in source.splitlines() if not l.lstrip().startswith("#"))
+    return _BROKEN_COUNT.search(code) is None
+
+
 CHECKS = (
     (
         "표류 검사",
@@ -284,6 +323,18 @@ CHECKS = (
         _restore_reentry_guarded,
         "restore 재진입 가드가 없습니다 — SIGINT 에서 복원 본문이 두 번 돕니다 "
         "(config 두 번 쓰기, cam-operate 두 번 기동, sleep 중복)",
+    ),
+    (
+        "assert_daemon_off 가 assert",
+        _assert_daemon_off_asserts,
+        "assert_daemon_off 가 정지·종료 실패에서 중단하지 않습니다 "
+        "— 운영 데몬이 살아 있는 채로 시험 config 를 쓰고 측정하게 됩니다",
+    ),
+    (
+        "개수 관용구",
+        _no_broken_count_idiom,
+        "`pgrep -c ... || echo 0` 은 없을 때 값이 \"0\\n0\" 이 됩니다 "
+        "(pgrep -c 가 0 을 찍고 rc=1 로 끝남) — 산술 비교가 오류납니다",
     ),
     (
         "restore 종료 전파",
