@@ -261,6 +261,28 @@ def _no_broken_count_idiom(source):
     return _BROKEN_COUNT.search(code) is None
 
 
+# md5 기록을 기준으로 삼는 스크립트가 그 기록의 존재와 비어있음을 가드하는가.
+#
+# 무가드 `cat` 은 기록이 없을 때 stderr 만 흘리고 기준을 **빈 문자열**로 만든다.
+# 실측(격리 A/B, run-fps-scenario.sh): 백업은 있고 .md5 만 없는 상태에서
+#   ALLOW_CONF_DRIFT=1 -> rc=0 으로 진행하고 ORIG_MD5=[] 로 복원 검증까지 한다.
+# ALLOW_CONF_DRIFT 는 "live 가 백업과 다름" 을 승인하는 스위치지 "백업을 믿을 수 없음"
+# 을 승인하는 스위치가 아니다(PR #122 5db4c60 의 결정).
+#
+# 기록을 **읽지 않는** 스크립트(probe 11 벌)는 이 검사의 대상이 아니다.
+# 기록 **쓰기** 실패 삼킴은 이 검사의 대상이 아니다 — run-skew55a.sh 가 그렇지만
+# 뒤의 [ -n "$ORIG_MD5" ] 가드가 결과를 잡는다(실측). 진단이 나빠질 뿐이다.
+_MD5_RECORD_READ = re.compile(r'ORIG_MD5=\$\(cat ')
+
+
+def _md5_record_guarded(source):
+    if _MD5_RECORD_READ.search(source) is None:
+        return True                       # 기록을 읽지 않으면 대상 아님
+    has_exists = re.search(r'\[ -f "\$(?:BACKUP\.md5|ORIG_MD5_FILE)" \]', source) is not None
+    has_nonempty = re.search(r'\[ -n "\$ORIG_MD5" \]', source) is not None
+    return has_exists and has_nonempty
+
+
 CHECKS = (
     (
         "표류 검사",
@@ -329,6 +351,12 @@ CHECKS = (
         _assert_daemon_off_asserts,
         "assert_daemon_off 가 정지·종료 실패에서 중단하지 않습니다 "
         "— 운영 데몬이 살아 있는 채로 시험 config 를 쓰고 측정하게 됩니다",
+    ),
+    (
+        "md5 기록 가드",
+        _md5_record_guarded,
+        "md5 기록을 기준으로 쓰면서 존재·비어있음을 가드하지 않거나, 기록 쓰기 "
+        "실패를 삼킵니다 — 기준이 빈 문자열이 되어 ALLOW_CONF_DRIFT 로 진행됩니다",
     ),
     (
         "개수 관용구",

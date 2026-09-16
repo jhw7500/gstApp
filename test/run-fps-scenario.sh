@@ -251,9 +251,17 @@ log() { echo "$*" | tee -a "$LOG"; }
 # --------------------------------------------------------------- 설정 백업
 if [ ! -e "$BACKUP" ]; then
 	cp "$CONF" "$BACKUP" || exit 2
-	md5sum "$BACKUP" | awk '{print $1}' >"$BACKUP.md5"
+	# 기록 쓰기 실패를 삼키면 다음 회차가 빈 기준으로 돈다. run-skew55a.sh 와 같은 가드다.
+	md5sum "$BACKUP" | awk '{print $1}' >"$BACKUP.md5" \
+		|| { echo "백업 md5 기록 실패: $BACKUP.md5"; exit 2; }
 fi
+# 무가드 cat 은 기록이 없을 때 stderr 만 흘리고 ORIG_MD5 를 빈 문자열로 만든다. 그러면
+# 아래 표류 검사가 "live != (빈칸)" 이라는 **틀린 원인**을 대고, 운영자를 두 개의 잘못된
+# 복구로 유도한다 — ALLOW_CONF_DRIFT=1(미검증 백업으로 복원) 또는 cp $CONF $BACKUP
+# (PR #122 5db4c60 이 문구까지 지워가며 막은 오염 경로).
+[ -f "$BACKUP.md5" ] || { echo "백업 md5 기록이 없다: $BACKUP.md5 — 백업을 다시 만들 것"; exit 2; }
 ORIG_MD5=$(cat "$BACKUP.md5")
+[ -n "$ORIG_MD5" ] || { echo "백업 md5 기록이 비었다: $BACKUP.md5 — 백업을 다시 만들 것"; exit 2; }
 LIVE_MD5=$(md5sum "$CONF" | awk '{print $1}')
 # 백업은 아무 스크립트도 갱신하지 않으므로, live 가 백업과 다르면 그 사이 운영 설정이 바뀐
 # 것이다. 그대로 진행하면 복원이 그 변경을 조용히 되돌린다. 복원 후 md5 검사는 복사본을
