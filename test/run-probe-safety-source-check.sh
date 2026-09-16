@@ -119,10 +119,19 @@ _CP_STAGE_OK = re.compile(
 # 들여쓰기(첫 비어있지 않은 줄의 들여쓰기)와 **정확히 같은** 깊이에 있는 줄만
 # 무조건으로 인정한다. 조건문·루프 안이면 더 깊으므로 걸러진다.
 #
+# 토큰이 줄 **아무 위치에나** 있으면 인정하던 판정에는 구멍이 있었다(PR #127 리뷰
+# RVW-6bc965e71d6e). 같은 깊이의 한 줄 조건문과 주석이 전부 통과했다 — 실측:
+#   [ "$F" = 1 ] && systemctl start cam-operate      통과했다
+#   # systemctl start cam-operate                    통과했다
+#   if [ "$F" = 1 ]; then systemctl start ...; fi    통과했다
+# 그래서 들여쓰기를 뗀 뒤 **줄이 그 명령으로 시작**해야 인정한다. 위 셋은 각각
+# '[', '#', 'if' 로 시작하므로 걸러진다. 뒤에 붙는 && 는 무방하다 — 명령 자체는
+# 무조건 실행되고 로그만 조건부다(run-skew55a.sh 의 실제 철자가 그렇다).
+#
 # 이것은 구조 판정이지 의미 판정이 아니다. `if true; then` 으로 감싸고 들여쓰기를
 # 맞추면 통과한다 — 이 파일 머리말의 "막지 못하는 것" 그대로다.
 _RESTORE_OPEN = re.compile(r'^restore\(\)[ \t]*\{[ \t]*$', re.M)
-_START_CAM = re.compile(r'systemctl start cam-operate\b')
+_START_CAM = re.compile(r'^systemctl start cam-operate\b')
 
 
 def _restore_body(source):
@@ -152,7 +161,7 @@ def _restarts_cam_unconditionally(source):
         if not line.strip():
             continue
         indent = line[:len(line) - len(line.lstrip())]
-        if indent == base and _START_CAM.search(line):
+        if indent == base and _START_CAM.match(line[len(base):]):
             return True
     return False
 
