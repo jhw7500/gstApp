@@ -1,6 +1,8 @@
 name: Source Contracts
 
-# test/ 의 소스 계약 게이트를 CI 에서 돌린다.
+# test/ 의 소스 계약 게이트와, 보드 없이 도는 시험을 CI 에서 돌린다.
+# (워크플로 이름은 #125 에서 정한 Source Contracts 를 유지한다 — 바꾸면 체크 이름이
+#  달라져 브랜치 보호 설정과 어긋난다.)
 #
 # 종전에는 이 게이트들이 저장소에 있기만 하고 **CI 어디에서도 실행되지 않았다**
 # (build-test.yml 은 빌드만 한다). 사람이 손으로 돌릴 때만 검사됐으므로, 안전 장치가
@@ -90,6 +92,69 @@ jobs:
             echo "게이트 ${#gates[@]} 종 중 실패 $fail 종."
           } >> "$GITHUB_STEP_SUMMARY"
           rm -f "$GITHUB_STEP_SUMMARY.rows"
+          [ "$fail" -eq 0 ] || exit 1
+
+      - name: Install test dependencies
+        run: |
+          set -eu
+          command -v rg >/dev/null || sudo apt-get install -y -qq ripgrep
+          for c in rg g++ python3; do
+            printf '%-10s %s\n' "$c" "$(command -v "$c" || echo '(없음)')"
+          done
+
+      - name: Run host-runnable tests
+        run: |
+          set -uo pipefail
+          # 여기는 **명시 열거**다. 이름으로 글롭하면 보드가 필요한 시험이 쓸려 들어온다.
+          # 새 시험을 넣으려면 SDK·보드 없이 도는지 먼저 확인하고 여기 추가한다.
+          #
+          # 일부러 뺀 것 (2026-09-15 실측):
+          #   run-parser-config-test      Yocto SDK + qemu-aarch64 필요.
+          #                               SDK_LOC=/nonexistent 로 rc=1.
+          #   run-health-producer-test    SDK 로 빌드한 bin/testHealthProducer 필요 (rc=1).
+          #   run-record-sync-check       <fps> <mp4 files...> 인자를 받는다. 독립 시험이 아님.
+          #   run-runtime-config-commute-check
+          #                               **다른 저장소**(pim-package-jhw) 체크아웃의
+          #                               dist/pim/opt/pim/bin/camera_runtime_config.py 를 요구한다.
+          #                               형제 디렉터리가 있는 개발 호스트에서만 통과한다.
+          tests="
+            test/run-make-for-imx8-test.sh
+            test/run-max9296-controls-test.sh
+            test/run-max9296-prepare-test.sh
+            test/run-safe-write-file-test.sh
+          "
+          fail=0
+          n=0
+          for t in $tests; do
+            n=$((n + 1))
+            if [ ! -f "$t" ]; then
+              echo "::error::$t 가 없습니다 - 목록과 저장소가 어긋났습니다"
+              fail=$((fail + 1))
+              continue
+            fi
+            echo "::group::$t"
+            if bash "$t"; then
+              echo "  -> PASSED"
+              printf '| `%s` | PASSED |\n' "$t" >> "$GITHUB_STEP_SUMMARY.trows"
+            else
+              rc=$?
+              echo "::error file=$t::$t 가 rc=$rc 로 실패했습니다"
+              printf '| `%s` | **FAILED (rc=%s)** |\n' "$t" "$rc" >> "$GITHUB_STEP_SUMMARY.trows"
+              fail=$((fail + 1))
+            fi
+            echo "::endgroup::"
+          done
+          {
+            echo ""
+            echo "## Host-runnable tests"
+            echo ""
+            echo "| 시험 | 결과 |"
+            echo "|---|---|"
+            cat "$GITHUB_STEP_SUMMARY.trows"
+            echo ""
+            echo "시험 $n 종 중 실패 $fail 종."
+          } >> "$GITHUB_STEP_SUMMARY"
+          rm -f "$GITHUB_STEP_SUMMARY.trows"
           [ "$fail" -eq 0 ] || exit 1
 
   skipped:

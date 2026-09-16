@@ -29,7 +29,7 @@ workflows:
   # 않았다 — build-test 는 빌드만 한다. 전부 보드 없이 도는 소스 문자열 검사다.
   source-contracts:
     enabled: true
-    description: "Source contract gates for test/ scripts (no hardware needed)"
+    description: "Source contract gates + host-runnable tests (no hardware needed)"
 
   # Shared Gemini workflows
   gemini-dispatch:
