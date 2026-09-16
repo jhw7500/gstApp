@@ -54,6 +54,11 @@ hard_reset(){                       # $1 = 라벨
 
 restore() {
   local rc=$?
+  # 한 trap 에 EXIT/INT/TERM 을 걸었으므로 SIGINT 는 INT 와 EXIT 를 연달아 발화시킨다.
+  # 가드가 없으면 복원 본문이 두 번 돈다 - config 두 번 쓰기, cam-operate 두 번 기동,
+  # sleep 중복. 재진입은 첫 회차의 rc 를 그대로 물려 즉시 빠진다.
+  [ "${RESTORE_ENTERED:-0}" -eq 1 ] && exit "$rc"
+  RESTORE_ENTERED=1
   log "=== restore (rc=$rc) ==="
   if [ -n "$APP_PID" ] && kill -0 "$APP_PID" 2>/dev/null; then
     kill -TERM "$APP_PID" 2>/dev/null
@@ -85,6 +90,9 @@ restore() {
   log "복원 후: cam-operate=$(systemctl is-active cam-operate) gstApp=$(pgrep -x gstApp >/dev/null && echo up || echo DOWN) link:$(links)"
   log "  운영 prepare: $(prep 2-0048 | grep -oE 'state=[A-Z]+|width=[0-9]+|height=[0-9]+|fps=[0-9]+|errno=[-0-9]+' | tr '\n' ' ')"
   log "=== restore 완료 ==="
+  # exit 없이 끝나면 SIGINT 가 이 함수를 돌린 뒤 **측정을 계속 진행시킨다** -
+  # 원본 config 가 복원되고 cam-operate 가 올라온 상태에서 시험 앱이 계속 돈다.
+  exit "$rc"
 }
 # 동시 실행 방지 — 두 러너가 겹치면 서로의 gstApp 을 pkill 하고 config/하드리셋이 엉킨다.
 # trap 설치 '전에' 잡는다. 락 실패로 빠질 때 restore 가 돌면 남의 런을 망친다.

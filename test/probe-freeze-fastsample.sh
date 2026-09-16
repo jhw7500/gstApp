@@ -100,6 +100,11 @@ kill_cap() {
 
 restore() {
 	rc=$?
+	# 한 trap 에 EXIT/INT/TERM 을 걸었으므로 SIGINT 는 INT 와 EXIT 를 연달아 발화시킨다.
+	# 가드가 없으면 복원 본문이 두 번 돈다 - config 두 번 쓰기, cam-operate 두 번 기동,
+	# sleep 중복. 재진입은 첫 회차의 rc 를 그대로 물려 즉시 빠진다.
+	[ "${RESTORE_ENTERED:-0}" -eq 1 ] && exit "$rc"
+	RESTORE_ENTERED=1
 	log ""
 	log "### 복구"
 	kill_cap

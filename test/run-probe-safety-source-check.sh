@@ -166,6 +166,62 @@ def _restarts_cam_unconditionally(source):
     return False
 
 
+# restore 가 재진입에 안전한가, 그리고 종료를 전파하는가.
+#
+# 한 trap 에 EXIT/INT/TERM 을 걸었으므로 SIGINT 는 INT 와 EXIT 를 연달아 발화시킨다.
+# 실측(격리 사본):
+#   restore 가 exit 로 끝나면        -> 본문이 2 회 돈다
+#   restore 가 exit 없이 끝나면      -> 1 회 돈 뒤 **측정이 계속되고** 종료 때 또 1 회
+# 두 번째가 더 나쁘다. 원본 config 가 복원되고 cam-operate 가 올라온 상태에서 시험
+# 앱이 계속 돈다 - 라이브 보드에서 둘이 동시에 돈다는 뜻이다.
+_GUARD_LINE = re.compile(r'^\[ "\$\{RESTORE_ENTERED:-0\}" -eq 1 \] && exit "\$rc"$')
+_GUARD_SET = re.compile(r'^RESTORE_ENTERED=1$')
+_EXIT_RC = re.compile(r'^exit "?\$rc"?$')
+
+
+def _restore_base_indent(body):
+    for line in body:
+        if line.strip():
+            return line[:len(line) - len(line.lstrip())]
+    return None
+
+
+def _restore_reentry_guarded(source):
+    body = _restore_body(source)
+    base = _restore_base_indent(body)
+    if base is None:
+        return False
+    seen_guard = False
+    for line in body:
+        if not line.strip():
+            continue
+        indent = line[:len(line) - len(line.lstrip())]
+        if indent != base:
+            continue
+        rest = line[len(base):]
+        if _GUARD_LINE.match(rest):
+            seen_guard = True
+        elif seen_guard and _GUARD_SET.match(rest):
+            return True
+    return False
+
+
+def _restore_propagates_exit(source):
+    body = _restore_body(source)
+    base = _restore_base_indent(body)
+    if base is None:
+        return False
+    last = None
+    for line in body:
+        if not line.strip() or line.lstrip().startswith("#"):
+            continue
+        last = line
+    if last is None:
+        return False
+    indent = last[:len(last) - len(last.lstrip())]
+    return indent == base and _EXIT_RC.match(last[len(base):]) is not None
+
+
 CHECKS = (
     (
         "표류 검사",
@@ -222,6 +278,18 @@ CHECKS = (
         lambda s: re.search(r"^trap restore EXIT INT TERM$", s, re.M) is not None
         and re.search(r"^\s*trap\s+-", s, re.M) is None,
         "EXIT/INT/TERM trap 에 restore 가 걸려 있지 않거나 이후 해제됩니다",
+    ),
+    (
+        "restore 재진입 가드",
+        _restore_reentry_guarded,
+        "restore 재진입 가드가 없습니다 — SIGINT 에서 복원 본문이 두 번 돕니다 "
+        "(config 두 번 쓰기, cam-operate 두 번 기동, sleep 중복)",
+    ),
+    (
+        "restore 종료 전파",
+        _restore_propagates_exit,
+        "restore 가 exit \"$rc\" 로 끝나지 않습니다 — SIGINT 가 복원만 하고 "
+        "측정을 계속 진행시킵니다(복원된 config 위에서 시험 앱이 계속 돕니다)",
     ),
 )
 
