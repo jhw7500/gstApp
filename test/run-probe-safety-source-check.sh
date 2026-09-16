@@ -60,6 +60,11 @@ harness = Path("test/run-fps-scenario.sh")
 if not harness.exists():
     raise SystemExit(f"{harness} 를 찾지 못했습니다")
 targets.append(harness)
+# run-skew55a.sh 도 같은 계약을 진다. 대상에서 빠져 있던 동안 이 파일에만 결함이
+# 남았고(PR #121 #122 에서 손으로 채웠다) 게이트는 초록이었다.
+skew = Path("test/run-skew55a.sh")
+if skew.exists():
+    targets.append(skew)
 if len(targets) < 2:
     raise SystemExit("검사 대상 스크립트를 찾지 못했습니다")
 
@@ -100,6 +105,65 @@ _CP_STAGE_OK = re.compile(
     r'[ \t]+(?:"[^"\n-][^"\n]*"|[^\s"\'|-][^\s"\'|]*)'
     r'[ \t]+"\$BIN"[ \t]*\|\|',
     re.M)
+
+
+# cam-operate 를 정지시킨 스크립트가 **조용히 정지 상태로 두지 않는가**.
+#
+# 허용되는 두 정책이 있다. 철자가 아니라 불변식을 본다.
+#   (A) 시작 상태를 보존하되, 정지로 둘 때 크게 알리고 RESTORE_CAM_OPERATE 로
+#       되살릴 수 있다 — probe 11 벌과 run-fps-scenario.sh.
+#   (B) restore 에서 **무조건** 되살린다 — run-skew55a.sh.
+#
+# (B) 를 토큰 존재만으로 인정하면 검사가 약해진다. probe 들도 조건문 **안에서**
+# 같은 명령을 부르기 때문이다. 그래서 restore() 본문을 떼어, 그 본문의 기준
+# 들여쓰기(첫 비어있지 않은 줄의 들여쓰기)와 **정확히 같은** 깊이에 있는 줄만
+# 무조건으로 인정한다. 조건문·루프 안이면 더 깊으므로 걸러진다.
+#
+# 토큰이 줄 **아무 위치에나** 있으면 인정하던 판정에는 구멍이 있었다(PR #127 리뷰
+# RVW-6bc965e71d6e). 같은 깊이의 한 줄 조건문과 주석이 전부 통과했다 — 실측:
+#   [ "$F" = 1 ] && systemctl start cam-operate      통과했다
+#   # systemctl start cam-operate                    통과했다
+#   if [ "$F" = 1 ]; then systemctl start ...; fi    통과했다
+# 그래서 들여쓰기를 뗀 뒤 **줄이 그 명령으로 시작**해야 인정한다. 위 셋은 각각
+# '[', '#', 'if' 로 시작하므로 걸러진다. 뒤에 붙는 && 는 무방하다 — 명령 자체는
+# 무조건 실행되고 로그만 조건부다(run-skew55a.sh 의 실제 철자가 그렇다).
+#
+# 이것은 구조 판정이지 의미 판정이 아니다. `if true; then` 으로 감싸고 들여쓰기를
+# 맞추면 통과한다 — 이 파일 머리말의 "막지 못하는 것" 그대로다.
+_RESTORE_OPEN = re.compile(r'^restore\(\)[ \t]*\{[ \t]*$', re.M)
+_START_CAM = re.compile(r'^systemctl start cam-operate\b')
+
+
+def _restore_body(source):
+    m = _RESTORE_OPEN.search(source)
+    if m is None:
+        return []
+    lines = source[m.end():].splitlines()
+    body = []
+    for line in lines:
+        if line.startswith("}"):
+            break
+        body.append(line)
+    return body
+
+
+def _restarts_cam_unconditionally(source):
+    body = _restore_body(source)
+    base = None
+    for line in body:
+        if not line.strip():
+            continue
+        base = line[:len(line) - len(line.lstrip())]
+        break
+    if base is None:
+        return False
+    for line in body:
+        if not line.strip():
+            continue
+        indent = line[:len(line) - len(line.lstrip())]
+        if indent == base and _START_CAM.match(line[len(base):]):
+            return True
+    return False
 
 
 CHECKS = (
@@ -148,9 +212,10 @@ CHECKS = (
     ),
     (
         "cam-operate 복원",
-        lambda s: "RESTORE_CAM_OPERATE" in s
-        and "정지 상태로 둡니다" in s,
-        "cam-operate 를 정지 상태로 둘 때 알리지 않거나 되살릴 방법이 없습니다",
+        lambda s: ("RESTORE_CAM_OPERATE" in s and "정지 상태로 둡니다" in s)
+        or _restarts_cam_unconditionally(s),
+        "cam-operate 를 정지 상태로 둘 때 알리지 않거나 되살릴 방법이 없습니다 "
+        "(restore 본문 최상위에서 무조건 되살리는 것도 인정합니다)",
     ),
     (
         "trap 복원",
