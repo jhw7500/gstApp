@@ -220,7 +220,7 @@ for TR in $(seq 1 "$TRIALS"); do
 	# 구분되지 않아, 조회가 깨지면 생산자가 도는 중에도 그대로 쓴다(실측 systemd 249 —
 	# inactive rc=3, D-Bus 실패 rc=1 이고 후자는 stdout 이 빈다). 상태 문자열로 보고
 	# 모르는 상태·조회 실패에서는 중단한다(이슈 #113 PR 리뷰, Codex P1 ②).
-	CAM_STATE=$(systemctl is-active cam-operate.service 2>/dev/null); case $CAM_STATE in inactive|failed) ;; *) echo "!! cam-operate 상태가 [${CAM_STATE:-조회실패}] 다 - 시험 config 를 쓰지 않는다" >&2; exit 2;; esac
+	CAM_STATE=$(systemctl is-active cam-operate.service 2>/dev/null); case $CAM_STATE in inactive|failed) ;; *) echo "!! cam-operate 상태가 [${CAM_STATE:-조회실패}] 다 - 시험 config 를 쓰지 않는다" >&2; exit 4;; esac
 	# cp 도중 죽어도 복원되도록 쓰기 "전"에 세운다
 	CONF_DIRTY=1
 	put_conf "$OUT/.fs.json" || exit 2

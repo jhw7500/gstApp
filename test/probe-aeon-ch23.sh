@@ -107,7 +107,18 @@ assert_daemon_off() {
 		sleep 5
 	fi
 	pgrep -x gstApp >/dev/null 2>&1 && { pkill -x gstApp 2>/dev/null; sleep 3; }
-	log "  데몬: cam-operate=$(systemctl is-active cam-operate.service) gstApp잔존=$(pgrep -cx gstApp 2>/dev/null || echo 0)"
+	# 이름대로 assert 한다. 정지·종료가 실패해도 그냥 진행하면 운영 데몬이 살아 있는
+	# 채로 시험 config 를 쓰고 측정한다 - 라이브 보드에서 둘이 동시에 돈다.
+	# pgrep -cx 는 없을 때 "0" 을 찍고 rc=1 로 끝난다. `|| echo 0` 을 붙이면 값이
+	# "0\n0" 이 되어 산술 비교가 오류난다 - 직접 대입한다.
+	DAEMON_STATE=$(systemctl is-active cam-operate.service 2>/dev/null)
+	GSTAPP_LEFT=$(pgrep -cx gstApp 2>/dev/null)
+	log "  데몬: cam-operate=${DAEMON_STATE:-조회실패} gstApp잔존=${GSTAPP_LEFT:-0}"
+	case ${DAEMON_STATE:-} in
+		inactive|failed) ;;
+		*) echo "!! cam-operate 를 멈추지 못했다 (상태=[${DAEMON_STATE:-조회실패}])" >&2; exit 4 ;;
+	esac
+	[ "${GSTAPP_LEFT:-0}" -eq 0 ] || { echo "!! gstApp 이 ${GSTAPP_LEFT} 개 남아 있다" >&2; exit 4; }
 }
 
 restore() {
@@ -298,7 +309,7 @@ probe() { # $1=라벨 $2=trial $3=mode(ctl|prod) $4=ae_on_chA $5=ae_on_chB $6=ex
 	# 구분되지 않아, 조회가 깨지면 생산자가 도는 중에도 그대로 쓴다(실측 systemd 249 —
 	# inactive rc=3, D-Bus 실패 rc=1 이고 후자는 stdout 이 빈다). 상태 문자열로 보고
 	# 모르는 상태·조회 실패에서는 중단한다(이슈 #113 PR 리뷰, Codex P1 ②).
-	CAM_STATE=$(systemctl is-active cam-operate.service 2>/dev/null); case $CAM_STATE in inactive|failed) ;; *) echo "!! cam-operate 상태가 [${CAM_STATE:-조회실패}] 다 - 시험 config 를 쓰지 않는다" >&2; exit 2;; esac
+	CAM_STATE=$(systemctl is-active cam-operate.service 2>/dev/null); case $CAM_STATE in inactive|failed) ;; *) echo "!! cam-operate 상태가 [${CAM_STATE:-조회실패}] 다 - 시험 config 를 쓰지 않는다" >&2; exit 4;; esac
 	# cp 도중 죽어도 복원되도록 쓰기 "전"에 세운다
 	CONF_DIRTY=1
 	put_conf "$OUT/.ae.json" || exit 2
