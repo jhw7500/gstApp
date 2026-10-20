@@ -1490,10 +1490,8 @@ gint main(gint argc, gchar *argv[]) {
 main_end:
   __LOG(LOG_INFO, "[GST][%s:%d] main loop end", _FILE_, __LINE__);
 
-  stop_fragment_closed_worker();
-
-  if (threadArgs)
-    g_free(threadArgs);
+  /* fragment-closed worker 와 threadArgs 는 아래 EOS 대기가 꺼낸 ELEMENT 메시지를
+   * bus_message_parse 로 넘길 때까지 살아 있어야 하므로 대기 뒤에 정리한다(#142). */
 
   /* 1) Terminal thread 종료 (stdin poll 중지) */
   if (terminalThread) {
@@ -1514,34 +1512,61 @@ main_end:
         __LINE__);
   gst_element_send_event(pipeline, gst_event_new_eos());
 
-  /* 메인 루프가 멈춰 bus watch 가 돌지 않으므로 bus 에서 EOS/ERROR 를 직접 꺼낸다.
+  /* 메인 루프가 멈춰 bus watch 가 돌지 않으므로 bus 에서 EOS/ERROR/ELEMENT 를 직접 꺼낸다.
    * PAUSED 미만이면 EOS 가 흐르지 않고, watch 가 이미 EOS 를 받았으면 bin 이
-   * 다시 올리지 않으므로 기다리지 않는다. */
+   * 다시 올리지 않으므로 기다리지 않는다.
+   * ELEMENT(마지막 조각의 splitmuxsink-fragment-closed)는 bus watch 와 같은 경로인
+   * bus_message_parse 로 넘겨 worker 큐에 들어가게 하고, ERROR 는 기록만 하고 남은
+   * EOS_WAIT_SEC 예산 안에서 EOS 를 계속 기다린다. EOS 수신 또는 예산 소진 때에만
+   * 대기를 끝낸다(#142). */
   if (pipeline && GST_STATE(pipeline) >= GST_STATE_PAUSED && !g_eos_msg_seen) {
     GstBus *eos_bus = gst_element_get_bus(pipeline);
     if (eos_bus) {
-      GstMessage *msg = gst_bus_timed_pop_filtered(
-          eos_bus, EOS_WAIT_SEC * GST_SECOND,
-          (GstMessageType)(GST_MESSAGE_EOS | GST_MESSAGE_ERROR));
-      if (!msg) {
-        __LOG(LOG_WARNING, "[GST][%s:%d] EOS wait timeout (%d sec), going NULL",
-              _FILE_, __LINE__, EOS_WAIT_SEC);
-      } else if (GST_MESSAGE_TYPE(msg) == GST_MESSAGE_ERROR) {
-        GError *err = NULL;
-        gst_message_parse_error(msg, &err, NULL);
-        __LOG(LOG_ERR, "[GST][%s:%d] error while waiting EOS: %s from element(%s)",
-              _FILE_, __LINE__, err ? err->message : "unknown",
-              GST_MESSAGE_SRC_NAME(msg));
-        if (err)
-          g_error_free(err);
-      } else {
+      gint64 deadline_us =
+          g_get_monotonic_time() + (gint64)EOS_WAIT_SEC * G_USEC_PER_SEC;
+      while (TRUE) {
+        gint64 remain_us = deadline_us - g_get_monotonic_time();
+        GstMessage *msg = NULL;
+        if (remain_us > 0)
+          msg = gst_bus_timed_pop_filtered(
+              eos_bus, (GstClockTime)remain_us * GST_USECOND,
+              (GstMessageType)(GST_MESSAGE_EOS | GST_MESSAGE_ERROR |
+                               GST_MESSAGE_ELEMENT));
+        if (!msg) {
+          __LOG(LOG_WARNING, "[GST][%s:%d] EOS wait timeout (%d sec), going NULL",
+                _FILE_, __LINE__, EOS_WAIT_SEC);
+          break;
+        }
+        if (GST_MESSAGE_TYPE(msg) == GST_MESSAGE_ELEMENT) {
+          bus_message_parse(eos_bus, msg, threadArgs);
+          gst_message_unref(msg);
+          continue;
+        }
+        if (GST_MESSAGE_TYPE(msg) == GST_MESSAGE_ERROR) {
+          GError *err = NULL;
+          gst_message_parse_error(msg, &err, NULL);
+          __LOG(LOG_ERR,
+                "[GST][%s:%d] error while waiting EOS: %s from element(%s), keep waiting",
+                _FILE_, __LINE__, err ? err->message : "unknown",
+                GST_MESSAGE_SRC_NAME(msg));
+          if (err)
+            g_error_free(err);
+          gst_message_unref(msg);
+          continue;
+        }
         __LOG(LOG_INFO, "[GST][%s:%d] EOS received", _FILE_, __LINE__);
-      }
-      if (msg)
         gst_message_unref(msg);
+        break;
+      }
       gst_object_unref(eos_bus);
     }
   }
+
+  /* 대기 중 큐에 넣은 fragment-closed 가 모두 처리된 뒤(worker join) 정리한다(#142). */
+  stop_fragment_closed_worker();
+
+  if (threadArgs)
+    g_free(threadArgs);
 
   /* 3) Pipeline NULL 전환 (3초 타임아웃) */
   gst_element_set_state(pipeline, GST_STATE_NULL);
