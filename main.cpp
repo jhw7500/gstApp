@@ -67,8 +67,13 @@ int g_link_disconnect_mask = 0;
  * 받지 못하면 여기 도달하지 못하고 파일이 하나도 생기지 않는다. */
 static gboolean g_async_done_seen = FALSE;
 
+/* bus watch 가 EOS 메시지를 이미 받았는지. 받았으면 bin 이 EOS 를 다시 올리지
+ * 않으므로 종료 시 EOS 대기를 건너뛴다. */
+static gboolean g_eos_msg_seen = FALSE;
+
 #define LINK_STATUS_RECHECK_SEC 5   /* PLAYING 후 link_status 재확인 시점 */
 #define PLAYING_WATCH_SEC       15  /* PLAYING 요청 후 preroll 완료 감시 시점 */
+#define EOS_WAIT_SEC            3   /* 종료 시 EOS 전송 후 bus EOS 대기 한도 */
 
 /* link_status 는 3상태다: 0=connected, >0=disconnect, <0/읽기실패=unverified.
  * unverified 를 disconnect 로 뭉개면 멀쩡한 채널을 정렬 판정에서 배제해 버리고,
@@ -302,6 +307,7 @@ gboolean bus_message_parse(GstBus *bus, GstMessage *message, gpointer data) {
 
   case GST_MESSAGE_EOS: {
     __LOG(LOG_EMERG, "[GST][%s:%d] GST_MESSAGE_EOS", _FILE_, __LINE__);
+    g_eos_msg_seen = TRUE;
     if (is_interrupted) {
       cam_cnt++;
       g_main_loop_quit(loop);
@@ -1507,6 +1513,35 @@ main_end:
   __LOG(LOG_INFO, "[GST][%s:%d] sending EOS to pipeline...", _FILE_,
         __LINE__);
   gst_element_send_event(pipeline, gst_event_new_eos());
+
+  /* 메인 루프가 멈춰 bus watch 가 돌지 않으므로 bus 에서 EOS/ERROR 를 직접 꺼낸다.
+   * PAUSED 미만이면 EOS 가 흐르지 않고, watch 가 이미 EOS 를 받았으면 bin 이
+   * 다시 올리지 않으므로 기다리지 않는다. */
+  if (pipeline && GST_STATE(pipeline) >= GST_STATE_PAUSED && !g_eos_msg_seen) {
+    GstBus *eos_bus = gst_element_get_bus(pipeline);
+    if (eos_bus) {
+      GstMessage *msg = gst_bus_timed_pop_filtered(
+          eos_bus, EOS_WAIT_SEC * GST_SECOND,
+          (GstMessageType)(GST_MESSAGE_EOS | GST_MESSAGE_ERROR));
+      if (!msg) {
+        __LOG(LOG_WARNING, "[GST][%s:%d] EOS wait timeout (%d sec), going NULL",
+              _FILE_, __LINE__, EOS_WAIT_SEC);
+      } else if (GST_MESSAGE_TYPE(msg) == GST_MESSAGE_ERROR) {
+        GError *err = NULL;
+        gst_message_parse_error(msg, &err, NULL);
+        __LOG(LOG_ERR, "[GST][%s:%d] error while waiting EOS: %s from element(%s)",
+              _FILE_, __LINE__, err ? err->message : "unknown",
+              GST_MESSAGE_SRC_NAME(msg));
+        if (err)
+          g_error_free(err);
+      } else {
+        __LOG(LOG_INFO, "[GST][%s:%d] EOS received", _FILE_, __LINE__);
+      }
+      if (msg)
+        gst_message_unref(msg);
+      gst_object_unref(eos_bus);
+    }
+  }
 
   /* 3) Pipeline NULL 전환 (3초 타임아웃) */
   gst_element_set_state(pipeline, GST_STATE_NULL);
