@@ -82,7 +82,7 @@ fi
 #   관측에 root_cause=false 를 박아 두면 여기가 비어, 운영자는 FAILED 만 보고
 #   원인은 하나도 못 본다. 상류(max9296/pim-healthd)가 정상인 시나리오이므로
 #   gstApp 의 실패가 근본 원인으로 남아야 한다.
-SCENARIOS="starting:RECOVERING:- ok:HEALTHY:- disabled:HEALTHY:- stall:FAILED:gstreamer nogrow:FAILED:recording buserr:FAILED:gstreamer"
+SCENARIOS="starting:RECOVERING:- ok:HEALTHY:- disabled:HEALTHY:- rtoff:HEALTHY:- stall:FAILED:gstreamer nogrow:FAILED:recording buserr:FAILED:gstreamer"
 
 for entry in $SCENARIOS; do
     name=${entry%%:*}
@@ -169,6 +169,40 @@ print(p["state"], p["code"], d["overall_status"], ",".join(blocks) or "-")' "$ru
     check "$overall" "$expect" "$name: overall_status"
     check "$roots" "$expect_root" "$name: 근본 원인 블록"
 done
+
+# 설정상 끈 채널과 기동 중 실패로 끈 채널은 둘 다 N/A/DISABLED 다. 레지스트리에
+# 새 code 를 넣지 않고 configured 증거와 reason_detail 로 구분한다(#145).
+offs=$(python3 - "$DOCS/rtoff.json" "$DOCS/disabled.json" <<'PY' 2>&1
+import json, sys
+
+def channel_obs(path):
+    doc = json.load(open(path))
+    return [(o["scope"]["channels"][0], o) for o in doc["observations"]]
+
+def kind(o):
+    if o["status"] != "N/A" or o["code"] != "DISABLED":
+        return o["status"]
+    ev = o["evidence"][0]
+    if ev["name"] != "configured":
+        return "evidence:" + ev["name"]
+    if ev["value"] is True and o.get("reason_detail") == "MAX9296 prepare failed (errno=-6)":
+        return "runtime-off"
+    if ev["value"] is False and "reason_detail" not in o:
+        return "config-off"
+    return "configured=%r reason=%r" % (ev["value"], o.get("reason_detail"))
+
+def kinds(path, channels):
+    return ",".join(sorted({kind(o) for ch, o in channel_obs(path) if ch in channels}))
+
+print(kinds(sys.argv[1], {2}), kinds(sys.argv[1], {3}), kinds(sys.argv[1], {0, 1}),
+      kinds(sys.argv[2], {0, 1, 2, 3}))
+PY
+)
+read -r rt_off rt_cfg rt_live cfg_off <<<"$offs"
+check "$rt_off" "runtime-off" "rtoff: 기동 중 끈 채널은 configured=true 와 사유를 남긴다"
+check "$rt_cfg" "config-off" "rtoff: 같은 CSI 에서 설정상 꺼져 있던 채널은 configured=false 로 남는다"
+check "$rt_live" "OK" "rtoff: 남은 CSI 의 채널은 OK 다"
+check "$cfg_off" "config-off" "disabled: 설정상 끈 채널은 configured=false 이고 사유가 없다"
 
 # publish 실패는 조용히 지나가면 안 된다. aggregator 에는 PRODUCER_STALE 로 보이고
 # 그건 "producer 부재"와 구분되지 않는다. 쓸 수 없는 경로를 주고 로그를 확인한다.

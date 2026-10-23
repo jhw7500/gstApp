@@ -17,11 +17,13 @@ The integration has three goals:
    V4L2 power owner remains accounted.
 3. Any ambiguous, partially available, or stale state fails before the first
    GStreamer state transition rather than starting a partial camera graph.
-   The one exception is a CSI whose prepare store the driver rejects (for
-   example `ENXIO` from an unplugged camera link) while the other CSI is
-   prepared (newly READY or warm-reused): the rejected CSI is left off and
-   recording continues on the prepared CSI until the next restart retries it
-   (#145).
+   The one prepare-state exception is a CSI whose prepare store the driver
+   rejects (for example `ENXIO` from an unplugged camera link) while the other
+   CSI is prepared (newly READY, refreshed READY, or warm-reused): the rejected
+   CSI is left off and recording continues on the prepared CSI until the next
+   restart retries it (#145). A CSI whose VideoBin init or bin build fails is
+   likewise left off while the other CSI records, as the init failure already
+   was before #145.
 
 One MAX9296 instance remains one indivisible stream domain. A dual-wide CSI is
 never split into two prepare operations.
@@ -153,6 +155,25 @@ which must stay below the driver's 60-second unused-lease timeout. The
 coordinator uses the post-init enable mask and remains valid when `play_delay`
 causes `PAUSED` to be the first transition.
 
+If a CSI's bin build fails after its prepare succeeded, gstApp disables that
+CSI's channels and continues with the others without cancelling the lease it
+just published. The driver's unused-lease timeout releases it 60 seconds later:
+it drops the reservation the lease created, returns that CSI's reference on the
+shared deserializer power (the power stays on while the surviving CSI holds
+its own), and leaves the domain `EXPIRED`. Neither that timeout nor an
+immediate cancel retries the CSI in the running process; the next start does.
+A start after the timeout prepares an `EXPIRED` domain exactly like an `IDLE`
+one. A start inside the 60-second window still sees the old `READY/lease=1`
+domain: it is refreshed when the tuple is unchanged (step 6), but a changed
+tuple or enable mask fails closed until the lease expires. Avoiding that window
+is the only thing an immediate cancel would add.
+
+A channel disabled at startup by a CSI init, prepare-store, or bin-build
+failure is still published to camera health as `N/A`/`DISABLED`, but with
+evidence `configured=true` and a `reason_detail` naming the failure, so it is
+distinguishable from a channel disabled by configuration (`configured=false`)
+without a new health code.
+
 1. Build one target for each active CSI and validate all tuples and shared FPS.
    If no CSI is active, return a successful no-op without touching sysfs.
 2. Probe every active prepare node.
@@ -175,7 +196,9 @@ causes `PAUSED` to be the first transition.
    valid cold case where a balanced `s_power(0)` advanced the hardware epoch
    but the diagnostic state name remained CONSUMED. The driver remains the
    authority: a retained V4L2 owner returns `EBUSY`, and an unsafe same-epoch
-   tuple change returns `ESTALE`; both are surfaced as reset-required failure.
+   tuple change returns `ESTALE`; both are surfaced as reset-required failure,
+   unless the other active domain is prepared, in which case only this domain
+   is disabled (the store-rejection row of the policy table, #145).
 6. An exact, valid pre-existing `READY/lease=1` domain is refreshed with its
    original non-zero generation. It is marked as pre-existing ownership and is
    never cancelled by this transaction. A READY state with a mismatched tuple,
@@ -192,16 +215,24 @@ causes `PAUSED` to be the first transition.
      lease or the captured original generation for a refreshed lease;
    - the expected mode/table, exact tuple, and `code=0x2006`;
    - `errno=0`, `worker_errno=0`, `lease=1`, and `match=1`.
-9. Re-read every active status after all workers join, including warm domains,
-   then require the expected state/fingerprint and the same non-zero hardware
-   epoch across all active domains.
+9. Re-read every active status after all workers join, including warm domains
+   and domains whose prepare store the driver rejected; every read must
+   succeed. Then require the expected state/fingerprint and the same non-zero
+   hardware epoch across all active domains except the store-rejected ones,
+   which are excluded from validation and from the epoch comparison (#145).
 10. A new-lease domain becomes rollback-owned as soon as its complete sysfs
-    write succeeds. If any peer write or any final status read/parse/validation
-    fails, write `0` to every rollback-owned domain even when its final status
-    could not be read. Never cancel a warm CONSUMED owner or a refreshed lease
-    that predated this transaction.
-11. Only a complete success or explicit all-node legacy fallback may proceed
-    to the first GStreamer state transition.
+    write succeeds. If any final status read/parse/validation, the epoch
+    comparison, or a worker create/join fails, or the driver rejects the store
+    of every active domain, write `0` to every rollback-owned domain even when
+    its final status could not be read. When the only failures are store
+    rejections and at least one active domain survives, write `0` only to the
+    rejected domains' rollback-owned leases and keep the survivors' leases
+    (#145). Never cancel a warm CONSUMED owner or a refreshed lease that
+    predated this transaction.
+11. Only a complete success, an isolated store rejection with at least one
+    surviving domain (`MAX9296_PREPARE_PARTIAL`, which proceeds with the
+    rejected CSI's channels disabled), or explicit all-node legacy fallback may
+    proceed to the first GStreamer state transition.
 
 The transaction generation is derived from a monotonic clock plus the process
 identity and is forced non-zero. `EAGAIN` is retried at most three times with a
@@ -254,7 +285,8 @@ If the process is terminated before V4L2 consumes a newly prepared lease, the
 driver's unused-lease timeout remains the final cleanup guarantee. A partial
 failure observed by the coordinator is cancelled immediately as described
 above, except an isolated store rejection, which keeps the surviving CSI's
-lease (see the policy table).
+lease (see the policy table). The same timeout also releases the lease of a
+CSI whose bin build fails after prepare (see Startup data flow).
 
 ## Error and rollout policy
 
@@ -272,6 +304,7 @@ lease (see the policy table).
 | Hardware/FW/I/O error | preserve errno and fail (a store rejection on one CSI while the other is prepared follows the next row) |
 | Driver rejects one CSI's prepare store (any errno), the other is prepared | keep the prepared CSI, cancel any lease the rejected CSI owns, disable its channels, report errno at `LOG_EMERG`, continue (`MAX9296_PREPARE_PARTIAL`, #145) |
 | One new READY and any other failure (status read, final validation, epoch mismatch, worker create/join) | cancel only the new READY lease, then fail |
+| Bin build fails after a successful prepare | disable that CSI's channels and continue with the others; its new READY lease is left to the driver's 60-second unused-lease timeout (a restart inside that window with a changed tuple fails closed until it expires) |
 | Second gstApp camera owner | fail before subdevice-control writes |
 
 Automatic all-node fallback keeps one binary compatible with the old driver
@@ -297,6 +330,11 @@ A standalone test binary with an injected fake I/O backend verifies:
 - post-status generation/tuple/epoch/lease/worker validation;
 - original errno propagation, short writes, and bounded `EAGAIN` retry;
 - partial-success rollback without cancelling warm or pre-existing leases;
+- isolated store rejection (`MAX9296_PREPARE_PARTIAL`, #145): only the
+  rejected domain's own lease is cancelled and the survivor keeps its lease,
+  while rejection of every active domain, an unreadable rejected domain, an
+  invalid survivor, an epoch mismatch, and worker create/join failure stay
+  full failures, and the rejected domain is excluded from the epoch check;
 - full new-lease write followed by final status-read failure, including cancel
   failure that preserves the original transaction errno in the result;
 - READY with stored `errno=-ESTALE` refreshing to errno zero, and fail-closed
@@ -308,10 +346,14 @@ A standalone test binary with an injected fake I/O backend verifies:
 A source-order test verifies pure JSON/CLI/check/final-copy ordering, tuple
 validation before any MAX9296 write, owner-lock acquisition, exactly one
 `apply_camera_sysfs()` call after the lock and before `VideoBin::init()`, then
-the coordinator after the channel loop's enable-mask mutation and before either
-`GST_STATE_PAUSED` or `GST_STATE_PLAYING`. `arg_parser()` must contain no
-enable/rotate write. Prepare failure must set a non-zero process exit status
-before `main_end`; success and legacy fallback preserve the existing zero exit.
+the coordinator after the init pass's enable-mask mutation and before the
+channel loop's bin build and either `GST_STATE_PAUSED` or `GST_STATE_PLAYING`.
+`arg_parser()` must contain no enable/rotate write. Prepare failure must set a
+non-zero process exit status before `main_end`; success, an isolated store
+rejection (`MAX9296_PREPARE_PARTIAL`), and legacy fallback preserve the
+existing zero exit. A separate source contract requires the PARTIAL branch to
+disable the rejected CSI's channels before the bin build and every startup
+channel disable to report its reason to camera health first.
 The Makefile must build the module into both gstApp and the cross-compiled
 target test.
 

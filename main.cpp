@@ -1078,6 +1078,8 @@ gint main(gint argc, gchar *argv[]) {
       continue;
     if (!videoBin[csiNum].init(csiNum)) {
       __LOG(LOG_CRIT, "[GST][%s:%d] csi%d init failed. Disabling all related channels.", _FILE_, __LINE__, csiNum);
+      healthProducerNoteChannelDisabled(csiNum*2, "VideoBin init failed");
+      healthProducerNoteChannelDisabled(csiNum*2+1, "VideoBin init failed");
       cmdArg.cam[csiNum*2].enable = FALSE;
       cmdArg.cam[csiNum*2+1].enable = FALSE;
     }
@@ -1135,6 +1137,11 @@ gint main(gint argc, gchar *argv[]) {
               "disabled, recording continues on the other CSI",
               csi, domain.error, g_strerror(-domain.error), csi * 2,
               csi * 2 + 1);
+        gchar reason[64];
+        g_snprintf(reason, sizeof(reason), "MAX9296 prepare failed (errno=%d)",
+                   domain.error);
+        healthProducerNoteChannelDisabled(csi * 2, reason);
+        healthProducerNoteChannelDisabled(csi * 2 + 1, reason);
         cmdArg.cam[csi * 2].enable = FALSE;
         cmdArg.cam[csi * 2 + 1].enable = FALSE;
       }
@@ -1153,6 +1160,8 @@ gint main(gint argc, gchar *argv[]) {
     if (!videoBin[csiNum].build(csiNum)) {
       __LOG(LOG_CRIT, "[GST][%s:%d] csi%d build failed. Disabling all related channels.", _FILE_, __LINE__, csiNum);
       // 해당 CSI에 속한 채널들의 설정을 강제로 비활성화하여 하부 구성 방지
+      healthProducerNoteChannelDisabled(csiNum*2, "VideoBin build failed");
+      healthProducerNoteChannelDisabled(csiNum*2+1, "VideoBin build failed");
       cmdArg.cam[csiNum*2].enable = FALSE;
       cmdArg.cam[csiNum*2+1].enable = FALSE;
       continue; 

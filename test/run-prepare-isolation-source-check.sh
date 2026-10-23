@@ -95,5 +95,22 @@ if not re.search(r'__LOG\s*\(\s*LOG_EMERG\s*,[^;]*errno', partial_body, flags=re
     fail('PARTIAL handling must report the failed CSI and its errno at LOG_EMERG')
 checks += 1
 
+# 4) 기동 중 실패(init/prepare/build)로 채널을 끄는 곳은 모두 끄기 직전에 health 에
+#    사유를 남긴다. 그래야 camera health 에서 설정상 끈 채널(configured=false)과
+#    구분된다. producer 는 이미 꺼진 채널을 설정상 끔으로 보고 무시하므로 반드시
+#    enable 을 내리기 전에 불러야 한다. 끄는 곳이 새로 생겨도 같은 규칙이 걸리도록
+#    main() 의 모든 끄기(FALSE/false/0)를 센다.
+disables = list(re.finditer(
+    r'cmdArg\.cam\[([^\]]+)\]\.enable\s*=\s*(?:FALSE|false|0)\s*;', main_body))
+if len(disables) < 6:
+    fail(f'expected the init, prepare and build channel disables in main (found {len(disables)})')
+for match in disables:
+    channel = re.sub(r'\s+', '', match.group(1))
+    window = re.sub(r'\s+', '', main_body[max(0, match.start() - 600):match.start()])
+    if f'healthProducerNoteChannelDisabled({channel},' not in window:
+        fail(f'cmdArg.cam[{match.group(1)}].enable must be cleared only after '
+             f'healthProducerNoteChannelDisabled({match.group(1)}, reason)')
+checks += 1
+
 print(f'prepare isolation source contract: {checks} checks passed')
 PY
