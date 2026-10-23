@@ -17,6 +17,11 @@ The integration has three goals:
    V4L2 power owner remains accounted.
 3. Any ambiguous, partially available, or stale state fails before the first
    GStreamer state transition rather than starting a partial camera graph.
+   The one exception is a CSI whose prepare store the driver rejects (for
+   example `ENXIO` from an unplugged camera link) while the other CSI is
+   prepared (newly READY or warm-reused): the rejected CSI is left off and
+   recording continues on the prepared CSI until the next restart retries it
+   (#145).
 
 One MAX9296 instance remains one indivisible stream domain. A dual-wide CSI is
 never split into two prepare operations.
@@ -135,16 +140,18 @@ The startup order is therefore fixed as:
 
 ```text
 JSON parse -> CLI parse -> check/final cmdArg -> pure tuple/FPS validation
--> gstApp owner flock -> enable/rotate sysfs apply -> VideoBin/control setup
--> parallel prepare -> first PAUSED/PLAYING transition
+-> gstApp owner flock -> enable/rotate sysfs apply -> VideoBin control setup
+-> parallel prepare -> pipeline bin build -> first PAUSED/PLAYING transition
 ```
 
-Run the prepare coordinator after the channel loop has constructed pipeline
-bins, applied cached subdevice controls, and performed its CSI-init failure
-mask updates, but immediately before the first `PAUSED` or `PLAYING` state
-transition. This creates a short prepare-to-V4L2 handoff interval, uses the
-post-init enable mask, and remains valid when `play_delay` causes `PAUSED` to be
-the first transition.
+Run the prepare coordinator after the init pass has applied cached subdevice
+controls and performed its CSI-init failure mask updates, and before the
+channel loop constructs pipeline bins. A CSI whose prepare store the driver
+rejects is therefore never built, exactly like a CSI disabled by configuration
+(#145). The bin build time is added to the prepare-to-V4L2 handoff interval,
+which must stay below the driver's 60-second unused-lease timeout. The
+coordinator uses the post-init enable mask and remains valid when `play_delay`
+causes `PAUSED` to be the first transition.
 
 1. Build one target for each active CSI and validate all tuples and shared FPS.
    If no CSI is active, return a successful no-op without touching sysfs.
@@ -246,7 +253,8 @@ through that 60-second timeout.
 If the process is terminated before V4L2 consumes a newly prepared lease, the
 driver's unused-lease timeout remains the final cleanup guarantee. A partial
 failure observed by the coordinator is cancelled immediately as described
-above.
+above, except an isolated store rejection, which keeps the surviving CSI's
+lease (see the policy table).
 
 ## Error and rollout policy
 
@@ -255,14 +263,15 @@ above.
 | All active prepare nodes absent | high-severity legacy fallback |
 | Partial node absence | fail closed |
 | Invalid app tuple/shared FPS mismatch | fail before any write |
-| `PREPARING`/release race or write `EBUSY` | fail; never infer success |
+| `PREPARING`/release race or write `EBUSY` | fail; never infer success (a write `EBUSY` on one CSI while the other is prepared follows the store-rejection row below) |
 | CONSUMED exact current tuple | warm reuse while the gstApp owner flock is held |
 | Non-warm CONSUMED, worker clean | submit prepare; propagate driver success, `EBUSY`, or `ESTALE` |
 | Any CONSUMED worker error | fail closed without a write |
-| Write/status `ESTALE` | fail with reset-required diagnosis |
+| Write/status `ESTALE` | fail with reset-required diagnosis (a write `ESTALE` on one CSI while the other is prepared follows the store-rejection row below) |
 | `EAGAIN` during the short probe-commit window | bounded retry |
-| Hardware/FW/I/O error | preserve errno and fail |
-| One new READY and one failure | cancel only the new READY lease, then fail |
+| Hardware/FW/I/O error | preserve errno and fail (a store rejection on one CSI while the other is prepared follows the next row) |
+| Driver rejects one CSI's prepare store (any errno), the other is prepared | keep the prepared CSI, cancel any lease the rejected CSI owns, disable its channels, report errno at `LOG_EMERG`, continue (`MAX9296_PREPARE_PARTIAL`, #145) |
+| One new READY and any other failure (status read, final validation, epoch mismatch, worker create/join) | cancel only the new READY lease, then fail |
 | Second gstApp camera owner | fail before subdevice-control writes |
 
 Automatic all-node fallback keeps one binary compatible with the old driver

@@ -975,9 +975,153 @@ static void test_ready_refresh_keeps_generation_and_not_rollback_ownership(void)
     CHECK(report.domain[0].after.last_errno == 0);
 }
 
-static void test_peer_failure_rolls_back_only_newly_published_lease(void)
+/* #145: 드라이버가 한 CSI 의 prepare 쓰기를 거부하면 그 CSI 만 실패로 남기고,
+ * 성공한 CSI 의 새 lease 는 취소하지 않은 채 PARTIAL 을 돌려준다. */
+static void test_peer_write_failure_isolates_failed_domain(void)
 {
     FakeIo fake;
+    for (unsigned i = 0; i < 2; ++i)
+        fake_add_read(&fake, i, idle_status());
+    fake_add_read(&fake, 0, dual_ready(77, 9));
+    fake_add_read(&fake, 1, idle_status());
+    fake.domain[1].prepare_results.push_back(-ENXIO);
+    Max9296PrepareInput input = dual_input();
+    Max9296PrepareReport report = {};
+    const Max9296PrepareIo io = fake_io(&fake);
+
+    CHECK(max9296_prepare_all(&input, &report, &io) == MAX9296_PREPARE_PARTIAL);
+    CHECK(report.error == -ENXIO);
+    CHECK(fake.join_calls == 2);
+    CHECK(fake.domain[0].writes.size() == 1);
+    CHECK(fake.domain[1].writes.size() == 1);
+    CHECK(report.domain[0].error == 0);
+    CHECK(report.domain[0].action == MAX9296_ACTION_COLD_PREPARED);
+    CHECK(report.domain[0].rollback_owned);
+    CHECK(report.domain[1].error == -ENXIO);
+    CHECK(report.domain[1].action == MAX9296_ACTION_FAILED);
+    CHECK(!report.domain[1].rollback_owned);
+}
+
+static void test_all_domain_write_failures_fail_without_partial(void)
+{
+    FakeIo fake;
+    for (unsigned i = 0; i < 2; ++i)
+        fake_add_read(&fake, i, idle_status());
+    for (unsigned i = 0; i < 2; ++i)
+        fake_add_read(&fake, i, idle_status());
+    fake.domain[0].prepare_results.push_back(-EIO);
+    fake.domain[1].prepare_results.push_back(-ENXIO);
+    Max9296PrepareInput input = dual_input();
+    Max9296PrepareReport report = {};
+    const Max9296PrepareIo io = fake_io(&fake);
+
+    CHECK(max9296_prepare_all(&input, &report, &io) == -EIO);
+    CHECK(report.error == -EIO);
+    CHECK(report.domain[0].error == -EIO);
+    CHECK(report.domain[1].error == -ENXIO);
+    CHECK(fake.domain[0].writes.size() == 1);
+    CHECK(fake.domain[1].writes.size() == 1);
+}
+
+static void test_unreadable_failed_peer_fails_closed(void)
+{
+    FakeIo fake;
+    for (unsigned i = 0; i < 2; ++i)
+        fake_add_read(&fake, i, idle_status());
+    fake_add_read(&fake, 0, dual_ready(77, 9));
+    fake_add_read_error(&fake, 1, EIO);
+    fake.domain[1].prepare_results.push_back(-ENXIO);
+    Max9296PrepareInput input = dual_input();
+    Max9296PrepareReport report = {};
+    const Max9296PrepareIo io = fake_io(&fake);
+
+    CHECK(max9296_prepare_all(&input, &report, &io) == -ENXIO);
+    CHECK(report.error == -ENXIO);
+    CHECK(fake.domain[0].writes.size() == 2);
+    if (fake.domain[0].writes.size() >= 2)
+        CHECK(fake.domain[0].writes[1] == "0\n");
+}
+
+static void test_invalid_survivor_fails_closed(void)
+{
+    FakeIo fake;
+    for (unsigned i = 0; i < 2; ++i)
+        fake_add_read(&fake, i, idle_status());
+    fake_add_read(&fake, 0, dual_ready(76, 9));
+    fake_add_read(&fake, 1, idle_status());
+    fake.domain[1].prepare_results.push_back(-ENXIO);
+    Max9296PrepareInput input = dual_input();
+    Max9296PrepareReport report = {};
+    const Max9296PrepareIo io = fake_io(&fake);
+
+    CHECK(max9296_prepare_all(&input, &report, &io) == -ENXIO);
+    CHECK(report.domain[0].error == -ESTALE);
+    CHECK(fake.domain[0].writes.size() == 2);
+    if (fake.domain[0].writes.size() >= 2)
+        CHECK(fake.domain[0].writes[1] == "0\n");
+}
+
+static void test_isolated_domain_is_excluded_from_epoch_check(void)
+{
+    FakeIo fake;
+    for (unsigned i = 0; i < 2; ++i)
+        fake_add_read(&fake, i, idle_status());
+    fake_add_read(&fake, 0, dual_ready(77, 9));
+    fake_add_read(&fake, 1, status_text("FAILED", 77, 10, "dual-wide", "dual",
+                                        3840, 1080, 15, 3, -ENXIO, 0, 0, 0));
+    fake.domain[1].prepare_results.push_back(-ENXIO);
+    Max9296PrepareInput input = dual_input();
+    Max9296PrepareReport report = {};
+    const Max9296PrepareIo io = fake_io(&fake);
+
+    CHECK(max9296_prepare_all(&input, &report, &io) == MAX9296_PREPARE_PARTIAL);
+    CHECK(report.domain[0].error == 0);
+    CHECK(fake.domain[0].writes.size() == 1);
+}
+
+static void test_peer_join_failure_is_not_isolated(void)
+{
+    FakeIo fake;
+    fake.fail_join_call = 1;
+    fake.fail_join_error = EIO;
+    for (unsigned i = 0; i < 2; ++i)
+        fake_add_read(&fake, i, idle_status());
+    for (unsigned i = 0; i < 2; ++i)
+        fake_add_read(&fake, i, dual_ready(77, 9));
+    Max9296PrepareInput input = dual_input();
+    Max9296PrepareReport report = {};
+    const Max9296PrepareIo io = fake_io(&fake);
+
+    CHECK(max9296_prepare_all(&input, &report, &io) == -EIO);
+    for (unsigned i = 0; i < 2; ++i) {
+        CHECK(fake.domain[i].writes.size() == 2);
+        if (fake.domain[i].writes.size() >= 2)
+            CHECK(fake.domain[i].writes[1] == "0\n");
+    }
+}
+
+static void test_create_failure_beside_warm_peer_is_not_isolated(void)
+{
+    FakeIo fake;
+    fake.fail_create_call = 1;
+    fake.fail_create_error = EAGAIN;
+    fake_add_read(&fake, 0, idle_status());
+    fake_add_read(&fake, 0, dual_ready(77, 8));
+    fake_add_read(&fake, 1, dual_consumed(45, 8));
+    fake_add_read(&fake, 1, dual_consumed(45, 8));
+    Max9296PrepareInput input = dual_input();
+    Max9296PrepareReport report = {};
+    const Max9296PrepareIo io = fake_io(&fake);
+
+    CHECK(max9296_prepare_all(&input, &report, &io) == -EAGAIN);
+    CHECK(report.domain[1].action == MAX9296_ACTION_WARM_REUSED);
+    CHECK(fake.domain[0].writes.empty() && fake.domain[1].writes.empty());
+}
+
+static void test_partial_cancels_only_failed_peer_owned_lease(void)
+{
+    FakeIo fake;
+    fake.prepare_committed_on_error = true;
     for (unsigned i = 0; i < 2; ++i)
         fake_add_read(&fake, i, idle_status());
     fake_add_read(&fake, 0, dual_ready(77, 9));
@@ -987,14 +1131,12 @@ static void test_peer_failure_rolls_back_only_newly_published_lease(void)
     Max9296PrepareReport report = {};
     const Max9296PrepareIo io = fake_io(&fake);
 
-    CHECK(max9296_prepare_all(&input, &report, &io) == -EIO);
-    CHECK(fake.join_calls == 2);
-    CHECK(fake.domain[0].writes.size() == 2);
-    if (fake.domain[0].writes.size() >= 2)
-        CHECK(fake.domain[0].writes[1] == "0\n");
-    CHECK(fake.domain[1].writes.size() == 1);
-    CHECK(report.domain[0].rollback_owned);
-    CHECK(!report.domain[1].rollback_owned);
+    CHECK(max9296_prepare_all(&input, &report, &io) == MAX9296_PREPARE_PARTIAL);
+    CHECK(report.domain[1].rollback_owned);
+    CHECK(fake.domain[0].writes.size() == 1);
+    CHECK(fake.domain[1].writes.size() == 2);
+    if (fake.domain[1].writes.size() >= 2)
+        CHECK(fake.domain[1].writes[1] == "0\n");
 }
 
 static void test_final_read_failure_cancels_and_preserves_first_error(void)
@@ -1249,7 +1391,14 @@ int main(void)
     test_warm_consumed_is_reread_without_a_worker();
     test_nonwarm_consumed_write_results_propagate();
     test_ready_refresh_keeps_generation_and_not_rollback_ownership();
-    test_peer_failure_rolls_back_only_newly_published_lease();
+    test_peer_write_failure_isolates_failed_domain();
+    test_all_domain_write_failures_fail_without_partial();
+    test_unreadable_failed_peer_fails_closed();
+    test_invalid_survivor_fails_closed();
+    test_isolated_domain_is_excluded_from_epoch_check();
+    test_peer_join_failure_is_not_isolated();
+    test_create_failure_beside_warm_peer_is_not_isolated();
+    test_partial_cancels_only_failed_peer_owned_lease();
     test_final_read_failure_cancels_and_preserves_first_error();
     test_final_status_mismatches_fail_and_cancel();
     test_final_epoch_must_be_nonzero_and_shared();

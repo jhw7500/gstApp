@@ -111,7 +111,12 @@ struct Max9296PrepareReport {
 
 enum {
     MAX9296_PREPARE_OK = 0,
-    MAX9296_PREPARE_LEGACY = 1
+    MAX9296_PREPARE_LEGACY = 1,
+    /* The driver rejected the prepare store of some, not all, active domains.
+     * Failed domains carry their error in report->domain[csi].error and any
+     * lease they own is cancelled; the other active domains stay prepared
+     * (newly READY or warm-reused). */
+    MAX9296_PREPARE_PARTIAL = 2
 };
 
 int max9296_prepare_build_targets(const Max9296PrepareInput *input,

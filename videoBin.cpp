@@ -704,17 +704,8 @@ gboolean VideoBin::addCrop(CropDir dir) {
 }
 
 gboolean VideoBin::init(guint8 csiNum) {
-  GstCaps *caps;
-  gboolean ret = 0;
-  gboolean crop_en = cmdArg.crop_en[csiNum];
   videoData.csi = csiNum;
-  gint wdt_timeout;
 
-  if (be.bin != NULL) {
-    //__LOG(LOG_NOTICE, "[GST][%s:%d] %s(%d) already init", _FILE_, __LINE__,
-    //__FUNCTION__, csi);
-    return 1;
-  }
 
   // csiNum 0 -> channels 0,1 / csiNum 1 -> channels 2,3
   const guint8 ch_base = csiNum * 2;
@@ -753,64 +744,6 @@ gboolean VideoBin::init(guint8 csiNum) {
           csiNum);
     return FALSE;
   }
-
-  if ((cmdArg.cam[0].enable || cmdArg.cam[1].enable) &&
-      (cmdArg.cam[2].enable || cmdArg.cam[3].enable))
-    wdt_timeout = cmdArg.wdt_timeout_long;
-  else
-    wdt_timeout = cmdArg.wdt_timeout_short;
-
-  // if(!cmdArg.stream_en[STREAM_REC])
-  //     wdt_timeout = 0;
-
-  __LOG(LOG_INFO, "[GST][%s:%d] %s[%d] crop : %s, wdt_timeout : %d", _FILE_,
-        __LINE__, __FUNCTION__, csiNum, crop_en ? "enable" : "disable",
-        wdt_timeout);
-
-  be.bin = gst_bin_new(g_strdup_printf("videoBin%d", csiNum));
-  be.src = gst_element_factory_make("v4l2src", "src");
-  be.convert = gst_element_factory_make("imxvideoconvert_g2d", "convert");
-  be.capsfilter = gst_element_factory_make("capsfilter", "caps");
-  be.teeCrop = gst_element_factory_make("tee", "teeCrop");
-  be.queue_main = gst_element_factory_make(QUEUE_TYPE, "queue_main");
-  be.deinterlace = gst_element_factory_make("deinterlace", "deinterlace");
-  if (cmdArg.videorate_en)
-    be.rate = gst_element_factory_make("videorate", "videorate");
-  else
-    be.rate = NULL;
-  be.watchdog = gst_element_factory_make("watchdog", "watchdog");
-
-  if (!be.bin || !be.src || !be.capsfilter || !be.teeCrop || !be.convert ||
-      !be.queue_main || !be.deinterlace || !be.watchdog ||
-      (cmdArg.videorate_en && !be.rate)) {
-    __LOG(LOG_CRIT, "[GST][%s:%d] video main element create error", _FILE_,
-          __LINE__);
-    return ret;
-  }
-  if (cmdArg.videorate_en)
-    gst_bin_add_many(GST_BIN(be.bin), be.src, be.convert, be.capsfilter,
-                     be.teeCrop, be.queue_main, be.deinterlace, be.rate,
-                     be.watchdog, NULL);
-  else
-    gst_bin_add_many(GST_BIN(be.bin), be.src, be.convert, be.capsfilter,
-                     be.teeCrop, be.queue_main, be.deinterlace,
-                     be.watchdog, NULL);
-
-  g_object_set(
-      be.src, "io-mode", cmdArg.ioMode,
-      NULL); // 0:auto, 1:rw, 2:mmap, 3:userptr, 4:dmabuf, 5:dmabuf-import
-  g_object_set(be.src, "do-timestamp", TRUE, NULL);
-  // g_object_set(be.src, "num-buffers", 10, NULL);
-  // g_object_set(be.deinterlace, "mode", 1, NULL);
-  // g_object_set(be.src, "pixel-aspect-ratio", "1/1", NULL);
-  g_signal_connect(be.src, "prepare-format", G_CALLBACK(prepare_format),
-                   &csiNum);
-  // [Queue 최적화] 시간 기반 고정 버퍼링 (JSON 설정값 사용)
-  // max-size-buffers=0 (무제한)으로 설정하여 시간 기준으로만 제어
-  g_object_set(be.queue_main, "max-size-time", cmdArg.queue_main_src_time_ms * GST_MSECOND,
-               "max-size-buffers", 0, "leaky",
-               LEAKY_DOWNSTREAM, NULL);
-  g_object_set(be.watchdog, "timeout", wdt_timeout, NULL);
 
 #if 1
   // Exposure time is shared (global) across both channels
@@ -949,6 +882,79 @@ gboolean VideoBin::init(guint8 csiNum) {
   }
 
 #endif
+
+  return TRUE;
+}
+
+gboolean VideoBin::build(guint8 csiNum) {
+  GstCaps *caps;
+  gboolean ret = 0;
+  gboolean crop_en = cmdArg.crop_en[csiNum];
+  gint wdt_timeout;
+
+  if (be.bin != NULL) {
+    //__LOG(LOG_NOTICE, "[GST][%s:%d] %s(%d) already init", _FILE_, __LINE__,
+    //__FUNCTION__, csi);
+    return 1;
+  }
+  if ((cmdArg.cam[0].enable || cmdArg.cam[1].enable) &&
+      (cmdArg.cam[2].enable || cmdArg.cam[3].enable))
+    wdt_timeout = cmdArg.wdt_timeout_long;
+  else
+    wdt_timeout = cmdArg.wdt_timeout_short;
+
+  // if(!cmdArg.stream_en[STREAM_REC])
+  //     wdt_timeout = 0;
+
+  __LOG(LOG_INFO, "[GST][%s:%d] %s[%d] crop : %s, wdt_timeout : %d", _FILE_,
+        __LINE__, __FUNCTION__, csiNum, crop_en ? "enable" : "disable",
+        wdt_timeout);
+
+  be.bin = gst_bin_new(g_strdup_printf("videoBin%d", csiNum));
+  be.src = gst_element_factory_make("v4l2src", "src");
+  be.convert = gst_element_factory_make("imxvideoconvert_g2d", "convert");
+  be.capsfilter = gst_element_factory_make("capsfilter", "caps");
+  be.teeCrop = gst_element_factory_make("tee", "teeCrop");
+  be.queue_main = gst_element_factory_make(QUEUE_TYPE, "queue_main");
+  be.deinterlace = gst_element_factory_make("deinterlace", "deinterlace");
+  if (cmdArg.videorate_en)
+    be.rate = gst_element_factory_make("videorate", "videorate");
+  else
+    be.rate = NULL;
+  be.watchdog = gst_element_factory_make("watchdog", "watchdog");
+
+  if (!be.bin || !be.src || !be.capsfilter || !be.teeCrop || !be.convert ||
+      !be.queue_main || !be.deinterlace || !be.watchdog ||
+      (cmdArg.videorate_en && !be.rate)) {
+    __LOG(LOG_CRIT, "[GST][%s:%d] video main element create error", _FILE_,
+          __LINE__);
+    return ret;
+  }
+  if (cmdArg.videorate_en)
+    gst_bin_add_many(GST_BIN(be.bin), be.src, be.convert, be.capsfilter,
+                     be.teeCrop, be.queue_main, be.deinterlace, be.rate,
+                     be.watchdog, NULL);
+  else
+    gst_bin_add_many(GST_BIN(be.bin), be.src, be.convert, be.capsfilter,
+                     be.teeCrop, be.queue_main, be.deinterlace,
+                     be.watchdog, NULL);
+
+  g_object_set(
+      be.src, "io-mode", cmdArg.ioMode,
+      NULL); // 0:auto, 1:rw, 2:mmap, 3:userptr, 4:dmabuf, 5:dmabuf-import
+  g_object_set(be.src, "do-timestamp", TRUE, NULL);
+  // g_object_set(be.src, "num-buffers", 10, NULL);
+  // g_object_set(be.deinterlace, "mode", 1, NULL);
+  // g_object_set(be.src, "pixel-aspect-ratio", "1/1", NULL);
+  g_signal_connect(be.src, "prepare-format", G_CALLBACK(prepare_format),
+                   &csiNum);
+  // [Queue 최적화] 시간 기반 고정 버퍼링 (JSON 설정값 사용)
+  // max-size-buffers=0 (무제한)으로 설정하여 시간 기준으로만 제어
+  g_object_set(be.queue_main, "max-size-time", cmdArg.queue_main_src_time_ms * GST_MSECOND,
+               "max-size-buffers", 0, "leaky",
+               LEAKY_DOWNSTREAM, NULL);
+  g_object_set(be.watchdog, "timeout", wdt_timeout, NULL);
+
   if (cmdArg.levelMode == MODE_TEST) {
     // GstPad *srcpad = gst_element_get_static_pad(be.src, "src");
     // gst_pad_add_probe(srcpad, GST_PAD_PROBE_TYPE_BUFFER,

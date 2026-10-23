@@ -728,6 +728,10 @@ int max9296_prepare_all(const Max9296PrepareInput *input,
     pthread_t thread[2] = {};
     bool created[2] = {};
     PrepareWorker worker[2] = {};
+    /* #145: a domain whose prepare store the driver rejected is isolated; every
+     * other failure after this point stays transaction-wide (fail closed). */
+    bool write_rejected[2] = {};
+    bool global_failure = false;
     for (unsigned csi = 0; csi < 2; ++csi) {
         if (!target[csi].active ||
             disposition[csi] == MAX9296_DISPOSITION_WARM)
@@ -751,6 +755,7 @@ int max9296_prepare_all(const Max9296PrepareInput *input,
             report->domain[csi].error = error;
             report->domain[csi].action = MAX9296_ACTION_FAILED;
             remember_error(error, &first_error);
+            global_failure = true;
             break;
         }
         created[csi] = true;
@@ -777,6 +782,9 @@ int max9296_prepare_all(const Max9296PrepareInput *input,
             if (report->domain[csi].error == 0)
                 report->domain[csi].error = join_error;
             remember_error(join_error, &first_error);
+            global_failure = true;
+        } else if (report->domain[csi].error < 0) {
+            write_rejected[csi] = true;
         }
     }
     for (unsigned csi = 0; csi < 2; ++csi)
@@ -789,10 +797,15 @@ int max9296_prepare_all(const Max9296PrepareInput *input,
             continue;
         const int read_result = read_status(io, target[csi].path, &domain.after);
         int result = read_result;
-        if (result == 0)
+        if (result < 0)
+            global_failure = true;
+        else if (!write_rejected[csi]) {
             result = validate_final_status(&target[csi], &domain.before,
                                            &domain.after, disposition[csi],
                                            report->generation);
+            if (result < 0)
+                global_failure = true;
+        }
         if (result < 0) {
             if (domain.error == 0)
                 domain.error = result;
@@ -803,7 +816,8 @@ int max9296_prepare_all(const Max9296PrepareInput *input,
     uint64_t epoch = 0;
     for (unsigned csi = 0; csi < 2; ++csi) {
         Max9296PrepareDomainReport &domain = report->domain[csi];
-        if (!target[csi].active || domain.after.epoch == 0)
+        if (!target[csi].active || write_rejected[csi] ||
+            domain.after.epoch == 0)
             continue;
         if (epoch == 0) {
             epoch = domain.after.epoch;
@@ -811,13 +825,21 @@ int max9296_prepare_all(const Max9296PrepareInput *input,
             if (domain.error == 0)
                 domain.error = -ESTALE;
             remember_error(-ESTALE, &first_error);
+            global_failure = true;
         }
     }
 
     if (first_error < 0) {
+        unsigned survivors = 0;
+        for (unsigned csi = 0; csi < 2; ++csi)
+            if (target[csi].active && report->domain[csi].error == 0)
+                ++survivors;
+        const bool partial = !global_failure && survivors != 0;
         for (unsigned csi = 0; csi < 2; ++csi) {
             Max9296PrepareDomainReport &domain = report->domain[csi];
             if (!domain.rollback_owned)
+                continue;
+            if (partial && !write_rejected[csi])
                 continue;
             static const char cancel[] = "0\n";
             const WriteResult result = retry_write(
@@ -829,7 +851,7 @@ int max9296_prepare_all(const Max9296PrepareInput *input,
                                             : -EIO;
         }
         report->error = first_error;
-        return first_error;
+        return partial ? MAX9296_PREPARE_PARTIAL : first_error;
     }
 
     report->error = 0;
