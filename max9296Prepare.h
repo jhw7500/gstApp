@@ -133,5 +133,19 @@ uint64_t max9296_prepare_generate_generation(void);
 int max9296_prepare_all(const Max9296PrepareInput *input,
                         Max9296PrepareReport *report,
                         const Max9296PrepareIo *io);
+/* Cancels the lease this process published for one domain after
+ * max9296_prepare_all() returned MAX9296_PREPARE_OK or MAX9296_PREPARE_PARTIAL,
+ * when that domain will not be consumed (its bin build failed).  Warm,
+ * refreshed, legacy, and inactive domains own no lease, and a domain with a
+ * non-zero error was already rolled back by max9296_prepare_all(); all of them
+ * are left alone.  Returns 0 when nothing is owned or the cancel succeeded,
+ * else a negative errno.  A failed cancel keeps ownership and records
+ * rollback_error.  What releases the lease then depends on where it failed:
+ * before the driver takes the request (open failure, request-lock contention)
+ * its unused-lease timeout stays armed; after that the driver refuses only
+ * during unbind, whose remove path releases the lease, or reports a power-off
+ * error after it has already released the lease. */
+int max9296_prepare_cancel_domain(unsigned csi, Max9296PrepareReport *report,
+                                  const Max9296PrepareIo *io);
 
 #endif

@@ -857,3 +857,30 @@ int max9296_prepare_all(const Max9296PrepareInput *input,
     report->error = 0;
     return MAX9296_PREPARE_OK;
 }
+
+int max9296_prepare_cancel_domain(unsigned csi, Max9296PrepareReport *report,
+                                  const Max9296PrepareIo *provided_io)
+{
+    if (!report || csi >= 2)
+        return -EINVAL;
+    const Max9296PrepareIo *const io = provided_io ? provided_io : &kDefaultIo;
+    if (!valid_io(io))
+        return -EINVAL;
+
+    Max9296PrepareDomainReport &domain = report->domain[csi];
+    /* rollback_owned is commit provenance and stays set after prepare_all's own
+     * rollback, so a failed domain (already cancelled there) is skipped. */
+    if (!domain.rollback_owned || domain.error != 0)
+        return 0;
+    static const char cancel[] = "0\n";
+    const WriteResult result = retry_write(
+        io, max9296_prepare_path(csi), cancel, sizeof(cancel) - 1);
+    if (result.result != static_cast<ssize_t>(sizeof(cancel) - 1)) {
+        domain.rollback_error = result.result < 0
+                                    ? static_cast<int>(result.result)
+                                    : -EIO;
+        return domain.rollback_error;
+    }
+    domain.rollback_owned = false;
+    return 0;
+}

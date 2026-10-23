@@ -112,5 +112,26 @@ for match in disables:
              f'healthProducerNoteChannelDisabled({match.group(1)}, reason)')
 checks += 1
 
+# 5) prepare 뒤 bin build 가 실패한 CSI 는 소비되지 않을 lease 를 바로 취소한다.
+#    60초 만료를 기다리면 그 사이 튜플을 바꾼 재시작이 남은 READY lease 때문에
+#    만료까지 실패한다. 보고서는 prepare 블록 밖에서도 보여야 한다.
+build_fail = function_body(main_body, 'if (!videoBin[csiNum].build(csiNum))')
+build_fail_ns = re.sub(r'\s+', '', build_fail)
+cancel_pos = build_fail_ns.find('max9296_prepare_cancel_domain(csiNum,&prepare_report,')
+if cancel_pos < 0:
+    fail('VideoBin::build failure must cancel that CSI lease with '
+         'max9296_prepare_cancel_domain(csiNum, &prepare_report, ...)')
+if not cancel_pos < build_fail_ns.find('continue;'):
+    fail('the lease cancel must run before the build-failure branch continues')
+report_decls = list(re.finditer(r'Max9296PrepareReport\s+prepare_report\b', main_body))
+if len(report_decls) != 1:
+    fail(f'prepare_report must be declared exactly once in main (found {len(report_decls)}); '
+         'a shadowing declaration in the prepare block leaves the build-failure '
+         'branch reading an empty report')
+if not report_decls[0].start() < main_body.find('goto main_end'):
+    fail('prepare_report must be declared before the first goto main_end so the '
+         'build-failure branch can use it')
+checks += 1
+
 print(f'prepare isolation source contract: {checks} checks passed')
 PY

@@ -964,6 +964,9 @@ gint main(gint argc, gchar *argv[]) {
   cmdArg = parser->arg;
 
   Max9296PrepareInput prepare_input = {};
+  /* Lives until the bin build so a CSI whose build fails can cancel its unused
+   * prepare lease (#145). Declared before the first goto main_end. */
+  Max9296PrepareReport prepare_report = {};
   prepare_input.width = static_cast<uint32_t>(cmdArg.width);
   prepare_input.height = static_cast<uint32_t>(cmdArg.height);
   for (unsigned csi = 0; csi < 2; ++csi)
@@ -1091,7 +1094,6 @@ gint main(gint argc, gchar *argv[]) {
     prepare_input.channel_enabled[ch] = cmdArg.cam[ch].enable ? 1 : 0;
 
   {
-    Max9296PrepareReport prepare_report = {};
     gint prepare_ret =
         max9296_prepare_all(&prepare_input, &prepare_report, NULL);
     const gint prepare_log_level =
@@ -1164,6 +1166,20 @@ gint main(gint argc, gchar *argv[]) {
       healthProducerNoteChannelDisabled(csiNum*2+1, "VideoBin build failed");
       cmdArg.cam[csiNum*2].enable = FALSE;
       cmdArg.cam[csiNum*2+1].enable = FALSE;
+      /* This CSI will never consume its prepare lease. Release it now: until
+       * the driver's 60 s unused-lease timeout, a restart with a changed tuple
+       * would fail closed on the leftover READY lease (#145). */
+      const gboolean lease_owned = prepare_report.domain[csiNum].rollback_owned;
+      const gint cancel_ret =
+          max9296_prepare_cancel_domain(csiNum, &prepare_report, NULL);
+      if (cancel_ret < 0)
+        __LOG(LOG_ERR,
+              "[MAX9296_PREPARE] CSI%d lease cancel failed (errno=%d %s); "
+              "the lease may stay until the driver's 60 s timeout or unbind",
+              csiNum, cancel_ret, g_strerror(-cancel_ret));
+      else if (lease_owned)
+        __LOG(LOG_NOTICE, "[MAX9296_PREPARE] CSI%d unused lease cancelled",
+              csiNum);
       continue; 
     }
 // #if !defined(CHANNEL_EACH_CROP)
