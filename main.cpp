@@ -1396,7 +1396,6 @@ gint main(gint argc, gchar *argv[]) {
     if (ret == GST_STATE_CHANGE_FAILURE) {
       __LOG(LOG_CRIT, "[GST][%s:%d] pipeline state paused error", _FILE_,
             __LINE__);
-      gst_object_unref(pipeline);
       goto main_end;
     } else if (ret == GST_STATE_CHANGE_NO_PREROLL) {
       is_live = TRUE;
@@ -1435,7 +1434,6 @@ gint main(gint argc, gchar *argv[]) {
   if (ret == GST_STATE_CHANGE_FAILURE) {
     __LOG(LOG_CRIT, "[GST][%s:%d] pipeline state playing error", _FILE_,
           __LINE__);
-    gst_object_unref(pipeline);
     goto main_end;
   }
 
