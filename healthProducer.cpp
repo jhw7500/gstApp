@@ -34,6 +34,7 @@ typedef struct {
     gint64  q_in_moved_us;      /* q_in 이 마지막으로 증가한 시각 */
     gint64  fragment_us;        /* 마지막 fragment 커밋 시각 */
     gboolean fragment_seen;
+    gchar   disabled_reason[96]; /* 비어 있지 않으면 기동 중 실패로 끈 채널 */
 } ChannelHealth;
 
 static ChannelHealth g_ch[MAX_CHANNEL];
@@ -154,10 +155,13 @@ static void publish(void)
 
     for (guint8 ch = 0; ch < MAX_CHANNEL; ch++) {
         if (!cmdArg.cam[ch].enable) {
+            /* 기동 중 실패로 끈 채널도 N/A/DISABLED 다. 레지스트리에 새 code 를
+             * 넣지 않고 configured 와 reason_detail 로 설정상 끈 채널과 가른다. */
+            const gchar *off = ch_snap[ch].disabled_reason[0] ? ch_snap[ch].disabled_reason : NULL;
             json_object_array_add(obs, observation("gstreamer", ch, "N/A", "DISABLED",
-                                                   "configured", json_object_new_boolean(FALSE), NULL));
+                                                   "configured", json_object_new_boolean(off != NULL), off));
             json_object_array_add(obs, observation("recording", ch, "N/A", "DISABLED",
-                                                   "configured", json_object_new_boolean(FALSE), NULL));
+                                                   "configured", json_object_new_boolean(off != NULL), off));
             continue;
         }
 
@@ -327,6 +331,19 @@ void healthProducerNotePipelineError(const gchar *detail)
     g_pipeline_error_us = now_us();
     g_strlcpy(g_pipeline_error, detail ? detail : "pipeline error",
               sizeof(g_pipeline_error));
+    g_mutex_unlock(&g_health_lock);
+}
+
+void healthProducerNoteChannelDisabled(gint ch, const gchar *reason)
+{
+    /* 설정상 이미 꺼진 채널은 설정상 끔(configured=false)으로 둔다. 그래서
+     * 호출자는 cmdArg.cam[ch].enable 을 내리기 전에 불러야 한다. */
+    if (ch < 0 || ch >= MAX_CHANNEL || !cmdArg.cam[ch].enable)
+        return;
+    g_mutex_lock(&g_health_lock);
+    g_strlcpy(g_ch[ch].disabled_reason,
+              (reason && *reason) ? reason : "disabled at startup",
+              sizeof(g_ch[ch].disabled_reason));
     g_mutex_unlock(&g_health_lock);
 }
 

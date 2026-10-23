@@ -49,6 +49,7 @@ public :
     VideoBin();
     ~VideoBin();
 	gboolean init(guint8 csiNum) ;
+	gboolean build(guint8 csiNum);
     gboolean addCrop(CropDir dir);
     gboolean addBinRtspSrcPad(guint8 ch);
     gboolean addBinRecordSrcPad(guint8 ch);

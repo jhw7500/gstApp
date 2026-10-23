@@ -964,6 +964,9 @@ gint main(gint argc, gchar *argv[]) {
   cmdArg = parser->arg;
 
   Max9296PrepareInput prepare_input = {};
+  /* Lives until the bin build so a CSI whose build fails can cancel its unused
+   * prepare lease (#145). Declared before the first goto main_end. */
+  Max9296PrepareReport prepare_report = {};
   prepare_input.width = static_cast<uint32_t>(cmdArg.width);
   prepare_input.height = static_cast<uint32_t>(cmdArg.height);
   for (unsigned csi = 0; csi < 2; ++csi)
@@ -1071,6 +1074,82 @@ gint main(gint argc, gchar *argv[]) {
     }
   }
 
+  /* Pass 1: apply driver controls before MAX9296 prepare. A failed CSI is
+   * disabled here so prepare and the bin build below skip it. */
+  for (csiNum = 0; csiNum < 2; csiNum++) {
+    if (!(cmdArg.cam[csiNum * 2].enable || cmdArg.cam[csiNum * 2 + 1].enable))
+      continue;
+    if (!videoBin[csiNum].init(csiNum)) {
+      __LOG(LOG_CRIT, "[GST][%s:%d] csi%d init failed. Disabling all related channels.", _FILE_, __LINE__, csiNum);
+      healthProducerNoteChannelDisabled(csiNum*2, "VideoBin init failed");
+      healthProducerNoteChannelDisabled(csiNum*2+1, "VideoBin init failed");
+      cmdArg.cam[csiNum*2].enable = FALSE;
+      cmdArg.cam[csiNum*2+1].enable = FALSE;
+    }
+  }
+
+  /* prepare_input was preflighted before sysfs apply. Re-copy only channel
+   * enables because the init pass may disable a CSI domain. */
+  for (unsigned ch = 0; ch < 4; ++ch)
+    prepare_input.channel_enabled[ch] = cmdArg.cam[ch].enable ? 1 : 0;
+
+  {
+    gint prepare_ret =
+        max9296_prepare_all(&prepare_input, &prepare_report, NULL);
+    const gint prepare_log_level =
+        (prepare_ret < 0 || prepare_ret == MAX9296_PREPARE_PARTIAL ||
+         prepare_report.legacy_fallback) ? LOG_CRIT : LOG_NOTICE;
+
+    for (unsigned csi = 0; csi < 2; ++csi) {
+      const uint32_t enable = prepare_input.channel_enabled[csi * 2] |
+                              (prepare_input.channel_enabled[csi * 2 + 1] << 1);
+      const uint32_t tuple_width =
+          enable == 3 ? prepare_input.width * 2 : prepare_input.width;
+      const Max9296PrepareDomainReport &domain = prepare_report.domain[csi];
+      __LOG(prepare_log_level,
+            "[MAX9296_PREPARE] generation=%" PRIu64
+            " CSI%u path=%s tuple=%ux%u@%u enable=%u action=%d"
+            " elapsed_ms=%" PRIu64
+            " primary_errno=%d rollback_errno=%d before_state=%d"
+            " after_state=%d%s",
+            prepare_input.generation, csi, max9296_prepare_path(csi),
+            tuple_width, prepare_input.height, prepare_input.fps[csi], enable,
+            static_cast<int>(domain.action), domain.elapsed_ns / 1000000ULL,
+            domain.error, domain.rollback_error,
+            static_cast<int>(domain.before.state),
+            static_cast<int>(domain.after.state),
+            prepare_report.legacy_fallback ? " LEGACY_NO_ABI" : "");
+    }
+
+    if (prepare_ret < 0) {
+      app_exit_code = EXIT_FAILURE;
+      goto main_end;
+    }
+
+    /* #145: the driver rejected some, not all, CSI prepares. Record on the
+     * prepared CSI and leave the failed one off; only the runtime copy of the
+     * enables changes, so the next restart retries the configured channels. */
+    if (prepare_ret == MAX9296_PREPARE_PARTIAL) {
+      for (unsigned csi = 0; csi < 2; ++csi) {
+        const Max9296PrepareDomainReport &domain = prepare_report.domain[csi];
+        if (!domain.active || domain.error == 0)
+          continue;
+        __LOG(LOG_EMERG,
+              "[MAX9296_PREPARE] CSI%u prepare failed (errno=%d %s): ch%u ch%u "
+              "disabled, recording continues on the other CSI",
+              csi, domain.error, g_strerror(-domain.error), csi * 2,
+              csi * 2 + 1);
+        gchar reason[64];
+        g_snprintf(reason, sizeof(reason), "MAX9296 prepare failed (errno=%d)",
+                   domain.error);
+        healthProducerNoteChannelDisabled(csi * 2, reason);
+        healthProducerNoteChannelDisabled(csi * 2 + 1, reason);
+        cmdArg.cam[csi * 2].enable = FALSE;
+        cmdArg.cam[csi * 2 + 1].enable = FALSE;
+      }
+    }
+  }
+
   for (i = 0; i < MAX_CHANNEL; i++) {
     // if(!(cmdArg.ch_enable & (0x1 << i))) continue;
     if (!cmdArg.cam[i].enable)
@@ -1080,11 +1159,27 @@ gint main(gint argc, gchar *argv[]) {
     __LOG(LOG_INFO, "[GST][%s:%d] ch[%d] enable (CSI%d)", _FILE_, __LINE__, i, csiNum);
     
     // [CSI 기반 초기화 방어] 해당 CSI 드라이버가 실패하면 관련 모든 구성을 건너뜀
-    if (!videoBin[csiNum].init(csiNum)) {
-      __LOG(LOG_CRIT, "[GST][%s:%d] csi%d init failed. Disabling all related channels.", _FILE_, __LINE__, csiNum);
+    if (!videoBin[csiNum].build(csiNum)) {
+      __LOG(LOG_CRIT, "[GST][%s:%d] csi%d build failed. Disabling all related channels.", _FILE_, __LINE__, csiNum);
       // 해당 CSI에 속한 채널들의 설정을 강제로 비활성화하여 하부 구성 방지
+      healthProducerNoteChannelDisabled(csiNum*2, "VideoBin build failed");
+      healthProducerNoteChannelDisabled(csiNum*2+1, "VideoBin build failed");
       cmdArg.cam[csiNum*2].enable = FALSE;
       cmdArg.cam[csiNum*2+1].enable = FALSE;
+      /* This CSI will never consume its prepare lease. Release it now: until
+       * the driver's 60 s unused-lease timeout, a restart with a changed tuple
+       * would fail closed on the leftover READY lease (#145). */
+      const gboolean lease_owned = prepare_report.domain[csiNum].rollback_owned;
+      const gint cancel_ret =
+          max9296_prepare_cancel_domain(csiNum, &prepare_report, NULL);
+      if (cancel_ret < 0)
+        __LOG(LOG_ERR,
+              "[MAX9296_PREPARE] CSI%d lease cancel failed (errno=%d %s); "
+              "the lease may stay until the driver's 60 s timeout or unbind",
+              csiNum, cancel_ret, g_strerror(-cancel_ret));
+      else if (lease_owned)
+        __LOG(LOG_NOTICE, "[MAX9296_PREPARE] CSI%d unused lease cancelled",
+              csiNum);
       continue; 
     }
 // #if !defined(CHANNEL_EACH_CROP)
@@ -1347,46 +1442,6 @@ gint main(gint argc, gchar *argv[]) {
   gst_bus_add_watch(bus, bus_message_parse, threadArgs);
 
   gst_object_unref(bus);
-
-  /* prepare_input was preflighted before sysfs apply. Re-copy only channel
-   * enables because VideoBin::init failure may disable a CSI domain. */
-  for (unsigned ch = 0; ch < 4; ++ch)
-    prepare_input.channel_enabled[ch] = cmdArg.cam[ch].enable ? 1 : 0;
-
-  {
-    Max9296PrepareReport prepare_report = {};
-    gint prepare_ret =
-        max9296_prepare_all(&prepare_input, &prepare_report, NULL);
-    const gint prepare_log_level =
-        (prepare_ret < 0 || prepare_report.legacy_fallback) ? LOG_CRIT
-                                                           : LOG_NOTICE;
-
-    for (unsigned csi = 0; csi < 2; ++csi) {
-      const uint32_t enable = prepare_input.channel_enabled[csi * 2] |
-                              (prepare_input.channel_enabled[csi * 2 + 1] << 1);
-      const uint32_t tuple_width =
-          enable == 3 ? prepare_input.width * 2 : prepare_input.width;
-      const Max9296PrepareDomainReport &domain = prepare_report.domain[csi];
-      __LOG(prepare_log_level,
-            "[MAX9296_PREPARE] generation=%" PRIu64
-            " CSI%u path=%s tuple=%ux%u@%u enable=%u action=%d"
-            " elapsed_ms=%" PRIu64
-            " primary_errno=%d rollback_errno=%d before_state=%d"
-            " after_state=%d%s",
-            prepare_input.generation, csi, max9296_prepare_path(csi),
-            tuple_width, prepare_input.height, prepare_input.fps[csi], enable,
-            static_cast<int>(domain.action), domain.elapsed_ns / 1000000ULL,
-            domain.error, domain.rollback_error,
-            static_cast<int>(domain.before.state),
-            static_cast<int>(domain.after.state),
-            prepare_report.legacy_fallback ? " LEGACY_NO_ABI" : "");
-    }
-
-    if (prepare_ret < 0) {
-      app_exit_code = EXIT_FAILURE;
-      goto main_end;
-    }
-  }
 
   if (cmdArg.play_delay) {
     ret = gst_element_set_state(pipeline, GST_STATE_PAUSED);

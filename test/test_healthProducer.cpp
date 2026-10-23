@@ -77,6 +77,24 @@ static void arrange_disabled(guint tick)
     (void)tick;
 }
 
+static void arrange_runtime_disabled(guint tick)
+{
+    /* 설정에서는 ch0/ch1/ch2 를 켜고 ch3 은 끈 상태에서 기동 중 CSI1 prepare 가
+     * 거부돼 ch2 를 끈다(#145). main.cpp 처럼 끄기 전에 CSI 의 두 채널을 모두
+     * 알리지만, 설정상 이미 꺼져 있던 ch3 은 설정상 끔으로 남아야 한다.
+     * ch0/ch1 은 계속 녹화한다. */
+    for (guint8 ch = 0; ch < 2; ch++) {
+        g_fake_q_in[ch] += 30;
+        healthProducerNoteFragmentClosed(ch, "/mnt/rec/x.mp4");
+    }
+    cmdArg.cam[3].enable = FALSE;
+    if (tick == 0) {
+        healthProducerNoteChannelDisabled(2, "MAX9296 prepare failed (errno=-6)");
+        healthProducerNoteChannelDisabled(3, "MAX9296 prepare failed (errno=-6)");
+    }
+    cmdArg.cam[2].enable = FALSE;
+}
+
 static void arrange_stall(guint tick)
 {
     /* q_in 을 움직이지 않는다. stall_sec 를 넘기면 FAIL 이 되어야 한다. */
@@ -111,11 +129,14 @@ static void arrange_no_growth(guint tick)
  *   - starting 은 fragment 를 한 번도 못 본 상태라 반드시 맨 앞이어야 한다.
  *   - buserr 는 파이프라인 에러를 래치하고 풀지 않으므로 반드시 맨 뒤여야
  *     한다. 앞에 두면 이후 시나리오의 gstreamer 가 전부 FAIL 로 덮인다.
+ *   - rtoff 가 남긴 ch2/ch3 끔 사유도 풀리지 않으므로 disabled 는 그 앞이어야
+ *     한다. 뒤의 시나리오는 채널을 다시 켜므로 사유를 보지 않는다.
  * 실제 운용에서도 같다 - 버스 에러가 나면 프로세스는 재시작 대상이다. */
 static const Scenario SCENARIOS[] = {
     { "starting",  arrange_starting,  2 },
     { "ok",        arrange_ok,        2 },
     { "disabled",  arrange_disabled,  2 },
+    { "rtoff",     arrange_runtime_disabled, 2 },
     { "stall",     arrange_stall,     5 },   /* stall_sec=2 를 넘기도록 */
     { "nogrow",    arrange_no_growth, 5 },   /* no_growth_sec=2 를 넘기도록 */
     { "buserr",    arrange_bus_error, 2 },

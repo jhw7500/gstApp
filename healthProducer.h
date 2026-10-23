@@ -28,4 +28,10 @@ void healthProducerNotePipelineError(const gchar *detail);
 /* splitmuxsink fragment 가 닫힌 시점에 호출한다. 채널별 녹화 생존 신호다. */
 void healthProducerNoteFragmentClosed(gint ch, const gchar *location);
 
+/* 설정에서는 켜져 있으나 기동 중 실패(init/prepare/build)로 끄는 채널을 알린다.
+ * 그 채널도 N/A/DISABLED 로 발행하되 configured=true 와 reason_detail 로
+ * 설정상 끈 채널과 구분한다. cmdArg.cam[ch].enable 을 내리기 전에 호출한다 -
+ * 이미 꺼져 있는 채널은 설정상 끔으로 보고 무시한다. */
+void healthProducerNoteChannelDisabled(gint ch, const gchar *reason);
+
 #endif
