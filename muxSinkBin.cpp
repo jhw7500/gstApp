@@ -12,6 +12,7 @@
 
 #include "muxSinkBin.h"
 #include "recordingSessionCompletion.h"
+#include "recordingSessionState.h"
 #include <fcntl.h>
 #include <string.h>
 
@@ -38,23 +39,6 @@ drop_no_pts_probe_mux(GstPad *pad, GstPadProbeInfo *info, gpointer user_data)
 #define SHORT_FRAGMENT_ERR_MSEC 5000
 
 // 다채널 완료 추적 구조체
-typedef struct _RecordingSession {
-  gchar *timestamp; // "20260127_143000"
-  guint32 active_mask; // snapshot when first closed fragment reaches this session
-  guint32 closed_mask; // only enabled channels can set a bit
-  gboolean ch0_done;
-  gboolean ch1_done;
-  gboolean ch2_done;
-  gboolean ch3_done;
-  gboolean srt_done;
-  gint refs; // atomic: hash table owns 1, each callback owns 1
-  GMutex mutex; // 스레드 안전성
-} RecordingSession;
-
-// 전역 세션 테이블 (타임스탬프 -> RecordingSession)
-static GHashTable *recording_sessions = NULL;
-static GMutex sessions_mutex;
-
 // 파일명 및 타임스탬프 문자열 캐시 (B항목 최적화)
 static GMutex timestamp_cache_mutex;
 static gint64 last_cache_unix_sec = -1;
@@ -90,44 +74,6 @@ static guint32 current_recording_active_mask() {
     mask |= recording_session_channel_bit(static_cast<unsigned>(i));
   }
   return mask;
-}
-
-static void recording_session_unref(gpointer data) {
-  RecordingSession *session = static_cast<RecordingSession *>(data);
-  if (!session || !g_atomic_int_dec_and_test(&session->refs)) return;
-  g_mutex_clear(&session->mutex);
-  g_free(session->timestamp);
-  g_free(session);
-}
-
-// The lookup and reference increment MUST be under sessions_mutex.
-// Without a callback reference, another callback may remove and free the
-// session after lookup but before the caller locks session->mutex.
-static RecordingSession *get_or_create_session(const gchar *timestamp,
-                                                guint32 active_mask) {
-  g_mutex_lock(&sessions_mutex);
-
-  if (!recording_sessions) {
-    recording_sessions = g_hash_table_new_full(
-        g_str_hash, g_str_equal, g_free, recording_session_unref);
-  }
-
-  RecordingSession *session =
-      static_cast<RecordingSession *>(g_hash_table_lookup(recording_sessions, timestamp));
-  if (!session) {
-    session = g_new0(RecordingSession, 1);
-    session->timestamp = g_strdup(timestamp);
-    session->active_mask = active_mask;
-    g_atomic_int_set(&session->refs, 1); // owned by recording_sessions
-    g_mutex_init(&session->mutex);
-    g_hash_table_insert(recording_sessions, g_strdup(timestamp), session);
-    __LOG(LOG_INFO, "[GST][%s:%d] Created new session: %s active-mask=0x%x",
-          _FILE_, __LINE__, timestamp, active_mask);
-  }
-
-  g_atomic_int_inc(&session->refs); // caller owns a reference
-  g_mutex_unlock(&sessions_mutex);
-  return session;
 }
 
 // Note: check_all_channels_done 함수는 on_fragment_closed에서 직접 카운팅하므로
@@ -374,13 +320,9 @@ void MuxSinkBin::handleFragmentClosed(const gchar *location, GstClockTime runnin
     g_free(video_flag);
 
     g_mutex_unlock(&session->mutex);
-    g_mutex_lock(&sessions_mutex);
-    // Remove only the same object; another callback may have created a
-    // newer session under the same timestamp. The caller's reference
-    // prevents destruction while its mutex is in use.
-    if (g_hash_table_lookup(recording_sessions, timestamp) == session)
-      g_hash_table_remove(recording_sessions, timestamp);
-    g_mutex_unlock(&sessions_mutex);
+    // Only remove this exact generation; the callback's ref keeps it live
+    // while the hash table releases its own reference.
+    (void)recording_session_forget_if_current(timestamp, session);
   } else {
     g_mutex_unlock(&session->mutex);
   }
