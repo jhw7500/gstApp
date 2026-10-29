@@ -44,3 +44,37 @@ jobs:
           fi
       - name: Run board-free policy, real ownership and source integration tests
         run: bash test/run-recording-session-completion-test.sh
+
+
+  full-linux-build:
+    name: gstApp full Linux link with session ownership header
+    needs: source-and-native
+    runs-on: ubuntu-22.04
+    timeout-minutes: 18
+    steps:
+      - name: Checkout exact PR source
+        uses: actions/checkout@v4
+        with:
+          submodules: false
+      - name: Install runtime build headers
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential pkg-config \
+            libgstreamer1.0-dev \
+            libgstreamer-plugins-base1.0-dev \
+            libgstreamer-plugins-bad1.0-dev \
+            libgstrtspserver-1.0-dev \
+            libglib2.0-dev libjson-c-dev libssl-dev \
+            check libturbojpeg0-dev
+      - name: Compile and link complete gstApp
+        run: |
+          make -j2 bin/gstApp
+          file bin/gstApp
+          sha256sum bin/gstApp
+      - name: Preserve Linux-only artifact for independent review
+        uses: actions/upload-artifact@v4
+        with:
+          name: gstApp-session-ownership-linux
+          path: bin/gstApp
+          if-no-files-found: error
