@@ -11,6 +11,8 @@
  */
 
 #include "muxSinkBin.h"
+#include "recordingSessionCompletion.h"
+#include "recordingSessionState.h"
 #include <fcntl.h>
 #include <string.h>
 
@@ -37,20 +39,6 @@ drop_no_pts_probe_mux(GstPad *pad, GstPadProbeInfo *info, gpointer user_data)
 #define SHORT_FRAGMENT_ERR_MSEC 5000
 
 // 다채널 완료 추적 구조체
-typedef struct _RecordingSession {
-  gchar *timestamp; // "20260127_143000"
-  gboolean ch0_done;
-  gboolean ch1_done;
-  gboolean ch2_done;
-  gboolean ch3_done;
-  gboolean srt_done;
-  GMutex mutex; // 스레드 안전성
-} RecordingSession;
-
-// 전역 세션 테이블 (타임스탬프 -> RecordingSession)
-static GHashTable *recording_sessions = NULL;
-static GMutex sessions_mutex;
-
 // 파일명 및 타임스탬프 문자열 캐시 (B항목 최적화)
 static GMutex timestamp_cache_mutex;
 static gint64 last_cache_unix_sec = -1;
@@ -75,28 +63,17 @@ gint64 getSplitTargetEpoch() {
   return epoch_sec;
 }
 
-// 세션 관리 함수
-static RecordingSession *get_or_create_session(const gchar *timestamp) {
-  g_mutex_lock(&sessions_mutex);
-
-  if (!recording_sessions) {
-    recording_sessions =
-        g_hash_table_new_full(g_str_hash, g_str_equal, g_free, g_free);
+// A session's active-channel contract is fixed at the first fragment OPEN.
+// If runtime settings change mid-session, fail closed rather than accepting a
+// partial recording as complete. Changing topology requires a new session.
+static guint32 current_recording_active_mask() {
+  guint32 mask = 0;
+  for (int i = 0; i < MAX_CHANNEL; ++i) {
+    if (!cmdArg.cam[i].enable) continue;
+    if (i >= GSTAPP_RECORDING_CHANNELS) return 0;
+    mask |= recording_session_channel_bit(static_cast<unsigned>(i));
   }
-
-  RecordingSession *session =
-      (RecordingSession *)g_hash_table_lookup(recording_sessions, timestamp);
-  if (!session) {
-    session = g_new0(RecordingSession, 1);
-    session->timestamp = g_strdup(timestamp);
-    g_mutex_init(&session->mutex);
-    g_hash_table_insert(recording_sessions, g_strdup(timestamp), session);
-    __LOG(LOG_INFO, "[GST][%s:%d] Created new session: %s", _FILE_, __LINE__,
-          timestamp);
-  }
-
-  g_mutex_unlock(&sessions_mutex);
-  return session;
+  return mask;
 }
 
 // Note: check_all_channels_done 함수는 on_fragment_closed에서 직접 카운팅하므로
@@ -265,104 +242,97 @@ void MuxSinkBin::handleFragmentClosed(const gchar *location, GstClockTime runnin
   __LOG(LOG_INFO, "[GST][%s:%d] ch%d Extracted timestamp: %s", _FILE_, __LINE__,
         muxSinkData.ch, timestamp);
 
-  // 세션 조회 또는 생성
-  RecordingSession *session = get_or_create_session(timestamp);
-
+  // Capture the runtime channel set. Count-only completion is unsafe: e.g.
+  // active ch0+ch1, but closed ch0+disabled ch2 previously looked like 2/2.
+  const guint32 runtime_mask = current_recording_active_mask();
+  if (runtime_mask == 0) {
+    __LOG(LOG_WARNING, "[GST][%s:%d] No valid enabled channels for session %s",
+          _FILE_, __LINE__, timestamp);
+    g_free(timestamp);
+    return;
+  }
+  RecordingSession *session = recording_session_find(timestamp);
+  if (!session) {
+    __LOG(LOG_WARNING, "[GST][%s:%d] ch%d closed unknown/unopened session %s",
+          _FILE_, __LINE__, muxSinkData.ch, timestamp);
+    g_free(timestamp);
+    return;
+  }
   g_mutex_lock(&session->mutex);
 
-  // 채널별 완료 표시
-  switch (muxSinkData.ch) {
-  case 0:
-    session->ch0_done = TRUE;
-    break;
-  case 1:
-    session->ch1_done = TRUE;
-    break;
-  case 2:
-    session->ch2_done = TRUE;
-    break;
-  case 3:
-    session->ch3_done = TRUE;
-    break;
-  default:
-    __LOG(LOG_WARNING, "[GST][%s:%d] Unknown channel: %d", _FILE_, __LINE__,
-          muxSinkData.ch);
-    break;
+  if (session->active_mask != runtime_mask ||
+      !(session->active_mask & recording_session_channel_bit(muxSinkData.ch))) {
+    __LOG(LOG_WARNING,
+          "[GST][%s:%d] ch%d unexpected completion for %s: session mask=0x%x runtime mask=0x%x",
+          _FILE_, __LINE__, muxSinkData.ch, timestamp,
+          session->active_mask, runtime_mask);
+    g_mutex_unlock(&session->mutex);
+    recording_session_unref(session);
+    g_free(timestamp);
+    return;
   }
 
-  __LOG(LOG_INFO, "[GST][%s:%d] Session %s status: ch0=%d ch1=%d ch2=%d ch3=%d",
-        _FILE_, __LINE__, timestamp, session->ch0_done, session->ch1_done,
-        session->ch2_done, session->ch3_done);
+  session->closed_mask = recording_session_mark_closed(
+      session->active_mask, session->closed_mask, muxSinkData.ch);
+  session->ch0_done = (session->closed_mask & recording_session_channel_bit(0)) != 0;
+  session->ch1_done = (session->closed_mask & recording_session_channel_bit(1)) != 0;
+  session->ch2_done = (session->closed_mask & recording_session_channel_bit(2)) != 0;
+  session->ch3_done = (session->closed_mask & recording_session_channel_bit(3)) != 0;
 
-  // 모든 활성 채널 완료 확인
-  // TODO: JSON에서 활성 채널 읽어서 정확히 판단
-  // 임시: 완료된 채널이 2개 이상이면 세션 완료로 간주 (실제로는 설정 기반으로)
-  gint completed_channels = 0;
-  if (session->ch0_done)
-    completed_channels++;
-  if (session->ch1_done)
-    completed_channels++;
-  if (session->ch2_done)
-    completed_channels++;
-  if (session->ch3_done)
-    completed_channels++;
-
-  // 활성 채널 수 확인 (cmdArg 기반)
   gint active_channels = 0;
-  for (int i = 0; i < MAX_CHANNEL; i++) {
-    if (cmdArg.cam[i].enable) {
-      active_channels++;
-    }
+  gint completed_channels = 0;
+  for (unsigned i = 0; i < GSTAPP_RECORDING_CHANNELS; ++i) {
+    const guint32 bit = recording_session_channel_bit(i);
+    if (!(session->active_mask & bit)) continue;
+    ++active_channels;
+    if (session->closed_mask & bit) ++completed_channels;
   }
 
-  __LOG(LOG_INFO, "[GST][%s:%d] Session %s progress: %d/%d (active)", _FILE_,
-        __LINE__, timestamp, completed_channels, active_channels);
+  __LOG(LOG_INFO,
+        "[GST][%s:%d] Session %s ch0=%d ch1=%d ch2=%d ch3=%d progress=%d/%d",
+        _FILE_, __LINE__, timestamp,
+        session->ch0_done, session->ch1_done,
+        session->ch2_done, session->ch3_done,
+        completed_channels, active_channels);
 
-  // 디버그 로그: /tmp/session_debug.log에 기록
+  // The debug file is non-authoritative. The mask above is authoritative.
   FILE *fp_dbg = fopen("/tmp/session_debug.log", "a");
   if (fp_dbg) {
-    fprintf(
-        fp_dbg,
-        "TS: %s, File: %s, Active: %d, Done: %d, ch0:%d ch1:%d ch2:%d ch3:%d\n",
-        timestamp, filename, active_channels, completed_channels,
-        session->ch0_done, session->ch1_done, session->ch2_done,
-        session->ch3_done);
+    fprintf(fp_dbg,
+            "TS: %s, File: %s, Active: %d, Done: %d, mask=0x%x closed=0x%x\n",
+            timestamp, filename, active_channels, completed_channels,
+            session->active_mask, session->closed_mask);
     fclose(fp_dbg);
   }
 
-  // 활성 채널 수만큼 완료되었는지 확인
-  if (completed_channels >= active_channels && active_channels > 0) {
-    // .video_done 플래그 생성 (idempotent)
-    // startup alignment 미수렴 시 같은 minute timestamp에 splitNow가 두 번 발생할 수 있다.
-    // hash_table_remove로 session이 지워졌어도 두 번째 cycle이 새 session으로 누적되어
-    // 이 분기에 두 번째로 도달할 수 있다. video_done이 이미 있으면 중복 생성/매칭을 차단한다.
+  // Mark video completion only when ALL enabled channels, not merely an
+  // equal number of arbitrary channel callbacks, have closed their fragment.
+  if (recording_session_all_active_closed(
+          session->active_mask, session->closed_mask)) {
     gchar *video_flag = g_strdup_printf("/tmp/session_%s.video_done", timestamp);
     if (access(video_flag, F_OK) != 0) {
       FILE *fp = fopen(video_flag, "w");
-      if (fp)
+      if (fp) {
         fclose(fp);
-
-      // 전체 완료 확인 및 마커 생성 시도
-      check_and_mark_all_done(timestamp);
+        check_and_mark_all_done(timestamp);
+      } else {
+        __LOG(LOG_ERR, "[GST][%s:%d] Cannot create video_done: %s",
+              _FILE_, __LINE__, video_flag);
+      }
     } else {
-      __LOG(LOG_INFO,
-            "[GST][%s:%d] video_done exists for %s (duplicate fragment_closed in same minute), skip",
+      __LOG(LOG_INFO, "[GST][%s:%d] duplicate video_done for %s",
             _FILE_, __LINE__, timestamp);
     }
     g_free(video_flag);
 
-    // [P1 이슈 해결] 세션 즉시 삭제 시의 경합 방지
-    // .all_done이 생성되지 않았더라도(SRT 대기 중), 영상 쪽 처리는 끝났으므로 
-    // 메모리 세션은 정리하되 파일 플래그(.video_done)가 상태를 유지함.
-    // vcm이 나중에 완료되면 vcm의 check_and_mark_all_done이 .all_done을 생성할 것임.
     g_mutex_unlock(&session->mutex);
-    g_mutex_lock(&sessions_mutex);
-    g_hash_table_remove(recording_sessions, timestamp);
-    g_mutex_unlock(&sessions_mutex);
+    // Only remove this exact generation; the callback's ref keeps it live
+    // while the hash table releases its own reference.
+    (void)recording_session_forget_if_current(timestamp, session);
   } else {
     g_mutex_unlock(&session->mutex);
   }
-
+  recording_session_unref(session);
   g_free(timestamp);
 }
 
@@ -641,6 +611,18 @@ gchararray format_location(GstElement *sink, guint arg0, gpointer data) {
   // 타임스탬프 저장 (fragment-closed에서 사용)
   if (info->last_timestamp) g_free(info->last_timestamp);
   info->last_timestamp = g_strdup(local_ts_str);
+
+  // Snapshot enabled cameras at the OPEN boundary, before any asynchronous
+  // fragment-closed callback. A late close must not replace this snapshot.
+  const guint32 open_mask = current_recording_active_mask();
+  if (open_mask != 0) {
+    RecordingSession *open_session =
+        get_or_create_session(local_ts_str, open_mask);
+    recording_session_unref(open_session);
+  } else {
+    __LOG(LOG_WARNING, "[GST][%s:%d] Cannot register %s: no valid active channels",
+          _FILE_, __LINE__, local_ts_str);
+  }
 
   // 시작 시간 기록 (chk_cam_operate.sh용 - 세션당 1회, 먼저 여는 채널이 수행)
   if (marker_claim) {
