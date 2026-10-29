@@ -54,3 +54,15 @@ g++ -std=c++11 -O1 -g -Wall -Wextra -Werror -pedantic -pthread \
   "${glib_libs[@]}"
 "$temp_dir/recording-session-lifetime"
 echo "gstApp concurrent session lookup/remove lifetime stress PASS"
+
+# One further run with memory/undefined-behavior instrumentation catches
+# use-after-free or invalid memory ownership in the same production helpers.
+g++ -std=c++11 -O1 -g -Wall -Wextra -Werror -pedantic -pthread \
+  -fsanitize=address,undefined -fno-omit-frame-pointer \
+  -I. "${glib_cflags[@]}" \
+  test/test_recording_session_lifetime.cpp \
+  -o "$temp_dir/recording-session-lifetime-asan" \
+  "${glib_libs[@]}"
+G_DEBUG=fatal-warnings ASAN_OPTIONS=halt_on_error=1:detect_leaks=1 \
+  UBSAN_OPTIONS=halt_on_error=1 "$temp_dir/recording-session-lifetime-asan"
+echo "gstApp ASan/UBSan concurrent session ownership PASS"
