@@ -27,6 +27,11 @@ assert "g_atomic_int_dec_and_test(&session->refs)" in state
 assert "g_hash_table_remove(recording_sessions, timestamp)" in state
 assert "recording_session_forget_if_current(timestamp, session)" in source
 assert "g_mutex_lock(&sessions_mutex)" in state
+assert "static RecordingSession *recording_session_find(" in state
+assert "get_or_create_session(local_ts_str, open_mask)" in source
+assert "recording_session_find(timestamp)" in source
+assert "get_or_create_session(timestamp, runtime_mask)" not in source
+assert "const guint32 open_mask = current_recording_active_mask();" in source
 assert "static inline bool recording_session_all_active_closed(" in header
 print("gstApp source integration policy PASS")
 PY
