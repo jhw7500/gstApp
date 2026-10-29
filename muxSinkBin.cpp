@@ -63,7 +63,7 @@ gint64 getSplitTargetEpoch() {
   return epoch_sec;
 }
 
-// A session's active-channel contract is fixed at its first closed fragment.
+// A session's active-channel contract is fixed at the first fragment OPEN.
 // If runtime settings change mid-session, fail closed rather than accepting a
 // partial recording as complete. Changing topology requires a new session.
 static guint32 current_recording_active_mask() {
@@ -251,7 +251,13 @@ void MuxSinkBin::handleFragmentClosed(const gchar *location, GstClockTime runnin
     g_free(timestamp);
     return;
   }
-  RecordingSession *session = get_or_create_session(timestamp, runtime_mask);
+  RecordingSession *session = recording_session_find(timestamp);
+  if (!session) {
+    __LOG(LOG_WARNING, "[GST][%s:%d] ch%d closed unknown/unopened session %s",
+          _FILE_, __LINE__, muxSinkData.ch, timestamp);
+    g_free(timestamp);
+    return;
+  }
   g_mutex_lock(&session->mutex);
 
   if (session->active_mask != runtime_mask ||
@@ -605,6 +611,18 @@ gchararray format_location(GstElement *sink, guint arg0, gpointer data) {
   // 타임스탬프 저장 (fragment-closed에서 사용)
   if (info->last_timestamp) g_free(info->last_timestamp);
   info->last_timestamp = g_strdup(local_ts_str);
+
+  // Snapshot enabled cameras at the OPEN boundary, before any asynchronous
+  // fragment-closed callback. A late close must not replace this snapshot.
+  const guint32 open_mask = current_recording_active_mask();
+  if (open_mask != 0) {
+    RecordingSession *open_session =
+        get_or_create_session(local_ts_str, open_mask);
+    recording_session_unref(open_session);
+  } else {
+    __LOG(LOG_WARNING, "[GST][%s:%d] Cannot register %s: no valid active channels",
+          _FILE_, __LINE__, local_ts_str);
+  }
 
   // 시작 시간 기록 (chk_cam_operate.sh용 - 세션당 1회, 먼저 여는 채널이 수행)
   if (marker_claim) {
