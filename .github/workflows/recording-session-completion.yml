@@ -1,0 +1,36 @@
+name: Recording Session Completion
+
+on:
+  pull_request:
+    branches: [master]
+    paths:
+      - 'muxSinkBin.cpp'
+      - 'recordingSessionCompletion.h'
+      - 'test/test_recording_session_completion.cpp'
+      - 'test/run-recording-session-completion-test.sh'
+      - '.github/workflows/recording-session-completion.yml'
+  push:
+    branches: [master]
+    paths:
+      - 'muxSinkBin.cpp'
+      - 'recordingSessionCompletion.h'
+      - 'test/test_recording_session_completion.cpp'
+      - 'test/run-recording-session-completion-test.sh'
+      - '.github/workflows/recording-session-completion.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  source-and-native:
+    name: Recording completion mask / callback lifetime regression
+    runs-on: ubuntu-22.04
+    timeout-minutes: 5
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          submodules: false
+      - name: Run board-free policy and source integration tests
+        run: bash test/run-recording-session-completion-test.sh
