@@ -6,6 +6,8 @@ on:
     paths:
       - 'muxSinkBin.cpp'
       - 'recordingSessionCompletion.h'
+      - 'recordingSessionState.h'
+      - 'test/test_recording_session_lifetime.cpp'
       - 'test/test_recording_session_completion.cpp'
       - 'test/run-recording-session-completion-test.sh'
       - '.github/workflows/recording-session-completion.yml'
@@ -14,6 +16,8 @@ on:
     paths:
       - 'muxSinkBin.cpp'
       - 'recordingSessionCompletion.h'
+      - 'recordingSessionState.h'
+      - 'test/test_recording_session_lifetime.cpp'
       - 'test/test_recording_session_completion.cpp'
       - 'test/run-recording-session-completion-test.sh'
       - '.github/workflows/recording-session-completion.yml'
@@ -32,5 +36,11 @@ jobs:
         uses: actions/checkout@v4
         with:
           submodules: false
-      - name: Run board-free policy and source integration tests
+      - name: Check native GLib prerequisites
+        run: |
+          if ! pkg-config --exists glib-2.0; then
+            sudo apt-get update
+            sudo apt-get install -y --no-install-recommends libglib2.0-dev
+          fi
+      - name: Run board-free policy, real ownership and source integration tests
         run: bash test/run-recording-session-completion-test.sh
