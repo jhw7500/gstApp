@@ -45,10 +45,12 @@ echo "gstApp native channel-mask regression PASS"
 # not a reconstructed model. Never touches real recording files or services.
 command -v pkg-config >/dev/null
 pkg-config --exists glib-2.0
+read -r -a glib_cflags <<< "$(pkg-config --cflags glib-2.0)"
+read -r -a glib_libs <<< "$(pkg-config --libs glib-2.0)"
 g++ -std=c++11 -O1 -g -Wall -Wextra -Werror -pedantic -pthread \
-  -I. $(pkg-config --cflags glib-2.0) \
+  -I. "${glib_cflags[@]}" \
   test/test_recording_session_lifetime.cpp \
   -o "$temp_dir/recording-session-lifetime" \
-  $(pkg-config --libs glib-2.0)
+  "${glib_libs[@]}"
 "$temp_dir/recording-session-lifetime"
 echo "gstApp concurrent session lookup/remove lifetime stress PASS"
