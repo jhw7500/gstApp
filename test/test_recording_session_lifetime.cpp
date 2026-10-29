@@ -10,6 +10,27 @@
 #include <vector>
 
 int main() {
+    // A fragment CLOSE cannot invent a session. The first fragment OPEN
+    // captures active-mask=ch0+ch1 before runtime topology changes.
+    assert(recording_session_find("20261029_1729") == NULL);
+    RecordingSession *opened = get_or_create_session("20261029_1729", 0x3u);
+    RecordingSession *late_close = recording_session_find("20261029_1729");
+    assert(late_close == opened);
+    assert(late_close->active_mask == 0x3u);
+    RecordingSession *changed_runtime =
+        get_or_create_session("20261029_1729", 0x1u);
+    assert(changed_runtime == opened);
+    assert(changed_runtime->active_mask == 0x3u); // stable open snapshot
+    assert(recording_session_forget_if_current("20261029_1729", opened));
+    assert(recording_session_find("20261029_1729") == NULL);
+    // All callback references remain valid after hash-table removal.
+    g_mutex_lock(&late_close->mutex);
+    assert(std::strcmp(late_close->timestamp, "20261029_1729") == 0);
+    g_mutex_unlock(&late_close->mutex);
+    recording_session_unref(opened);
+    recording_session_unref(late_close);
+    recording_session_unref(changed_runtime);
+
     // Deterministic ownership test. Both readers retain a reference after
     // hash-table remove and the replaced generation must remain independent.
     RecordingSession *first = get_or_create_session("20261029_1730", 0x3u);
@@ -56,6 +77,17 @@ int main() {
                     session->active_mask, session->closed_mask,
                     static_cast<unsigned>((i + thread_index) % 4));
                 g_mutex_unlock(&session->mutex);
+                // Race a closer's lookup with another thread's removal.
+                // An absent session is an expected fail-closed outcome.
+                RecordingSession *closing = recording_session_find(key);
+                if (closing) {
+                    g_mutex_lock(&closing->mutex);
+                    if (!closing->timestamp ||
+                        std::strcmp(closing->timestamp, key) != 0)
+                        ++failures;
+                    g_mutex_unlock(&closing->mutex);
+                    recording_session_unref(closing);
+                }
                 if ((i + thread_index) % 3 == 0)
                     (void)recording_session_forget_if_current(key, session);
                 recording_session_unref(session);
