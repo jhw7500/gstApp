@@ -58,6 +58,21 @@ static RecordingSession *get_or_create_session(const gchar *timestamp,
     return session;
 }
 
+// A fragment-closed callback must reference an already-opened session.
+// Never infer a channel snapshot from the first CLOSE notification: runtime
+// configuration may have changed after the fragment actually opened.
+static RecordingSession *recording_session_find(const gchar *timestamp) {
+    g_mutex_lock(&sessions_mutex);
+    RecordingSession *session = recording_sessions
+        ? static_cast<RecordingSession *>(
+            g_hash_table_lookup(recording_sessions, timestamp))
+        : NULL;
+    if (session)
+        g_atomic_int_inc(&session->refs);
+    g_mutex_unlock(&sessions_mutex);
+    return session;
+}
+
 // Protect against a callback removing a different generation that was
 // inserted under the same timestamp. Caller must still own a reference.
 static gboolean recording_session_forget_if_current(
